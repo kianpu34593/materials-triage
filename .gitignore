@@ -1,2 +1,40 @@
 # Claude Code — personal per-project overrides (not for sharing)
 .claude/settings.local.json
+
+# Deep-plan scratchpads (ephemeral)
+Deep-Plan-*.md
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test / type / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Secrets / local env (your deny-list blocks *reads*; this blocks *commits*)
+.env
+.env.*
+!.env.example
+
+# Editors
+.vscode/
+.idea/
