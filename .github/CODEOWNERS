@@ -1,0 +1,5 @@
+# Any change to the agent-coding config must be reviewed by the repo owner.
+# Commands, skills, and settings are auto-loaded by Claude Code, so a poisoned
+# file here is effectively prompt injection / command execution — gate it.
+/.claude/ @kianpu34593
+/.github/CODEOWNERS @kianpu34593no
