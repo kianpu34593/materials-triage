@@ -53,8 +53,11 @@ These override default behavior — follow them exactly.
   and is disallowed by branch protection anyway. Squash keeps `main` linear (1 PR = 1
   commit).
 - **CI is a required check.** The `test` job (ruff + pytest) must pass before a PR can
-  merge. Auto-merge is enabled, so a PR can be set to merge automatically once CI is
-  green.
+  merge.
+- **Merge manually after review — auto-merge is intentionally off.** Review the PR and
+  its squash commit message in the web UI before clicking merge; CI passing is necessary
+  but not sufficient. (Auto-merge is disabled on purpose so the final commit message gets
+  a human check.)
 - **After a PR merges, run `/sync-main`.** It fetches with prune, checks out `main`,
   fast-forward pulls, and safely deletes the merged branch (`-d` only; stops on
   uncommitted changes or a non-fast-forward pull). This keeps local `main` in sync and
