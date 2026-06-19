@@ -47,6 +47,14 @@ These override default behavior — follow them exactly.
   commit/push/PR sequence.
 - Pushing triggers the `ask`-gated `git push` permission rule — expect a confirmation
   prompt; that's intended.
+- **Merge PRs via the GitHub web UI, using squash — never merge locally.** A merge done
+  in the web UI is created and signed by GitHub (shows "Verified"), which satisfies the
+  `main` signed-commit requirement. Merging locally and pushing would require re-signing
+  and is disallowed by branch protection anyway. Squash keeps `main` linear (1 PR = 1
+  commit).
+- **CI is a required check.** The `test` job (ruff + pytest) must pass before a PR can
+  merge. Auto-merge is enabled, so a PR can be set to merge automatically once CI is
+  green.
 - **After a PR merges, run `/sync-main`.** It fetches with prune, checks out `main`,
   fast-forward pulls, and safely deletes the merged branch (`-d` only; stops on
   uncommitted changes or a non-fast-forward pull). This keeps local `main` in sync and
