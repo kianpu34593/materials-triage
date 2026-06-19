@@ -47,3 +47,8 @@ These override default behavior — follow them exactly.
   commit/push/PR sequence.
 - Pushing triggers the `ask`-gated `git push` permission rule — expect a confirmation
   prompt; that's intended.
+- **After a PR merges, run `/sync-main`.** It fetches with prune, checks out `main`,
+  fast-forward pulls, and safely deletes the merged branch (`-d` only; stops on
+  uncommitted changes or a non-fast-forward pull). This keeps local `main` in sync and
+  the branch list clean. Note: this is guidance I follow within a session when I know a
+  PR merged — it is not an automatic trigger; nothing runs on the merge event itself.
