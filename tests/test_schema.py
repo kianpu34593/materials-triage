@@ -92,9 +92,7 @@ def test_candidate_identifies_material_and_exposes_named_property():
             "band_gap": PropertyValue(
                 value=1.7719,
                 unit="eV",
-                provenance=Provenance(
-                    source="Materials Project", record_id="mp-aaaaadyf"
-                ),
+                provenance=Provenance(source="Materials Project", record_id="mp-aaaaadyf"),
             )
         },
     )
@@ -114,9 +112,7 @@ def test_candidate_distinguishes_absent_from_missing_property():
                 value=None,
                 unit="eV",
                 missing=True,
-                provenance=Provenance(
-                    source="Materials Project", record_id="mp-aaaaadyf"
-                ),
+                provenance=Provenance(source="Materials Project", record_id="mp-aaaaadyf"),
             )
         },
     )

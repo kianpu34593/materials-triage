@@ -66,7 +66,5 @@ class Candidate(BaseModel):
         return self
 
     @field_serializer("properties")
-    def _serialize_properties(
-        self, value: Mapping[str, PropertyValue]
-    ) -> dict[str, PropertyValue]:
+    def _serialize_properties(self, value: Mapping[str, PropertyValue]) -> dict[str, PropertyValue]:
         return dict(value)
