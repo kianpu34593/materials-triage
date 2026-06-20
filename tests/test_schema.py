@@ -151,6 +151,30 @@ def test_constraint_rejects_impossible_band():
         Constraint(property_name="band_gap", min=5.0, max=3.0)
 
 
+def test_constraint_rejects_infinite_min():
+    """An infinite lower bound is not a real limit — it gates nothing, so refuse it."""
+    with pytest.raises(ValidationError):
+        Constraint(property_name="band_gap", min=float("inf"))
+
+
+def test_constraint_rejects_infinite_max():
+    """An infinite upper bound is not a real limit — it gates nothing, so refuse it."""
+    with pytest.raises(ValidationError):
+        Constraint(property_name="band_gap", max=float("inf"))
+
+
+def test_constraint_rejects_negative_infinite_bound():
+    """A -inf bound is no real limit either — refuse it like +inf."""
+    with pytest.raises(ValidationError):
+        Constraint(property_name="band_gap", min=float("-inf"))
+
+
+def test_constraint_rejects_nan_bound():
+    """NaN breaks every ordering comparison, so it can never be a coherent bound."""
+    with pytest.raises(ValidationError):
+        Constraint(property_name="band_gap", max=float("nan"))
+
+
 def test_ranking_target_names_property_with_direction_and_weight():
     """A ranking target tells the ranker which property to score, which way is
     better, and how much it counts in the weighted average."""
