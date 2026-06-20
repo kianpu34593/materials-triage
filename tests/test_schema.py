@@ -201,12 +201,13 @@ def test_ranking_target_rejects_weight_above_one():
         RankingTarget(property_name="band_gap", direction="maximize", weight=1.5)
 
 
-def test_ranking_target_defaults_on_missing_to_flag_only():
-    """Absent a choice, a missing value is ranked-but-flagged — never dropped
-    or guessed — the project's honest default."""
+def test_ranking_target_defaults_on_missing_to_impute_medium():
+    """Absent a choice, a missing value is kept-and-flagged — imputed at the
+    neutral midpoint so it still ranks, never silently dropped — the project's
+    honest default."""
     target = RankingTarget(property_name="band_gap", direction="maximize", weight=0.5)
 
-    assert target.on_missing == "flag_only"
+    assert target.on_missing == "impute_medium"
 
 
 def test_triagespec_requires_at_least_one_constraint():

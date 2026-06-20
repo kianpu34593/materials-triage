@@ -7,7 +7,12 @@ scale so the weighted average can sum unlike units.
 
 from typing import Literal
 
-from materials_triage.core.schema import Candidate, Constraint, ExcludedCandidate
+from materials_triage.core.schema import (
+    Candidate,
+    Constraint,
+    ExcludedCandidate,
+    RankingTarget,
+)
 
 
 def normalize(values: list[float], direction: Literal["maximize", "minimize"]) -> list[float]:
@@ -75,3 +80,54 @@ def apply_hard_filters(
         else:
             survivors.append(candidate)
     return survivors, excluded
+
+
+def drop_missing_excluded(
+    candidates: list[Candidate], ranking_targets: tuple[RankingTarget, ...]
+) -> tuple[list[Candidate], list[ExcludedCandidate]]:
+    """Resolve the ``on_missing="exclude"`` policy before ranking.
+
+    A candidate with no value for an ``exclude``-policy ranking target cannot be
+    ranked on a property it lacks, so it is dropped with a ``missing_data``
+    exclusion rather than guessed at. Targets with other policies are left for
+    the scorer to impute. A candidate is dropped on the first such target (in
+    target order); survivors keep their original order.
+    """
+    survivors: list[Candidate] = []
+    excluded: list[ExcludedCandidate] = []
+    for candidate in candidates:
+        drop: ExcludedCandidate | None = None
+        for target in ranking_targets:
+            if target.on_missing != "exclude":
+                continue
+            prop = candidate.properties.get(target.property_name)
+            value = prop.value if prop is not None else None
+            if value is None:
+                drop = ExcludedCandidate(
+                    candidate=candidate,
+                    property_name=target.property_name,
+                    reason="missing_data",
+                )
+                break
+        if drop is not None:
+            excluded.append(drop)
+        else:
+            survivors.append(candidate)
+    return survivors, excluded
+
+
+def score_target(candidates: list[Candidate], target: RankingTarget) -> list[tuple[float, bool]]:
+    """Score one ranking target across a pool, aligned to ``candidates``.
+
+    Present values are min-max normalised in the target's direction (1 is best);
+    a candidate missing the value is imputed the neutral midpoint ``0.5`` and
+    flagged. Each entry is ``(contribution, flagged)`` where ``flagged`` marks an
+    imputed gap so the weighted average never silently credits missing data.
+    """
+    values = [
+        prop.value if (prop := candidate.properties.get(target.property_name)) else None
+        for candidate in candidates
+    ]
+    present = [v for v in values if v is not None]
+    normalized = iter(normalize(present, target.direction)) if present else iter(())
+    return [(0.5, True) if v is None else (next(normalized), False) for v in values]

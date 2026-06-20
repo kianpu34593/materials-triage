@@ -111,7 +111,7 @@ class RankingTarget(BaseModel):
     property_name: str = Field(min_length=1)
     direction: Literal["maximize", "minimize"]
     weight: float = Field(gt=0, le=1)
-    on_missing: Literal["exclude", "penalize", "flag_only"] = "flag_only"
+    on_missing: Literal["exclude", "impute_medium"] = "impute_medium"
 
 
 class TriageSpec(BaseModel):
