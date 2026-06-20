@@ -68,3 +68,25 @@ class Candidate(BaseModel):
     @field_serializer("properties")
     def _serialize_properties(self, value: Mapping[str, PropertyValue]) -> dict[str, PropertyValue]:
         return dict(value)
+
+
+class Constraint(BaseModel):
+    """A hard filter on one property: candidates outside the bound are dropped.
+
+    A bound is expressed as an inclusive ``min`` and/or ``max``; the hard-filter
+    stage reads these to gate candidates.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    property_name: str = Field(min_length=1)
+    min: float | None = None
+    max: float | None = None
+
+    @model_validator(mode="after")
+    def _bounds_some_property(self) -> Self:
+        if self.min is None and self.max is None:
+            raise ValueError("a constraint must set at least one of min or max")
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError("a constraint's min cannot exceed its max")
+        return self
