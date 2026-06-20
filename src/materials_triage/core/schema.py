@@ -7,7 +7,7 @@ that the output validator can confirm nothing was invented by the LLM.
 import math
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
@@ -94,3 +94,16 @@ class Constraint(BaseModel):
         if self.min is not None and self.max is not None and self.min > self.max:
             raise ValueError("a constraint's min cannot exceed its max")
         return self
+
+
+class RankingTarget(BaseModel):
+    """A soft scoring preference on one property: the ranker normalises the
+    property in the given direction and weights it in the weighted average.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    property_name: str = Field(min_length=1)
+    direction: Literal["maximize", "minimize"]
+    weight: float = Field(gt=0)
+    on_missing: Literal["exclude", "penalize", "flag_only"] = "flag_only"
