@@ -1,0 +1,18 @@
+# Pre-commit hooks: run ruff locally so a misformatted or lint-failing commit
+# can't be created — the same checks CI enforces (.github/workflows/ci.yml),
+# shifted left to commit time. Config (line-length, lint rules) comes from
+# pyproject.toml, so this stays in sync automatically.
+#
+# One-time setup:  pre-commit install
+# Run manually:    pre-commit run --all-files
+#
+# Pinned to the ruff version installed locally (ruff 0.15.18); bump in lockstep.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.18
+    hooks:
+      # Lint, auto-fixing what ruff safely can (mirrors `ruff check .`).
+      - id: ruff-check
+        args: [--fix]
+      # Format (mirrors `ruff format --check .`, but rewrites instead of just checking).
+      - id: ruff-format
