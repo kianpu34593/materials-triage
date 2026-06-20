@@ -545,3 +545,27 @@ def test_triage_result_assembles_a_full_outcome():
     assert [sc.candidate.identifier for sc in result.ranked] == ["mp-top", "mp-second"]
     assert result.ranked[1].flagged_missing == frozenset({"bulk_modulus"})
     assert {ec.reason for ec in result.excluded} == {"below_min", "above_max"}
+
+
+def test_excluded_candidate_missing_data_has_no_value():
+    """A candidate dropped because the constrained property is missing records
+    the 'missing_data' reason and carries no value (there was none to record)."""
+    candidate = Candidate(identifier="mp-x", formula="TiO2")
+    drop = ExcludedCandidate(candidate=candidate, property_name="band_gap", reason="missing_data")
+
+    assert drop.reason == "missing_data"
+    assert drop.value is None
+    assert drop.bound is None
+
+
+def test_excluded_candidate_missing_data_rejects_a_value():
+    """If a value exists the candidate isn't missing data, so pairing a value
+    with 'missing_data' is incoherent and refused."""
+    candidate = Candidate(identifier="mp-x", formula="TiO2")
+    with pytest.raises(ValidationError):
+        ExcludedCandidate(
+            candidate=candidate,
+            property_name="band_gap",
+            reason="missing_data",
+            value=0.5,
+        )

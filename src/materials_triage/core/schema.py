@@ -215,12 +215,18 @@ class ExcludedCandidate(BaseModel):
 
     candidate: Candidate
     property_name: str = Field(min_length=1)
-    reason: Literal["below_min", "above_max"]
+    reason: Literal["below_min", "above_max", "missing_data"]
     value: float | None = None
     bound: float | None = None
 
     @model_validator(mode="after")
-    def _reason_agrees_with_bound(self) -> Self:
+    def _reason_agrees_with_evidence(self) -> Self:
+        if self.reason == "missing_data":
+            # The constrained property had no value to check, so there is no
+            # number to record; a value here would contradict the reason.
+            if self.value is not None:
+                raise ValueError("a 'missing_data' exclusion cannot carry a value")
+            return self
         if self.value is None or self.bound is None:
             raise ValueError(
                 f"a {self.reason!r} exclusion must record both the value and the bound"
