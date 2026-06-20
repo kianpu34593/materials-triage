@@ -9,6 +9,7 @@ from materials_triage.core.schema import (
     PropertyValue,
     Provenance,
     RankingTarget,
+    TriageSpec,
 )
 
 
@@ -191,9 +192,154 @@ def test_ranking_target_requires_positive_weight():
         RankingTarget(property_name="band_gap", direction="maximize", weight=0.0)
 
 
+def test_ranking_target_rejects_weight_above_one():
+    """Weights are proportional shares, so a single weight cannot exceed 1."""
+    with pytest.raises(ValidationError):
+        RankingTarget(property_name="band_gap", direction="maximize", weight=1.5)
+
+
 def test_ranking_target_defaults_on_missing_to_flag_only():
     """Absent a choice, a missing value is ranked-but-flagged — never dropped
     or guessed — the project's honest default."""
     target = RankingTarget(property_name="band_gap", direction="maximize", weight=0.5)
 
     assert target.on_missing == "flag_only"
+
+
+def test_triagespec_requires_at_least_one_constraint():
+    """A spec with no hard filter is not a triage — without any constraint,
+    nothing is gated, so the spec is refused at construction."""
+    with pytest.raises(ValidationError, match="at least one constraint"):
+        TriageSpec()
+
+
+def test_triagespec_assembles_a_fully_populated_request():
+    """A spec carrying every kind of rule — filters, ranking, composition —
+    constructs and exposes each one for the pipeline to read."""
+    spec = TriageSpec(
+        constraints=(
+            Constraint(property_name="band_gap", min=1.0, max=3.0),
+            Constraint(property_name="energy_above_hull", max=0.05),
+        ),
+        ranking_targets=(
+            RankingTarget(property_name="band_gap", direction="maximize", weight=0.6),
+            RankingTarget(property_name="density", direction="minimize", weight=0.4),
+        ),
+        required_elements=frozenset({"Ti", "O"}),
+        excluded_elements=frozenset({"Pb"}),
+        max_nelements=4,
+    )
+
+    assert len(spec.constraints) == 2
+    assert len(spec.ranking_targets) == 2
+    assert spec.required_elements == frozenset({"Ti", "O"})
+    assert spec.excluded_elements == frozenset({"Pb"})
+    assert spec.max_nelements == 4
+
+
+def test_triagespec_allows_same_property_as_constraint_and_ranking_target():
+    """A dual-role property is legitimate — gate band gap as a hard filter and
+    also prefer higher band gap in ranking — so per-list dedup must not reject
+    a property that appears once in each list."""
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        ranking_targets=(
+            RankingTarget(property_name="band_gap", direction="maximize", weight=1.0),
+        ),
+    )
+
+    assert spec.constraints[0].property_name == "band_gap"
+    assert spec.ranking_targets[0].property_name == "band_gap"
+
+
+def test_triagespec_rejects_unknown_required_element():
+    """Composition rules name real chemical elements; a symbol that isn't on the
+    periodic table is an authoring error, so the spec refuses it."""
+    with pytest.raises(ValidationError, match="Xx"):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            required_elements=frozenset({"Fe", "Xx"}),
+        )
+
+
+def test_triagespec_rejects_more_required_elements_than_max_nelements():
+    """Demanding more distinct elements than the cap allows admits nothing —
+    the two rules contradict, so the spec is refused."""
+    with pytest.raises(ValidationError, match="max_nelements"):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            required_elements=frozenset({"Li", "Fe", "O"}),
+            max_nelements=2,
+        )
+
+
+def test_triagespec_rejects_nonpositive_max_nelements():
+    """A material has at least one element, so a cap below one admits nothing
+    and is refused."""
+    with pytest.raises(ValidationError):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            max_nelements=0,
+        )
+
+
+def test_triagespec_rejects_element_required_and_excluded():
+    """An element cannot be both demanded and forbidden — that admits nothing —
+    so a spec listing one in both sets is refused."""
+    with pytest.raises(ValidationError, match="Fe"):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            required_elements=frozenset({"Fe"}),
+            excluded_elements=frozenset({"Fe"}),
+        )
+
+
+def test_triagespec_rejects_duplicate_constraint_property():
+    """Two constraints on the same property are an authoring mistake — the
+    bound should be one constraint, not two — so the spec refuses the pair."""
+    with pytest.raises(ValidationError, match="band_gap"):
+        TriageSpec(
+            constraints=(
+                Constraint(property_name="band_gap", min=1.0),
+                Constraint(property_name="band_gap", max=5.0),
+            )
+        )
+
+
+def test_triagespec_requires_ranking_weights_to_sum_to_one():
+    """Ranking weights are proportional shares, so across a spec they must add
+    up to one — a set that doesn't is an incomplete normalisation, so reject it."""
+    with pytest.raises(ValidationError, match="sum to 1"):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            ranking_targets=(
+                RankingTarget(property_name="density", direction="minimize", weight=0.5),
+                RankingTarget(property_name="bulk_modulus", direction="maximize", weight=0.3),
+            ),
+        )
+
+
+def test_triagespec_accepts_ranking_weights_that_sum_to_one():
+    """A correctly-normalised set of shares is accepted."""
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        ranking_targets=(
+            RankingTarget(property_name="density", direction="minimize", weight=0.7),
+            RankingTarget(property_name="bulk_modulus", direction="maximize", weight=0.3),
+        ),
+    )
+
+    assert len(spec.ranking_targets) == 2
+
+
+def test_triagespec_rejects_duplicate_ranking_target_property():
+    """Two ranking targets on the same property would double-count it in the
+    weighted average — an authoring mistake — so the spec refuses the pair."""
+    with pytest.raises(ValidationError, match="density"):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            ranking_targets=(
+                RankingTarget(property_name="density", direction="minimize", weight=0.5),
+                RankingTarget(property_name="density", direction="maximize", weight=0.5),
+            ),
+        )
