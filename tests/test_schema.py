@@ -6,9 +6,12 @@ from pydantic import ValidationError
 from materials_triage.core.schema import (
     Candidate,
     Constraint,
+    ExcludedCandidate,
     PropertyValue,
     Provenance,
     RankingTarget,
+    ScoredCandidate,
+    TriageResult,
     TriageSpec,
 )
 
@@ -343,3 +346,202 @@ def test_triagespec_rejects_duplicate_ranking_target_property():
                 RankingTarget(property_name="density", direction="maximize", weight=0.5),
             ),
         )
+
+
+def test_scored_candidate_carries_candidate_score_and_contributions():
+    """A ranked survivor pairs the material with the composite score it earned
+    and the per-target contributions that produced it, so the audit can show
+    the math."""
+    candidate = Candidate(
+        identifier="mp-aaaaadyf",
+        formula="TiO2",
+        properties={
+            "band_gap": PropertyValue(
+                value=1.7719,
+                unit="eV",
+                provenance=Provenance(source="Materials Project", record_id="mp-aaaaadyf"),
+            )
+        },
+    )
+    scored = ScoredCandidate(
+        candidate=candidate,
+        score=0.82,
+        contributions={"band_gap": 0.82},
+    )
+
+    assert scored.candidate.identifier == "mp-aaaaadyf"
+    assert scored.score == 0.82
+    assert scored.contributions["band_gap"] == 0.82
+
+
+def test_scored_candidate_rejects_non_finite_score():
+    """A NaN or infinite score breaks every ordering comparison, so the ranker
+    can never assign one — the model refuses it."""
+    candidate = Candidate(identifier="mp-aaaaadyf", formula="TiO2")
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValidationError):
+            ScoredCandidate(candidate=candidate, score=bad)
+
+
+def test_scored_candidate_records_which_properties_were_flagged_missing():
+    """Ranking writes down the properties it flagged as missing, so the renderer
+    reads the flags off the result instead of re-deriving them — the run is
+    self-describing. By default nothing is flagged."""
+    candidate = Candidate(identifier="mp-aaaaadyf", formula="TiO2")
+
+    flagged = ScoredCandidate(
+        candidate=candidate, score=0.5, flagged_missing=frozenset({"bulk_modulus"})
+    )
+    plain = ScoredCandidate(candidate=candidate, score=0.5)
+
+    assert flagged.flagged_missing == frozenset({"bulk_modulus"})
+    assert plain.flagged_missing == frozenset()
+
+
+def test_excluded_candidate_records_structured_drop_reason():
+    """A dropped candidate records why — the property, the machine-readable
+    reason, the offending value and the bound it violated — so the audit
+    explains the exclusion without re-reading the spec."""
+    candidate = Candidate(
+        identifier="mp-aaaaadyf",
+        formula="TiO2",
+        properties={
+            "band_gap": PropertyValue(
+                value=0.4,
+                unit="eV",
+                provenance=Provenance(source="Materials Project", record_id="mp-aaaaadyf"),
+            )
+        },
+    )
+    excluded = ExcludedCandidate(
+        candidate=candidate,
+        property_name="band_gap",
+        reason="below_min",
+        value=0.4,
+        bound=1.0,
+    )
+
+    assert excluded.candidate.identifier == "mp-aaaaadyf"
+    assert excluded.property_name == "band_gap"
+    assert excluded.reason == "below_min"
+    assert excluded.value == 0.4
+    assert excluded.bound == 1.0
+
+
+def test_excluded_candidate_rejects_reason_inconsistent_with_bound():
+    """The reason names the direction of the violation, so it must agree with
+    the numbers: 'below_min' cannot hold when the value is not below the bound."""
+    candidate = Candidate(identifier="mp-aaaaadyf", formula="TiO2")
+    with pytest.raises(ValidationError):
+        ExcludedCandidate(
+            candidate=candidate,
+            property_name="band_gap",
+            reason="below_min",
+            value=5.0,
+            bound=1.0,
+        )
+
+
+def test_excluded_candidate_above_max_requires_value_above_bound():
+    """The symmetric direction: 'above_max' holds only when the value exceeds
+    the bound; a coherent one is accepted and an incoherent one refused."""
+    candidate = Candidate(identifier="mp-aaaaadyf", formula="TiO2")
+
+    ok = ExcludedCandidate(
+        candidate=candidate,
+        property_name="band_gap",
+        reason="above_max",
+        value=4.0,
+        bound=3.0,
+    )
+    assert ok.reason == "above_max"
+
+    with pytest.raises(ValidationError):
+        ExcludedCandidate(
+            candidate=candidate,
+            property_name="band_gap",
+            reason="above_max",
+            value=1.0,
+            bound=3.0,
+        )
+
+
+def test_triage_result_holds_ranked_survivors_and_excluded_set():
+    """The result the renderers read carries the ranked survivors and the
+    dropped candidates side by side."""
+    survivor = Candidate(identifier="mp-survivor", formula="TiO2")
+    dropped = Candidate(identifier="mp-dropped", formula="PbO")
+    result = TriageResult(
+        ranked=(ScoredCandidate(candidate=survivor, score=0.9),),
+        excluded=(
+            ExcludedCandidate(
+                candidate=dropped,
+                property_name="band_gap",
+                reason="below_min",
+                value=0.4,
+                bound=1.0,
+            ),
+        ),
+    )
+
+    assert result.ranked[0].candidate.identifier == "mp-survivor"
+    assert result.excluded[0].candidate.identifier == "mp-dropped"
+
+
+def test_triage_result_rejects_ranked_out_of_score_order():
+    """Rank is read off position, so that only means something if the survivors
+    are stored best-first; an out-of-order ranked tuple is refused."""
+    a = Candidate(identifier="mp-a", formula="TiO2")
+    b = Candidate(identifier="mp-b", formula="ZnO")
+    with pytest.raises(ValidationError):
+        TriageResult(
+            ranked=(
+                ScoredCandidate(candidate=a, score=0.3),
+                ScoredCandidate(candidate=b, score=0.9),
+            )
+        )
+
+
+def test_triage_result_assembles_a_full_outcome():
+    """A complete result — several ranked survivors carrying contributions and
+    missing flags, alongside several dropped candidates with reasons — assembles
+    and exposes each part for the renderers."""
+    top = Candidate(identifier="mp-top", formula="TiO2")
+    second = Candidate(identifier="mp-second", formula="ZnO")
+    dropped_low = Candidate(identifier="mp-low", formula="PbO")
+    dropped_high = Candidate(identifier="mp-high", formula="SnO2")
+    result = TriageResult(
+        ranked=(
+            ScoredCandidate(
+                candidate=top,
+                score=0.91,
+                contributions={"band_gap": 0.6, "density": 0.31},
+            ),
+            ScoredCandidate(
+                candidate=second,
+                score=0.74,
+                contributions={"band_gap": 0.5, "density": 0.24},
+                flagged_missing=frozenset({"bulk_modulus"}),
+            ),
+        ),
+        excluded=(
+            ExcludedCandidate(
+                candidate=dropped_low,
+                property_name="band_gap",
+                reason="below_min",
+                value=0.4,
+                bound=1.0,
+            ),
+            ExcludedCandidate(
+                candidate=dropped_high,
+                property_name="band_gap",
+                reason="above_max",
+                value=4.2,
+                bound=3.0,
+            ),
+        ),
+    )
+
+    assert [sc.candidate.identifier for sc in result.ranked] == ["mp-top", "mp-second"]
+    assert result.ranked[1].flagged_missing == frozenset({"bulk_modulus"})
+    assert {ec.reason for ec in result.excluded} == {"below_min", "above_max"}

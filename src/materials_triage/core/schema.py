@@ -175,3 +175,80 @@ class TriageSpec(BaseModel):
                 f"elements but max_nelements caps it at {self.max_nelements}"
             )
         return self
+
+
+class ScoredCandidate(BaseModel):
+    """A survivor of the hard filters, paired with the composite score it earned
+    and the per-target contributions that produced it, so the audit view can
+    show how the ranking was reached.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    candidate: Candidate
+    score: float
+    contributions: Mapping[str, float] = Field(default_factory=dict)
+    flagged_missing: frozenset[str] = frozenset()
+
+    @model_validator(mode="after")
+    def _freeze_contributions(self) -> Self:
+        if not math.isfinite(self.score):
+            raise ValueError("a score must be a finite number")
+        if not isinstance(self.contributions, MappingProxyType):
+            frozen = MappingProxyType(dict(self.contributions))
+            object.__setattr__(self, "contributions", frozen)
+        return self
+
+    @field_serializer("contributions")
+    def _serialize_contributions(self, value: Mapping[str, float]) -> dict[str, float]:
+        return dict(value)
+
+
+class ExcludedCandidate(BaseModel):
+    """A candidate dropped by the hard filters, paired with the structured
+    reason it was dropped — the property, a machine-readable reason, and the
+    offending value against the bound it violated — so the audit can explain
+    the exclusion without re-reading the spec.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    candidate: Candidate
+    property_name: str = Field(min_length=1)
+    reason: Literal["below_min", "above_max"]
+    value: float | None = None
+    bound: float | None = None
+
+    @model_validator(mode="after")
+    def _reason_agrees_with_bound(self) -> Self:
+        if self.value is None or self.bound is None:
+            raise ValueError(
+                f"a {self.reason!r} exclusion must record both the value and the bound"
+            )
+        if self.reason == "below_min" and not self.value < self.bound:
+            raise ValueError(
+                f"'below_min' requires value < bound, got {self.value} >= {self.bound}"
+            )
+        if self.reason == "above_max" and not self.value > self.bound:
+            raise ValueError(
+                f"'above_max' requires value > bound, got {self.value} <= {self.bound}"
+            )
+        return self
+
+
+class TriageResult(BaseModel):
+    """The outcome both renderers read: the ranked survivors of the hard filters
+    alongside the candidates that were dropped, each with its reason.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ranked: tuple[ScoredCandidate, ...] = ()
+    excluded: tuple[ExcludedCandidate, ...] = ()
+
+    @model_validator(mode="after")
+    def _ranked_is_best_first(self) -> Self:
+        scores = [sc.score for sc in self.ranked]
+        if any(earlier < later for earlier, later in zip(scores, scores[1:], strict=False)):
+            raise ValueError("ranked survivors must be stored in non-increasing score order")
+        return self
