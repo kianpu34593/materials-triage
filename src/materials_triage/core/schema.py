@@ -162,19 +162,14 @@ class TriageSpec(BaseModel):
             unknown = symbols - ELEMENT_SYMBOLS
             if unknown:
                 raise ValueError(
-                    f"{name} contains symbols that are not chemical "
-                    f"elements: {sorted(unknown)}"
+                    f"{name} contains symbols that are not chemical elements: {sorted(unknown)}"
                 )
         contradictory = self.required_elements & self.excluded_elements
         if contradictory:
             raise ValueError(
-                f"elements cannot be both required and excluded: "
-                f"{sorted(contradictory)}"
+                f"elements cannot be both required and excluded: {sorted(contradictory)}"
             )
-        if (
-            self.max_nelements is not None
-            and len(self.required_elements) > self.max_nelements
-        ):
+        if self.max_nelements is not None and len(self.required_elements) > self.max_nelements:
             raise ValueError(
                 f"required_elements demands {len(self.required_elements)} distinct "
                 f"elements but max_nelements caps it at {self.max_nelements}"
