@@ -4,6 +4,7 @@ Every scientific value flowing through the pipeline carries a ``Provenance`` so
 that the output validator can confirm nothing was invented by the LLM.
 """
 
+import math
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Self
@@ -87,6 +88,9 @@ class Constraint(BaseModel):
     def _bounds_some_property(self) -> Self:
         if self.min is None and self.max is None:
             raise ValueError("a constraint must set at least one of min or max")
+        for name, bound in (("min", self.min), ("max", self.max)):
+            if bound is not None and not math.isfinite(bound):
+                raise ValueError(f"a constraint's {name} must be a finite number")
         if self.min is not None and self.max is not None and self.min > self.max:
             raise ValueError("a constraint's min cannot exceed its max")
         return self
