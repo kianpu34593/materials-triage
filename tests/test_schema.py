@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from materials_triage.core.schema import Candidate, PropertyValue, Provenance
+from materials_triage.core.schema import Candidate, Constraint, PropertyValue, Provenance
 
 
 def test_provenance_carries_its_source():
@@ -123,3 +123,23 @@ def test_candidate_distinguishes_absent_from_missing_property():
 
     # absent: never retrieved, so not in the bag at all
     assert "formation_energy_per_atom" not in candidate.properties
+
+
+def test_constraint_gates_a_property_with_a_bound():
+    """A hard constraint names the property it gates and the bound to enforce."""
+    constraint = Constraint(property_name="band_gap", min=3.0)
+
+    assert constraint.property_name == "band_gap"
+    assert constraint.min == 3.0
+
+
+def test_constraint_must_bound_something():
+    """A constraint with neither a min nor a max gates nothing — it's incoherent."""
+    with pytest.raises(ValidationError):
+        Constraint(property_name="band_gap")
+
+
+def test_constraint_rejects_impossible_band():
+    """A min above the max admits nothing — an impossible window is refused."""
+    with pytest.raises(ValidationError):
+        Constraint(property_name="band_gap", min=5.0, max=3.0)
