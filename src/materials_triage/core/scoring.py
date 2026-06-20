@@ -11,9 +11,7 @@ from typing import Literal
 def normalize(values: list[float], direction: Literal["maximize", "minimize"]) -> list[float]:
     """Min-max normalise ``values`` onto [0, 1], where 1 is best for ``direction``."""
     if direction not in ("maximize", "minimize"):
-        raise ValueError(
-            f"direction must be 'maximize' or 'minimize', got {direction!r}"
-        )
+        raise ValueError(f"direction must be 'maximize' or 'minimize', got {direction!r}")
     if not values:
         raise ValueError("cannot normalize an empty pool of values")
     lo = min(values)
