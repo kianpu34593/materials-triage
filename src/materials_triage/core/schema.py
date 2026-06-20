@@ -250,7 +250,5 @@ class TriageResult(BaseModel):
     def _ranked_is_best_first(self) -> Self:
         scores = [sc.score for sc in self.ranked]
         if any(earlier < later for earlier, later in zip(scores, scores[1:], strict=False)):
-            raise ValueError(
-                "ranked survivors must be stored in non-increasing score order"
-            )
+            raise ValueError("ranked survivors must be stored in non-increasing score order")
         return self
