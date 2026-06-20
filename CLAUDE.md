@@ -51,8 +51,10 @@ dropped or guessed) · no DB to host (HTTP client over public APIs; only local s
 + memory).
 
 Full design lives in `Deep-Plan-materials-triage-agent-2026-06-19-1429.md` (§0 has the workflow
-diagram). Implementation is **not yet started** — it proceeds as single-function TDD increments
-(see the build order in the deep plan), and only on an explicit go-ahead.
+diagram). Implementation is **underway on the core data-model layer** — the frozen
+`Provenance`, `PropertyValue`, and `Candidate` models in `src/materials_triage/core/schema.py`
+exist so far. It proceeds as single-function TDD increments (see the build order in the deep
+plan), and only on an explicit go-ahead.
 
 The repo's agent-coding setup (commands, skills, settings) is documented in
 [`.claude/README.md`](.claude/README.md).
