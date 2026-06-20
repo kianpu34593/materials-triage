@@ -108,6 +108,11 @@ These override default behavior — follow them exactly.
   commit).
 - **CI is a required check.** The `test` job (ruff + pytest) must pass before a PR can
   merge.
+- **Lint locally before pushing — install the pre-commit hook.** `.pre-commit-config.yaml`
+  runs the same ruff format + lint checks CI enforces, at commit time. It is **not** active
+  until you run `pre-commit install` once per clone (git hooks aren't checked in). Without
+  it, a misformatted commit only fails on CI after push. Run `pre-commit run --all-files`
+  to check the whole tree manually; bump the pinned `rev` in lockstep with the ruff version.
 - **Merge manually after review — auto-merge is intentionally off.** Review the PR and
   its squash commit message in the web UI before clicking merge; CI passing is necessary
   but not sufficient. (Auto-merge is disabled on purpose so the final commit message gets
