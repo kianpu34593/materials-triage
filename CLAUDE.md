@@ -26,9 +26,12 @@ These override default behavior — follow them exactly.
    my approval before moving to the next one.** Do not batch multiple functions or
    build out a whole module in one pass.
 
-3. **TDD preferred.** Default to test-driven development: write the test(s) for a
-   function before (or alongside) its implementation, and confirm they pass before
-   asking to proceed. The `tdd-test-writer` agent is available for this.
+3. **TDD preferred — use the `tdd` skill.** Default to test-driven development via the
+   `tdd` skill (red-green-refactor). Work in **vertical slices**: one failing test →
+   minimal code to pass → repeat — never write all tests up front (that produces tests
+   of imagined behavior). Test observable behavior through public interfaces, not
+   implementation details. Confirm tests pass before asking to proceed. (The
+   `tdd-test-writer` agent can also help author tests.)
 
 ## Git workflow
 

@@ -6,6 +6,12 @@
       "sourceType": "github",
       "skillPath": "skills/lavish/SKILL.md",
       "computedHash": "32bc766ecb6cbaa1c049fa3543166210eb12510c6784ebac939bd0c0916e7797"
+    },
+    "tdd": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/tdd/SKILL.md",
+      "computedHash": "d5ca5c8ae0615f343f1cfd71591f4a586046d77b1f36e8d67b8f643bad51043e"
     }
   }
 }
