@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from materials_triage.core.schema import PropertyValue, Provenance
+from materials_triage.core.schema import Candidate, PropertyValue, Provenance
 
 
 def test_provenance_carries_its_source():
@@ -80,3 +80,50 @@ def test_missing_property_value_still_reports_its_source():
     assert pv.missing is True
     assert pv.value is None
     assert pv.provenance.source == "Materials Project"
+
+
+def test_candidate_identifies_material_and_exposes_named_property():
+    """A candidate is keyed by the id the source returned, and serves its
+    properties by name for the filter and ranker to read."""
+    candidate = Candidate(
+        identifier="mp-aaaaadyf",
+        formula="TiO2",
+        properties={
+            "band_gap": PropertyValue(
+                value=1.7719,
+                unit="eV",
+                provenance=Provenance(
+                    source="Materials Project", record_id="mp-aaaaadyf"
+                ),
+            )
+        },
+    )
+
+    assert candidate.identifier == "mp-aaaaadyf"
+    assert candidate.properties["band_gap"].value == 1.7719
+
+
+def test_candidate_distinguishes_absent_from_missing_property():
+    """Never-retrieved and retrieved-but-empty are different states: an absent
+    property is simply not in the bag, while a missing one is present and flagged."""
+    candidate = Candidate(
+        identifier="mp-aaaaadyf",
+        formula="TiO2",
+        properties={
+            "band_gap": PropertyValue(
+                value=None,
+                unit="eV",
+                missing=True,
+                provenance=Provenance(
+                    source="Materials Project", record_id="mp-aaaaadyf"
+                ),
+            )
+        },
+    )
+
+    # retrieved-but-missing: present in the bag, flagged, no number
+    assert "band_gap" in candidate.properties
+    assert candidate.properties["band_gap"].missing is True
+
+    # absent: never retrieved, so not in the bag at all
+    assert "formation_energy_per_atom" not in candidate.properties

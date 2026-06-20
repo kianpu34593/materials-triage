@@ -43,3 +43,15 @@ class PropertyValue(BaseModel):
         if not self.missing and self.value is None:
             raise ValueError("a present value must carry a number")
         return self
+
+
+class Candidate(BaseModel):
+    """A material returned by retrieval: its source-issued identity plus the
+    canonical, provenance-tagged properties the filter and ranker read by name.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    identifier: str = Field(min_length=1)
+    formula: str = Field(min_length=1)
+    properties: dict[str, PropertyValue] = Field(default_factory=dict)
