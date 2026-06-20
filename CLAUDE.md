@@ -52,7 +52,8 @@ dropped or guessed) · no DB to host (HTTP client over public APIs; only local s
 
 Full design lives in `Deep-Plan-materials-triage-agent-2026-06-19-1429.md` (§0 has the workflow
 diagram). Implementation is **underway on the core data-model layer** — the frozen
-`Provenance`, `PropertyValue`, and `Candidate` models in `src/materials_triage/core/schema.py`
+`Provenance`, `PropertyValue`, `Candidate`, and `Constraint` (a hard filter holding an
+inclusive min/max bound on one property) models in `src/materials_triage/core/schema.py`
 exist so far. It proceeds as single-function TDD increments (see the build order in the deep
 plan), and only on an explicit go-ahead.
 
