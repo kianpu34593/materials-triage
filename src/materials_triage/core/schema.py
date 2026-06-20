@@ -4,7 +4,7 @@ Every scientific value flowing through the pipeline carries a ``Provenance`` so
 that the output validator can confirm nothing was invented by the LLM.
 """
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Provenance(BaseModel):
@@ -16,4 +16,4 @@ class Provenance(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    source: str
+    source: str = Field(min_length=1)
