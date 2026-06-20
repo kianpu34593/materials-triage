@@ -3,7 +3,13 @@
 import pytest
 from pydantic import ValidationError
 
-from materials_triage.core.schema import Candidate, Constraint, PropertyValue, Provenance
+from materials_triage.core.schema import (
+    Candidate,
+    Constraint,
+    PropertyValue,
+    Provenance,
+    RankingTarget,
+)
 
 
 def test_provenance_carries_its_source():
@@ -143,3 +149,27 @@ def test_constraint_rejects_impossible_band():
     """A min above the max admits nothing — an impossible window is refused."""
     with pytest.raises(ValidationError):
         Constraint(property_name="band_gap", min=5.0, max=3.0)
+
+
+def test_ranking_target_names_property_with_direction_and_weight():
+    """A ranking target tells the ranker which property to score, which way is
+    better, and how much it counts in the weighted average."""
+    target = RankingTarget(property_name="band_gap", direction="maximize", weight=0.5)
+
+    assert target.property_name == "band_gap"
+    assert target.direction == "maximize"
+    assert target.weight == 0.5
+
+
+def test_ranking_target_requires_positive_weight():
+    """A zero or negative weight contributes nothing to the weighted average."""
+    with pytest.raises(ValidationError):
+        RankingTarget(property_name="band_gap", direction="maximize", weight=0.0)
+
+
+def test_ranking_target_defaults_on_missing_to_flag_only():
+    """Absent a choice, a missing value is ranked-but-flagged — never dropped
+    or guessed — the project's honest default."""
+    target = RankingTarget(property_name="band_gap", direction="maximize", weight=0.5)
+
+    assert target.on_missing == "flag_only"
