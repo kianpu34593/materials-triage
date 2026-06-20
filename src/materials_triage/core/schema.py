@@ -101,6 +101,9 @@ class Constraint(BaseModel):
 class RankingTarget(BaseModel):
     """A soft scoring preference on one property: the ranker normalises the
     property in the given direction and weights it in the weighted average.
+
+    ``weight`` is a proportional share in ``(0, 1]``; across the targets of a
+    single ``TriageSpec`` the weights must sum to 1.
     """
 
     model_config = ConfigDict(frozen=True)
