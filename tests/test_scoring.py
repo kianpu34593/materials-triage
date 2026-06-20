@@ -2,8 +2,19 @@
 
 import pytest
 
-from materials_triage.core.schema import Candidate, Constraint, PropertyValue, Provenance
-from materials_triage.core.scoring import apply_hard_filters, normalize
+from materials_triage.core.schema import (
+    Candidate,
+    Constraint,
+    PropertyValue,
+    Provenance,
+    RankingTarget,
+)
+from materials_triage.core.scoring import (
+    apply_hard_filters,
+    drop_missing_excluded,
+    normalize,
+    score_target,
+)
 
 
 def _candidate(identifier: str, formula: str, **props: float) -> Candidate:
@@ -155,3 +166,74 @@ def test_apply_hard_filters_treats_present_but_missing_value_as_missing_data():
 
     assert survivors == []
     assert excluded[0].reason == "missing_data"
+
+
+def test_drop_missing_excluded_drops_candidate_missing_an_exclude_target():
+    """A candidate with no value for a ranking target whose policy is 'exclude'
+    is dropped with the missing_data reason; one that has the value survives."""
+    has_it = _candidate("mp-has", "GaN", band_gap=2.0)
+    lacks_it = _candidate("mp-lacks", "TiO2")  # no band_gap
+    target = RankingTarget(
+        property_name="band_gap", direction="maximize", weight=1.0, on_missing="exclude"
+    )
+
+    survivors, excluded = drop_missing_excluded([has_it, lacks_it], (target,))
+
+    assert [c.identifier for c in survivors] == ["mp-has"]
+    assert len(excluded) == 1
+    assert excluded[0].candidate.identifier == "mp-lacks"
+    assert excluded[0].property_name == "band_gap"
+    assert excluded[0].reason == "missing_data"
+
+
+def test_drop_missing_excluded_keeps_candidate_missing_an_impute_target():
+    """A candidate missing a target whose policy is 'impute_medium' is NOT dropped
+    here — its gap is the scorer's to impute, so it survives this stage untouched."""
+    lacks_it = _candidate("mp-lacks", "TiO2")  # no band_gap
+    target = RankingTarget(
+        property_name="band_gap", direction="maximize", weight=1.0, on_missing="impute_medium"
+    )
+
+    survivors, excluded = drop_missing_excluded([lacks_it], (target,))
+
+    assert [c.identifier for c in survivors] == ["mp-lacks"]
+    assert excluded == []
+
+
+def test_score_target_normalizes_present_values_unflagged():
+    """With every candidate carrying the value, score_target normalizes them just
+    as normalize() does and flags none — the contributions feed the weighted average."""
+    a = _candidate("mp-a", "X", band_gap=1.0)
+    b = _candidate("mp-b", "Y", band_gap=2.0)
+    c = _candidate("mp-c", "Z", band_gap=3.0)
+    target = RankingTarget(property_name="band_gap", direction="maximize", weight=1.0)
+
+    result = score_target([a, b, c], target)
+
+    assert result == [(0.0, False), (0.5, False), (1.0, False)]
+
+
+def test_score_target_imputes_neutral_half_for_missing_and_flags_it():
+    """A candidate missing the value is imputed a neutral 0.5 and flagged, while
+    the present values normalize among themselves — the gap is neither in the
+    pool that sets min/max nor credited as if measured."""
+    a = _candidate("mp-a", "X", band_gap=1.0)
+    gap = _candidate("mp-gap", "Y")  # no band_gap
+    c = _candidate("mp-c", "Z", band_gap=3.0)
+    target = RankingTarget(property_name="band_gap", direction="maximize", weight=1.0)
+
+    result = score_target([a, gap, c], target)
+
+    assert result == [(0.0, False), (0.5, True), (1.0, False)]
+
+
+def test_score_target_all_missing_imputes_half_without_normalizing_empty():
+    """When no candidate carries the value the present pool is empty, so the
+    scorer imputes 0.5 for all rather than calling normalize on nothing."""
+    a = _candidate("mp-a", "X")  # no band_gap
+    b = _candidate("mp-b", "Y")  # no band_gap
+    target = RankingTarget(property_name="band_gap", direction="maximize", weight=1.0)
+
+    result = score_target([a, b], target)
+
+    assert result == [(0.5, True), (0.5, True)]
