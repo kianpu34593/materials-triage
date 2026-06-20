@@ -4,11 +4,55 @@ Guidance for Claude Code working in this repository.
 
 ## What this repo is
 
-**Materials-Triage** — an agent for triaging materials-research inputs. The triage
-logic and domain specifics will be added here later; until then, treat this section
-as a placeholder and ask before assuming domain behavior.
+**Materials-Triage** — a public-data-only agent that turns a scientist's natural-language
+request into a **ranked, fully-cited shortlist of candidate materials**, with caveats and
+clearly-marked missing/uncertain data, in two views: a concise **PI summary** and a detailed
+technical **audit** view. It never triggers wet-lab actions, reads private lab data, or scrapes
+paywalled sources, and resists basic prompt-injection by construction.
 
-> _TODO (owner to fill in): what gets triaged, inputs/outputs, scoring/routing rules._
+**Load-bearing decision:** the LLM never invents scientific facts. Public databases supply
+every number (tagged with provenance), deterministic code filters and ranks, and the LLM only
+builds the spec, proposes hypotheses, and writes grounded, cited narrative. This yields three
+properties: **traceable** (every run is a recorded, replayable `TriageRun`), **configurable**
+(tweak a knob, resume from that step), and **generalizable with zero setup** (no mandatory
+profile — the spec is LLM-built and remembered in lab memory).
+
+**Workflow (traced state machine, not an autonomous tool-calling loop):**
+
+1. **Input policy gate** — allowlist; forbidden/out-of-scope → logged refusal (not recorded).
+2. **Spec building (LLM + human)** — Convert language → Filling Spec (`TriageSpec`); on missing
+   fields, Recommend LLM (seeded by built-in defaults + lab memory) → user accepts or fills in
+   (manual fills pass a user-input gate) → Final Spec.
+3. **Hypothesis (LLM + RAG)** — propose candidates / property ranges from literature; hypotheses, not facts.
+4. **Retrieve (code, not LLM)** — deterministic API calls; **v1: Materials Project only**. Returns
+   candidates + `PropertyValue`s, each carrying `Provenance`.
+5. **Hard filters** — drop any candidate violating any hard constraint; each drop records a reason.
+6. **Ranking** — **v1: weighted average** of target properties; applies `on_missing` and flags missing data.
+7. **Synthesis (LLM + RAG)** — grounded narrative + mechanistic "why," each claim cited; no invented numbers.
+8. **Output validator** — every referenced ID + citation must resolve to retrieved provenance; ungrounded → reject & retry.
+9. **Render** — `view=pi` concise summary · `view=audit` renders the full trace.
+
+Cross-cutting: a **literature RAG** (BM25 over OpenAlex/Crossref abstracts, treated as untrusted
+DATA) feeds steps 3 & 7; two persistence buckets — **lab memory** (saved specs) and **`TriageRun`**
+(per-run trace) — and the trace saves back to memory.
+
+**Locked decisions:** vertical slice (one real source + stubs + design note) · first source
+Materials Project · LLM = Claude on **AWS Bedrock** (IAM creds, no Anthropic key; mockable for
+offline eval) · installable package + CLI · literature = metadata/abstracts only (no full text) ·
+RAG = lexical BM25, keyless, per-query in-memory · execution = traced state machine · re-runs via
+automatic step-cache + `resume --from`. No mandatory profile; cross-source merge deferred;
+standalone caveats stage deleted (missing flags are a byproduct of ranking).
+
+**Why it's safe & honest:** facts come from tools not the LLM (hallucination is structurally
+impossible in the numeric layer) · capability-by-construction (no wet-lab/private-DB/scraper tool
+exists) · retrieved text is untrusted DATA never instructions · output validator enforces
+resolvable IDs/citations · missing data is first-class (ranked-but-flagged, never silently
+dropped or guessed) · no DB to host (HTTP client over public APIs; only local state is run traces
++ memory).
+
+Full design lives in `Deep-Plan-materials-triage-agent-2026-06-19-1429.md` (§0 has the workflow
+diagram). Implementation is **not yet started** — it proceeds as single-function TDD increments
+(see the build order in the deep plan), and only on an explicit go-ahead.
 
 The repo's agent-coding setup (commands, skills, settings) is documented in
 [`.claude/README.md`](.claude/README.md).

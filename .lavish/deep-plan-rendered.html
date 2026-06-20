@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="luxury">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deep Plan — Materials-Triage Agent</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true, theme: 'dark',
+    themeVariables: { fontSize: '14px', fontFamily: 'ui-sans-serif, system-ui, sans-serif' },
+    flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis', nodeSpacing: 42, rankSpacing: 52 }
+  });
+</script>
+<style>
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .mermaid { width:100%; } .mermaid svg { width:100% !important; height:auto !important; }
+  .legend-dot { width:.8rem; height:.8rem; border-radius:.2rem; display:inline-block; }
+  h2 { scroll-margin-top: 1rem; }
+</style>
+</head>
+<body class="bg-base-200 text-base-content">
+<main class="mx-auto max-w-6xl p-5 lg:p-10 space-y-10">
+
+  <!-- HERO -->
+  <header class="space-y-4">
+    <div class="flex flex-wrap gap-2">
+      <span class="badge badge-soft badge-primary">Deep Plan</span>
+      <span class="badge badge-soft">Materials-Triage</span>
+      <span class="badge badge-soft">workflow finalized 2026-06-20</span>
+      <span class="badge badge-soft badge-warning">Impact 4 / 5</span>
+    </div>
+    <h1 class="text-3xl lg:text-5xl font-bold leading-tight">Materials-Triage Agent</h1>
+    <p class="text-base lg:text-lg opacity-80 max-w-3xl">
+      A public-data-only agent that turns a scientist's request into a <strong>ranked, fully-cited
+      shortlist</strong> with caveats and clearly-marked missing data, in two views (PI summary /
+      technical audit). No wet-lab actions, no private data, no paywalled scraping — and
+      prompt-injection-resistant <em>by construction</em>.
+    </p>
+    <div class="mockup-code max-w-3xl text-sm">
+      <pre data-prefix="?"><code>"Find promising oxide dielectric candidates for thin-film experiments.</code></pre>
+      <pre data-prefix=" "><code> Prefer stable, wide band gap, non-toxic, simple compositions, public</code></pre>
+      <pre data-prefix=" "><code> evidence. Return a ranked shortlist with caveats."</code></pre>
+    </div>
+  </header>
+
+  <!-- CORE IDEA -->
+  <section class="card card-border bg-base-100" style="background:linear-gradient(135deg,rgba(190,160,90,.14),rgba(190,160,90,.02))">
+    <div class="card-body">
+      <h2 class="card-title text-xl">The load-bearing decision</h2>
+      <p class="text-lg"><span class="text-primary font-semibold">The LLM never invents scientific facts.</span>
+      Public databases supply every number (tagged with provenance); deterministic code filters and
+      ranks; the LLM only builds the spec, proposes hypotheses, and writes grounded, cited narrative.</p>
+      <p class="opacity-80">Three properties fall out of this: <strong>traceable</strong> (every run is a
+      recorded, replayable <span class="mono">TriageRun</span>), <strong>configurable</strong> (tweak a
+      knob, resume from that step), and <strong>generalizable with zero setup</strong> (no mandatory
+      profile — the spec is LLM-built and remembered).</p>
+    </div>
+  </section>
+
+  <!-- DIAGRAM -->
+  <section class="space-y-3">
+    <h2 class="text-2xl font-bold">§0 · Final workflow</h2>
+    <div class="flex flex-wrap gap-4 text-sm rounded-box border border-base-content/10 bg-base-100 p-3">
+      <span class="flex items-center gap-2"><span class="legend-dot" style="background:#7c3f58"></span> guardrail / user gate</span>
+      <span class="flex items-center gap-2"><span class="legend-dot" style="background:#4c5aa0"></span> LLM (+ RAG)</span>
+      <span class="flex items-center gap-2"><span class="legend-dot" style="background:#3f6f5f"></span> deterministic code</span>
+      <span class="flex items-center gap-2"><span class="legend-dot" style="background:#8a6d3b"></span> trace / memory</span>
+      <span class="flex items-center gap-2"><span class="legend-dot" style="background:#2b2b33;border:1px solid #6b6b78"></span> data / io</span>
+    </div>
+    <div class="card card-border bg-base-100"><div class="card-body overflow-x-auto">
+      <pre class="mermaid">
+---
+config:
+  layout: dagre
+---
+flowchart TB
+ subgraph s1["2 · Spec building (LLM + human-in-the-loop)"]
+        UND["Convert language to spec (LLM)"]
+        n2["Filling Spec<br>(pydantic TriageSpec model)"]
+        n3["Recommend LLM<br>propose values for missing fields"]
+        n4{"User input<br>accept recommended · or fill in"}
+        n5["Final Spec<br>(complete TriageSpec)"]
+        UND --> n2
+        n2 -- "missing fields" --> n3
+        n3 --> n4
+        n4 -- "use recommended" --> n2
+        n4 -- "user fills in" --> UG{"User-input gate<br>validate fields · refuse forbidden · treat as data"}
+        UG -- ok --> n2
+        n2 -- "fully finished" --> n5
+  end
+    UG -- "forbidden / out-of-scope" --> REFUSE
+    Q["Scientist query"] --> GATE{"1 · Input policy gate<br>allowlist; refuse forbidden asks"}
+    GATE -- "forbidden / out-of-scope" --> REFUSE["Logged refusal<br>no capability exists to comply"]
+    GATE -- allowed --> UND
+    DEF["Built-in scientific defaults<br>toxic list · stability cutoff"] -. default seed .-> n3
+    MEM[("Lab memory<br>saved specs + scientist edits")] -. propose seeded spec if query matches memory .-> n3
+    n5 --> n1["3 · Hypothesis LLM + RAG<br>(proposed candidates or ranges from literature search)"]
+    LIT["Literature RAG<br>OpenAlex / Crossref abstracts<br>per-query in-memory BM25 · untrusted DATA"] -. context in .-> n1
+    n1 --> RET["4 · Retrieve properties<br>v1: Materials Project (single source)<br>OQMD · AFLOW · PubChem · ICSD via adapters later<br>(cross-source merge deferred)"]
+    RET --> FACTS[("Candidates + PropertyValues<br>every value carries Provenance")]
+    FACTS --> FILT["5 · Hard filters<br>drop anything outside the spec's hard constraints<br>(toxicity, decomposition energy, required elements, property cutoffs)"]
+    FILT -- dropped + recorded reason --> DROP["Excluded set"]
+    FILT --> RANK["6 · Ranking based on TriageSpec<br>v1: weighted average of target properties<br>(applies on_missing → flags missing data)<br>(Pareto / down-screening later)"]
+    RANK --> SYN["7 · Synthesis  LLM + RAG<br>grounded narrative + mechanism, each claim cited"]
+    DROP --> SYN
+    LIT -. evidence out .-> SYN
+    SYN --> VAL{"8 · Output validator<br>do all IDs and citations resolve?"}
+    VAL -- "ungrounded → reject and retry" --> SYN
+    VAL -- valid --> VIEW{"9 · Render"}
+    VIEW -- "view = pi" --> PI["Concise PI summary"]
+    VIEW -- "view = audit" --> AUD["Technical / audit view<br>renders the trace"]
+
+    n5 -. record .-> TRACE["TriageRun  run_id<br>persisted to runs/ folder<br>records the allowed run (step 2 onward)"]
+    RET -. record .-> TRACE
+    FILT -. record .-> TRACE
+    RANK -. record .-> TRACE
+    SYN -. record .-> TRACE
+    VAL -. record .-> TRACE
+    TRACE -- "save to memory.db" --> MEM
+
+    UND:::llm
+    n2:::llm
+    n3:::llm
+    n4:::guard
+    UG:::guard
+    n5:::io
+    Q:::io
+    GATE:::guard
+    REFUSE:::io
+    DEF:::io
+    MEM:::trace
+    n1:::llm
+    RET:::code
+    FACTS:::io
+    FILT:::code
+    DROP:::io
+    RANK:::code
+    SYN:::llm
+    VAL:::guard
+    VIEW:::code
+    PI:::io
+    AUD:::io
+    LIT:::trace
+    TRACE:::trace
+    classDef guard fill:#7c3f58,stroke:#b56b86,color:#fff
+    classDef llm fill:#4c5aa0,stroke:#8593d6,color:#fff
+    classDef code fill:#3f6f5f,stroke:#6fae97,color:#fff
+    classDef trace fill:#8a6d3b,stroke:#c8a86b,color:#fff
+    classDef io fill:#2b2b33,stroke:#6b6b78,color:#e8e8ef
+      </pre>
+    </div></div>
+  </section>
+
+  <!-- WORKFLOW WALKTHROUGH -->
+  <section class="space-y-3">
+    <h2 class="text-2xl font-bold">Workflow walkthrough</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div class="card card-border bg-base-100"><div class="card-body p-4"><h3 class="font-semibold">1 · Input policy gate</h3><p class="text-sm opacity-80">Allowlist; refuse forbidden/out-of-scope → logged refusal. Not recorded into the run.</p></div></div>
+      <div class="card card-border bg-base-100"><div class="card-body p-4"><h3 class="font-semibold">2 · Spec building (LLM + human)</h3><p class="text-sm opacity-80">Convert → Filling Spec → on missing fields, Recommend LLM (seeded by defaults + lab memory) → User input accepts or fills in (manual fills pass a user-input gate) → Final Spec.</p></div></div>
+      <div class="card card-border bg-base-100"><div class="card-body p-4"><h3 class="font-semibold">3 · Hypothesis (LLM + RAG)</h3><p class="text-sm opacity-80">Propose candidates / property ranges from the literature. Hypotheses, not facts.</p></div></div>
+      <div class="card card-border bg-base-100"><div class="card-body p-4"><h3 class="font-semibold">4 · Retrieve (code, not LLM)</h3><p class="text-sm opacity-80">Deterministic API calls — <strong>v1: Materials Project only</strong>. Returns candidates + PropertyValues, each with Provenance.</p></div></div>
+      <div class="card card-border bg-base-100"><div class="card-body p-4"><h3 class="font-semibold">5 · Hard filters</h3><p class="text-sm opacity-80">Drop any candidate violating <em>any</em> hard constraint in the spec; each drop records a reason.</p></div></div>
+      <div class="card card-border bg-base-100"><div class="card-body p-4"><h3 class="font-semibold">6 · Ranking</h3><p class="text-sm opacity-80"><strong>v1: weighted average</strong> of target properties; applies <span class="mono">on_missing</span> and flags missing data. (Pareto/down-screening later.)</p></div></div>
+      <div class="card card-border bg-base-100"><div class="card-body p-4"><h3 class="font-semibold">7 · Synthesis (LLM + RAG)</h3><p class="text-sm opacity-80">Grounded narrative + mechanistic "why," each claim cited; explains the excluded set. No invented numbers.</p></div></div>
+      <div class="card card-border bg-base-100"><div class="card-body p-4"><h3 class="font-semibold">8 · Output validator</h3><p class="text-sm opacity-80">Every referenced ID + citation must resolve to retrieved provenance; ungrounded → reject & retry.</p></div></div>
+      <div class="card card-border bg-base-100"><div class="card-body p-4"><h3 class="font-semibold">9 · Render</h3><p class="text-sm opacity-80"><span class="mono">view=pi</span> concise summary · <span class="mono">view=audit</span> renders the full trace.</p></div></div>
+      <div class="card card-border bg-secondary/10 border-secondary/40"><div class="card-body p-4"><h3 class="font-semibold">Cross-cutting</h3><p class="text-sm opacity-80">Literature RAG (untrusted) feeds steps 3 &amp; 7. Two buckets: lab memory (specs) + TriageRun (trace); trace saves to memory.</p></div></div>
+    </div>
+  </section>
+
+  <!-- DECISIONS -->
+  <section class="space-y-3">
+    <h2 class="text-2xl font-bold">Locked decisions</h2>
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table table-sm table-zebra">
+        <thead><tr><th>#</th><th>Decision</th><th>Choice</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Scope</td><td>Vertical slice — one real source + stubs + design note</td></tr>
+          <tr><td>2</td><td>First source</td><td>Materials Project</td></tr>
+          <tr><td>3</td><td>LLM provider</td><td>Claude on <strong>AWS Bedrock</strong> (IAM creds, no Anthropic key); mockable for offline eval</td></tr>
+          <tr><td>4</td><td>Packaging</td><td>Installable package + CLI</td></tr>
+          <tr><td>5</td><td>Literature</td><td>Metadata/abstracts only (OpenAlex/Crossref); no full text</td></tr>
+          <tr><td>6</td><td>RAG</td><td>Lexical BM25, keyless, per-query in-memory</td></tr>
+          <tr><td>7</td><td>Execution model</td><td>Traced state machine (not autonomous tool-calling loop)</td></tr>
+          <tr><td>8</td><td>Re-runs</td><td>Automatic step-cache; <span class="mono">resume --from</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+      <div class="alert alert-soft"><span><strong>No mandatory profile</strong> — spec is LLM-built + remembered; day-0 infer-and-save, day-1 memory proposes a seeded spec.</span></div>
+      <div class="alert alert-soft"><span><strong>Two input surfaces, one guardrail</strong> — query and manual spec edits both pass the input gate.</span></div>
+      <div class="alert alert-soft"><span><strong>Single source first</strong> — cross-source merge (entity resolution + reconciliation) deferred.</span></div>
+      <div class="alert alert-soft"><span><strong>Caveats stage deleted</strong> — missing flags are a byproduct of ranking, shown by renderers.</span></div>
+    </div>
+  </section>
+
+  <!-- FILES -->
+  <section class="space-y-3">
+    <h2 class="text-2xl font-bold">Files (new under <span class="mono text-base">src/materials_triage/</span>)</h2>
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table table-sm table-zebra">
+        <thead><tr><th>Path</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td class="mono text-xs">core/schema.py</td><td>Provenance · PropertyValue · Candidate · TriageSpec · TriageResult</td></tr>
+          <tr><td class="mono text-xs">core/scoring.py</td><td>Normalization · spec-general hard filters · on_missing policy</td></tr>
+          <tr><td class="mono text-xs">core/ranking.py</td><td>Strategy interface; v1 weighted-average</td></tr>
+          <tr><td class="mono text-xs">core/run_trace.py</td><td>TriageRun + Step; persist/replay; save to memory</td></tr>
+          <tr><td class="mono text-xs">memory/store.py</td><td>Lab memory: save spec; retrieve seeded proposal</td></tr>
+          <tr><td class="mono text-xs">retrieval/rag.py</td><td>BM25 over public abstracts; untrusted</td></tr>
+          <tr><td class="mono text-xs">sources/base.py · materials_project.py · stubs.py</td><td>Adapter interface; MP (real); OQMD/AFLOW/PubChem/ICSD stubs</td></tr>
+          <tr><td class="mono text-xs">policy/guardrails.py · validator.py</td><td>Allowlist + both-surface gate + trust boundary; output validator</td></tr>
+          <tr><td class="mono text-xs">agent/llm.py · prompts.py · orchestrator.py</td><td>Bedrock+mock provider; prompts; traced state machine + resume</td></tr>
+          <tr><td class="mono text-xs">render/pi_summary.py · audit_view.py</td><td>The two views</td></tr>
+          <tr><td class="mono text-xs">cli.py</td><td><span class="mono">triage "&lt;q&gt;" --view pi|audit</span> · <span class="mono">triage resume &lt;id&gt; --set k=v --from &lt;step&gt;</span></td></tr>
+          <tr><td class="mono text-xs">eval/ · docs/design-note.md · tests/</td><td>Fixtures+golden+redteam+run_eval; ≤3.5pp note + diagram; unit tests</td></tr>
+          <tr><td class="mono text-xs">README.md · CLAUDE.md <span class="badge badge-xs badge-warning">changed</span></td><td>Scientist + site-IT (AWS creds, no DB); fill domain TODO</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- BUILD ORDER -->
+  <section class="space-y-3">
+    <h2 class="text-2xl font-bold">Build order — single-function TDD increments</h2>
+    <p class="opacity-70 text-sm">Per CLAUDE.md: write test → implement one function → confirm pass → get approval → next. (Scaffold + <span class="mono">Provenance</span> already drafted on <span class="mono">feat/materials-triage-scaffold</span>.)</p>
+    <ol class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-1 list-decimal list-inside text-sm">
+      <li>Install scaffold editable</li>
+      <li>Provenance <span class="opacity-50">(drafted)</span></li>
+      <li>PropertyValue</li>
+      <li>Candidate / TriageSpec / TriageResult</li>
+      <li>TriageRun / Step</li>
+      <li>memory/store.py</li>
+      <li>Criterion normalization</li>
+      <li>Hard filters</li>
+      <li>on_missing policy</li>
+      <li>Weighted ranking</li>
+      <li>SourceAdapter interface</li>
+      <li>Materials Project adapter</li>
+      <li>BM25 literature RAG</li>
+      <li>Input gate (both surfaces)</li>
+      <li>Trust-boundary wrapper</li>
+      <li>Output validator</li>
+      <li>agent/llm.py (Bedrock + mock)</li>
+      <li>Prompts</li>
+      <li>Orchestrator (state machine)</li>
+      <li>Resume + step cache</li>
+      <li>PI renderer</li>
+      <li>Audit renderer</li>
+      <li>CLI</li>
+      <li>Eval harness</li>
+      <li>Design note + diagram</li>
+      <li>README + CLAUDE.md</li>
+      <li>Ship via /commit-push-pr</li>
+    </ol>
+  </section>
+
+  <!-- VERIFICATION + RATIONALE -->
+  <section class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="card card-border bg-base-100"><div class="card-body">
+      <h2 class="card-title text-xl">Verification</h2>
+      <ul class="text-sm opacity-85 list-disc ml-5 space-y-1">
+        <li><strong>Per increment:</strong> <span class="mono">pytest tests/&lt;file&gt;</span> green + <span class="mono">ruff check</span> clean.</li>
+        <li><strong>Deterministic core:</strong> scoring/filter/rank/provenance/trace on fixtures, exact assertions, no network/LLM.</li>
+        <li><strong>Behavioral (mock LLM, temp=0):</strong> forbidden ask → refusal; injected abstract changes nothing; fabricated ID rejected.</li>
+        <li><strong>End-to-end:</strong> <span class="mono">--view pi</span> and <span class="mono">--view audit</span> both produce ranked, cited shortlists with missing flags; <span class="mono">resume --set weights.band_gap=0.4 --from rank</span> reuses cached retrieval.</li>
+        <li><strong>Scorecard:</strong> <span class="mono">python eval/run_eval.py</span>.</li>
+      </ul>
+    </div></div>
+    <div class="card card-border bg-base-100"><div class="card-body">
+      <h2 class="card-title text-xl">Why it's safe &amp; honest</h2>
+      <ul class="text-sm opacity-85 list-disc ml-5 space-y-1">
+        <li><strong>Facts from tools, not the LLM</strong> — renderer fills numbers; hallucination is structurally impossible in the numeric layer.</li>
+        <li><strong>Capability by construction</strong> — no wet-lab/private-DB/scraper tool exists.</li>
+        <li><strong>Trust boundary</strong> — retrieved text is untrusted DATA, never instructions.</li>
+        <li><strong>Output validator</strong> — IDs + citations must resolve; no ungrounded numbers.</li>
+        <li><strong>Missing data first-class</strong> — ranked-but-flagged, never silently dropped or guessed.</li>
+        <li><strong>No DB to host</strong> — HTTP client over public APIs; only local state is run traces + memory.</li>
+      </ul>
+    </div></div>
+  </section>
+
+  <footer class="opacity-50 text-xs pt-3 border-t border-base-content/10">
+    Source: <span class="mono">Deep-Plan-materials-triage-agent-2026-06-19-1429.md</span> · rendered with Lavish · Impact 4/5 · implementation not yet started (pending go-ahead).
+  </footer>
+
+</main>
+</body>
+</html>
