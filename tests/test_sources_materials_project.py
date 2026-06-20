@@ -142,6 +142,40 @@ def test_retrieve_requests_the_fields_the_pipeline_will_read():
     assert {"band_gap", "density", "material_id", "formula_pretty"} <= requested
 
 
+def test_retrieve_scopes_the_query_by_required_elements():
+    """required_elements scopes the pool server-side via the sorted, comma-joined
+    `elements` param; numeric bounds stay the deterministic core's job, so this is
+    only a composition filter on what gets fetched."""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        required_elements=frozenset({"Ga", "N"}),
+    )
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    assert captured["params"]["elements"] == "Ga,N"
+
+
+def test_retrieve_omits_elements_when_spec_has_no_required_elements():
+    """With no composition requirement the adapter sends no `elements` filter, so
+    the query is scoped only by the fields it asks for."""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(_spec())
+
+    assert "elements" not in captured["params"]
+
+
 def test_retrieve_sends_the_api_key_header():
     """The summary API authenticates by an X-API-KEY header; retrieve sends the
     configured key so the live request is authorized."""

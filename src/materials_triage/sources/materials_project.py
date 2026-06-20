@@ -66,7 +66,12 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
     properties = {c.property_name for c in spec.constraints}
     properties |= {t.property_name for t in spec.ranking_targets}
     fields = list(_IDENTITY_FIELDS) + sorted(properties)
-    return {"_fields": ",".join(fields), "_limit": str(_DEFAULT_LIMIT)}
+    params = {"_fields": ",".join(fields), "_limit": str(_DEFAULT_LIMIT)}
+    if spec.required_elements:
+        # Composition scoping is pushed server-side; the numeric bounds stay with
+        # apply_hard_filters, which remains the authority on what survives.
+        params["elements"] = ",".join(sorted(spec.required_elements))
+    return params
 
 
 def _requests_transport(base_url: str) -> HttpGet:
