@@ -6,10 +6,24 @@ agentic loop. These tests exercise it through its public ``build_orchestrator``
 factory and the compiled graph's observable structure / behavior.
 """
 
+import pytest
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
+from pydantic import ValidationError
 
-from materials_triage.agent.orchestrator import WORKFLOW_STEPS, build_orchestrator
-from materials_triage.core.hypothesis import Citation, ConstraintProposal, Hypothesis
+from materials_triage.agent.orchestrator import (
+    DEFAULT_MAX_HYPOTHESIS_ATTEMPTS,
+    WORKFLOW_STEPS,
+    HypothesisConformanceError,
+    SpecCompilationError,
+    build_orchestrator,
+)
+from materials_triage.core.hypothesis import (
+    Citation,
+    ConstraintProposal,
+    Hypothesis,
+    RankingProposal,
+)
 from materials_triage.core.schema import (
     Candidate,
     Constraint,
@@ -235,3 +249,224 @@ def test_filter_and_ranking_exclusions_live_in_separate_authoritative_channels()
     }
     # Only the fully-scored candidate survives to the ranking.
     assert [sc.candidate.identifier for sc in final["result"].ranked] == ["mp-keep"]
+
+
+def _valid_hypothesis():
+    return Hypothesis(
+        proposals=(
+            ConstraintProposal(
+                constraint=Constraint(property_name="band_gap", min=2.0),
+                rationale="wide-gap dielectric",
+                confidence=0.8,
+            ),
+        ),
+        mechanism="wide gaps lower leakage",
+    )
+
+
+class _FlakyProvider:
+    """An offline LLM-provider seam that raises a real pydantic ValidationError
+    (malformed structured output) for the first ``fail_times`` calls, then
+    returns a valid Hypothesis. Records every prompt it was handed."""
+
+    def __init__(self, fail_times):
+        self.fail_times = fail_times
+        self.prompts = []
+
+    def propose(self, prompt):
+        self.prompts.append(prompt)
+        if len(self.prompts) <= self.fail_times:
+            # The exact failure mode measured against live Bedrock: the model
+            # emits output the Hypothesis schema rejects.
+            Hypothesis(proposals=(), mechanism="malformed")  # raises ValidationError
+        return _valid_hypothesis()
+
+
+def test_hypothesis_node_retries_malformed_llm_output_then_succeeds():
+    """Slice 4: the hypothesis node conforms the LLM to the Hypothesis schema by
+    RETRYING on a pydantic ValidationError (the measured ~15% malformed-output
+    rate) and feeding the rejection back into the next prompt — no human in the
+    loop. After two bad attempts and one good one, a valid Hypothesis lands in
+    state and the provider was called three times."""
+    provider = _FlakyProvider(fail_times=2)
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "retry"}}
+    final = orchestrator.invoke({"goal": "wide-gap oxide dielectric", "spec": spec}, config)
+
+    assert isinstance(final["hypothesis"], Hypothesis)
+    assert len(final["hypothesis"].proposals) == 1
+    assert len(provider.prompts) == 3  # two rejected attempts + one accepted
+    # The rejection was fed back: the retry prompt differs from the first.
+    assert provider.prompts[1] != provider.prompts[0]
+
+
+def test_hypothesis_node_raises_a_wrapped_error_when_retries_are_exhausted():
+    """If the LLM never conforms within the cap, the node raises a
+    HypothesisConformanceError (not a raw pydantic ValidationError leaking out),
+    preserving the last ValidationError as its cause for the human/audit."""
+    provider = _FlakyProvider(fail_times=99)  # never succeeds
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "exhausted"}}
+    with pytest.raises(HypothesisConformanceError) as excinfo:
+        orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert isinstance(excinfo.value.__cause__, ValidationError)
+    assert len(provider.prompts) == DEFAULT_MAX_HYPOTHESIS_ATTEMPTS  # capped, no infinite loop
+
+
+class _BrokenProvider:
+    """A provider whose call fails for a NON-schema reason (transport/throttle)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def propose(self, prompt):
+        self.calls += 1
+        raise RuntimeError("bedrock unavailable")
+
+
+def test_hypothesis_node_does_not_retry_non_validation_errors():
+    """Retry is only for malformed structured output. A transport/throttle error
+    is not a conformance problem, so it propagates immediately — no wasted retries
+    and no masking an infra failure as a schema failure."""
+    provider = _BrokenProvider()
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "broken"}}
+    with pytest.raises(RuntimeError, match="bedrock unavailable"):
+        orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert provider.calls == 1  # not retried
+
+
+class _StubProvider:
+    """A provider that returns a fixed Hypothesis (no flakiness) — used to drive
+    the spec_build step from a known hypothesis."""
+
+    def __init__(self, hypothesis):
+        self._hypothesis = hypothesis
+
+    def propose(self, prompt):
+        return self._hypothesis
+
+
+def _hypothesis_with_unnormalized_weights():
+    """A constraint plus two ranking proposals whose weights (0.6, 0.2) do NOT
+    sum to 1, so compile_spec rescales them to 0.75 / 0.25."""
+    return Hypothesis(
+        proposals=(
+            ConstraintProposal(
+                constraint=Constraint(property_name="band_gap", min=2.0),
+                rationale="wide gap",
+                confidence=0.8,
+            ),
+            RankingProposal(
+                ranking_target=RankingTarget(
+                    property_name="band_gap", direction="maximize", weight=0.6
+                ),
+                rationale="prefer wider",
+                confidence=0.8,
+            ),
+            RankingProposal(
+                ranking_target=RankingTarget(
+                    property_name="density", direction="minimize", weight=0.2
+                ),
+                rationale="prefer lighter",
+                confidence=0.8,
+            ),
+        ),
+        mechanism="wide gaps lower leakage",
+    )
+
+
+def test_spec_build_pauses_for_human_confirmation_with_normalized_weights():
+    """Slice 5 (HITL): with a hypothesis and no pre-resolved spec, spec_build
+    compiles the recommended TriageSpec and PAUSES via interrupt(), surfacing it
+    for human confirmation — explicitly flagging that the ranking weights were
+    rescaled (0.6/0.2 -> 0.75/0.25), the weight-normalization confirmation debt.
+    Nothing is committed to the spec channel until the human resumes."""
+    provider = _StubProvider(_hypothesis_with_unnormalized_weights())
+
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "hitl-pause"}}
+    result = orchestrator.invoke({"goal": "wide-gap oxide"}, config)  # NO spec supplied
+
+    assert "__interrupt__" in result  # the run paused for the human
+    payload = result["__interrupt__"][0].value
+    assert payload["weights_were_normalized"] is True
+    weights = {t.property_name: t.weight for t in payload["recommended_spec"].ranking_targets}
+    assert weights["band_gap"] == pytest.approx(0.75)
+    assert weights["density"] == pytest.approx(0.25)
+
+    # The recommendation is not yet committed — the human still has to confirm.
+    assert orchestrator.get_state(config).values.get("spec") is None
+
+
+def test_spec_build_resume_accept_commits_recommended_spec_and_continues():
+    """Resuming the paused run by echoing the recommended spec back (accept)
+    commits it to state and lets the pipeline continue past spec_build to
+    completion."""
+    provider = _StubProvider(_hypothesis_with_unnormalized_weights())
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "hitl-accept"}}
+    paused = orchestrator.invoke({"goal": "wide-gap oxide"}, config)  # pauses at spec_build
+    recommended = paused["__interrupt__"][0].value["recommended_spec"]
+
+    final = orchestrator.invoke(Command(resume=recommended), config)  # accept as-is
+
+    spec = final["spec"]
+    assert isinstance(spec, TriageSpec)
+    weights = {t.property_name: t.weight for t in spec.ranking_targets}
+    assert weights["band_gap"] == pytest.approx(0.75)
+    # The run continued past the gate to the end (a result was produced).
+    assert isinstance(final["result"], TriageResult)
+
+
+def test_spec_build_resume_with_an_edit_uses_the_humans_spec():
+    """Resuming with an edited TriageSpec uses the human's version, not the
+    recommendation — the human is authoritative over the final spec."""
+    provider = _StubProvider(_hypothesis_with_unnormalized_weights())
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "hitl-edit"}}
+    orchestrator.invoke({"goal": "wide-gap oxide"}, config)
+
+    edited = TriageSpec(constraints=(Constraint(property_name="band_gap", min=5.0),))
+    final = orchestrator.invoke(Command(resume=edited), config)
+
+    assert final["spec"].constraints[0].min == 5.0
+    assert final["spec"].ranking_targets == ()  # the human dropped the ranking targets
+
+
+def test_spec_build_wraps_an_incoherent_compile_spec_error():
+    """If the proposals are individually valid but don't compile to a coherent
+    TriageSpec (here: two constraints on the same property), spec_build raises a
+    wrapped SpecCompilationError preserving the pydantic ValidationError — no raw
+    validation dump leaks, and the pipeline never pauses on an uncompilable spec."""
+    incoherent = Hypothesis(
+        proposals=(
+            ConstraintProposal(
+                constraint=Constraint(property_name="band_gap", min=2.0),
+                rationale="lower bound",
+                confidence=0.8,
+            ),
+            ConstraintProposal(
+                constraint=Constraint(property_name="band_gap", max=9.0),
+                rationale="upper bound (duplicate property)",
+                confidence=0.8,
+            ),
+        ),
+        mechanism="m",
+    )
+    provider = _StubProvider(incoherent)
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "hitl-bad"}}
+
+    with pytest.raises(SpecCompilationError) as excinfo:
+        orchestrator.invoke({"goal": "wide-gap oxide"}, config)
+
+    assert isinstance(excinfo.value.__cause__, ValidationError)
