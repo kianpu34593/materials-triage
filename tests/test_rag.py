@@ -441,8 +441,12 @@ def test_openalex_fetcher_sends_polite_mailto_and_user_agent():
     assert "me@example.com" in headers["User-Agent"]
 
 
-def test_openalex_fetcher_omits_mailto_when_unset():
-    """With no mailto, no mailto param is sent and the User-Agent stays generic."""
+def test_openalex_fetcher_omits_mailto_when_unset(monkeypatch):
+    """With no mailto, no mailto param is sent and the User-Agent stays generic.
+    Establish the unset precondition explicitly: the constructor falls back to
+    OPENALEX_MAILTO, which conftest may load from .env, so the test must not rely
+    on the ambient environment."""
+    monkeypatch.delenv("OPENALEX_MAILTO", raising=False)
     http = _FakeHttpGet({"results": []})
 
     OpenAlexFetcher(http_get=http, mailto="").fetch("x", pool_size=1)

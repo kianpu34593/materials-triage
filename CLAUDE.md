@@ -79,7 +79,23 @@ fetch→parse→rank→top-k behind an injected `AbstractFetcher` Protocol whose
 transport is `OpenAlexFetcher` (lazy `requests` import, `live` pytest marker). Its
 abstract-only, no-full-text grounding is recorded in
 [`docs/design/0002-literature-abstracts-only.md`](docs/design/0002-literature-abstracts-only.md),
-and it adds `rank-bm25` as a runtime dependency. It proceeds as single-function
+and it adds `rank-bm25` as a runtime dependency. The Bedrock-backed hypothesis
+provider in `src/materials_triage/agent/llm.py` also exists — `HypothesisProvider`
+turns a rendered prompt into a validated `Hypothesis` via an injected `complete`
+seam (`Complete = Callable[[str], Hypothesis]`), mirroring the Materials Project
+adapter's injected-transport pattern: tests pass a fake so the provider is fully
+offline-testable, while the lazy default `_bedrock_complete` wraps
+`langchain_aws` `ChatBedrockConverse.with_structured_output(Hypothesis)` and
+imports `langchain_aws` only on invocation, so construction needs neither the
+dependency nor AWS credentials. `propose(prompt)` forwards the prompt verbatim
+(no wrapping/mutation, preserving the untrusted-data boundary); malformed
+structured output is correctly rejected by the schema, with reliable conformance
+left to the orchestrator's retry loop. It adds an optional `llm` extra
+(`langchain-aws`); the live Bedrock smoke test is `live`-marked (deselected from
+CI) and gated on botocore-resolvable AWS credentials. A `tests/conftest.py`
+`load_dotenv()`s at collection time (defensive optional import) so live tests read
+credentials from `.env` before the `skipif` gates evaluate, with `python-dotenv`
+added to the dev extra. It proceeds as single-function
 TDD increments (see the build order in the deep plan), and only on an explicit
 go-ahead.
 
