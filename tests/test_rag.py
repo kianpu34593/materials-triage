@@ -6,7 +6,9 @@ from materials_triage.core.schema import Provenance
 from materials_triage.retrieval.rag import (
     LiteraturePassage,
     _parse_work,
+    _rank,
     _reconstruct_abstract,
+    _tokenize,
 )
 
 
@@ -120,3 +122,111 @@ def test_parse_work_tolerates_ragged_metadata():
     assert passage.venue is None
     assert passage.doi is None
     assert passage.text == "Hello"
+
+
+def test_rank_orders_by_relevance():
+    """A passage sharing the query terms ranks above ones that don't."""
+    relevant = _passage(
+        provenance=Provenance(source="openalex", record_id="W-rel"),
+        title="Oxygen evolution reaction",
+        text="oxygen evolution catalyst materials for water splitting",
+    )
+    battery = _passage(
+        provenance=Provenance(source="openalex", record_id="W-bat"),
+        title="Lithium battery anodes",
+        text="graphite anode capacity in lithium ion cells",
+    )
+    photovoltaic = _passage(
+        provenance=Provenance(source="openalex", record_id="W-pv"),
+        title="Silicon photovoltaics",
+        text="solar cell efficiency in crystalline silicon devices",
+    )
+
+    ranked = _rank("oxygen evolution catalyst", [battery, relevant, photovoltaic])
+
+    assert ranked[0].provenance.record_id == "W-rel"
+
+
+def test_rank_counts_title_terms():
+    """A query term present only in the title still lifts that passage."""
+    title_hit = _passage(
+        provenance=Provenance(source="openalex", record_id="W-title"),
+        title="Perovskite solar absorbers",
+        text="this abstract discusses unrelated thin-film deposition methods",
+    )
+    other_a = _passage(
+        provenance=Provenance(source="openalex", record_id="W-a"),
+        title="Graphite anodes",
+        text="capacity fade in lithium ion battery cells over cycling",
+    )
+    other_b = _passage(
+        provenance=Provenance(source="openalex", record_id="W-b"),
+        title="Zeolite catalysis",
+        text="acid site density governs cracking selectivity in zeolites",
+    )
+
+    ranked = _rank("perovskite", [other_a, title_hit, other_b])
+
+    assert ranked[0].provenance.record_id == "W-title"
+
+
+def test_rank_populates_score():
+    """Ranked passages carry their BM25 score (nonzero for a real match)."""
+    a = _passage(
+        provenance=Provenance(source="openalex", record_id="W-a"), text="oxygen evolution catalyst"
+    )
+    b = _passage(
+        provenance=Provenance(source="openalex", record_id="W-b"), text="lithium battery anode"
+    )
+    c = _passage(
+        provenance=Provenance(source="openalex", record_id="W-c"), text="silicon solar cell"
+    )
+
+    ranked = _rank("oxygen evolution", [a, b, c])
+
+    assert ranked[0].score > 0.0
+
+
+def test_rank_empty_pool_returns_empty():
+    """Ranking an empty pool yields an empty list."""
+    assert _rank("anything", []) == []
+
+
+def test_rank_keeps_zero_relevance_in_stable_order():
+    """A query matching nothing still returns all passages, score 0.0, input order."""
+    first = _passage(
+        provenance=Provenance(source="openalex", record_id="W-1"), text="alpha beta gamma"
+    )
+    second = _passage(
+        provenance=Provenance(source="openalex", record_id="W-2"), text="delta epsilon zeta"
+    )
+    third = _passage(
+        provenance=Provenance(source="openalex", record_id="W-3"), text="eta theta iota"
+    )
+
+    ranked = _rank("nonexistentterm", [first, second, third])
+
+    assert [p.provenance.record_id for p in ranked] == ["W-1", "W-2", "W-3"]
+    assert all(p.score == 0.0 for p in ranked)
+
+
+def test_tokenize_keeps_integer_formulas_intact():
+    """Integer-subscript formulas stay single tokens (lowercased), not split."""
+    assert _tokenize("TiO2 LiFePO4 Li2CO3") == ["tio2", "lifepo4", "li2co3"]
+
+
+def test_tokenize_keeps_decimal_stoichiometry_and_values_intact():
+    """Decimal subscripts (doped perovskites) and decimal values are not split."""
+    assert _tokenize("La0.6Sr0.4CoO3 has a 3.5 eV gap") == [
+        "la0.6sr0.4coo3",
+        "has",
+        "a",
+        "3.5",
+        "ev",
+        "gap",
+    ]
+
+
+def test_tokenize_strips_sentence_punctuation():
+    """Trailing punctuation and hyphens are split off, not glued into tokens."""
+    assert _tokenize("thin-film OER.") == ["thin", "film", "oer"]

@@ -3,9 +3,11 @@
 Deterministic retriever, never the LLM. Retrieved text is untrusted DATA.
 """
 
+import re
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from rank_bm25 import BM25Okapi
 
 from materials_triage.core.schema import Provenance
 
@@ -75,3 +77,34 @@ def _parse_work(work: dict) -> LiteraturePassage:
         text=text,
         missing=text == "",
     )
+
+
+# Alphanumeric run, optionally joined across internal dots so decimal
+# stoichiometry (La0.6Sr0.4CoO3) and decimal values (3.5) survive as one token,
+# while trailing sentence punctuation (OER.) is left out.
+_TOKEN_RE = re.compile(r"[a-z0-9]+(?:\.[a-z0-9]+)*")
+
+
+def _tokenize(text: str) -> list[str]:
+    """Lowercase and split into tokens, keeping chemical formulas intact.
+
+    Integer- and decimal-subscript formulas (TiO2, La0.6Sr0.4CoO3) and decimal
+    numbers (3.5) stay single tokens; hyphens and trailing punctuation split.
+    """
+    return _TOKEN_RE.findall(text.lower())
+
+
+def _rank(query: str, passages: list[LiteraturePassage]) -> list[LiteraturePassage]:
+    """Re-rank passages by BM25 relevance to ``query`` over title + abstract.
+
+    Returns best-first frozen copies carrying their BM25 ``score``; ties keep
+    input order (deterministic).
+    """
+    if not passages:
+        return []
+    corpus = [_tokenize(f"{p.title} {p.text}") for p in passages]
+    scores = BM25Okapi(corpus).get_scores(_tokenize(query))
+    scored = [
+        p.model_copy(update={"score": float(s)}) for p, s in zip(passages, scores, strict=True)
+    ]
+    return sorted(scored, key=lambda p: p.score, reverse=True)
