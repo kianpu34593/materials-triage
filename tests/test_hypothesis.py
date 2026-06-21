@@ -11,9 +11,11 @@ from pydantic import ValidationError
 
 from materials_triage.core.hypothesis import (
     Citation,
+    ConstraintProposal,
     ElementRule,
+    ElementRuleProposal,
     Hypothesis,
-    Proposal,
+    RankingProposal,
     compile_spec,
 )
 from materials_triage.core.schema import Constraint, RankingTarget, TriageSpec
@@ -54,8 +56,7 @@ def test_proposal_carries_a_constraint_bridge():
     """A Proposal is one cited bridge from a fuzzy goal to a queryable spec field.
     A constraint-kind proposal embeds the actual Constraint it compiles to, plus
     the reasoning, its literature grounding, and a confidence in (0, 1]."""
-    prop = Proposal(
-        kind="constraint",
+    prop = ConstraintProposal(
         constraint=Constraint(property_name="band_gap", min=2.0, max=4.0),
         rationale="'wide-gap semiconductor' maps to roughly 2-4 eV for oxides",
         citations=(Citation(source="OpenAlex", record_id="W1", title="A paper"),),
@@ -74,9 +75,7 @@ def test_proposal_constraint_kind_requires_a_constraint_payload():
     carries no Constraint cannot compile to a spec field, so it is rejected at
     construction rather than failing silently later."""
     with pytest.raises(ValidationError):
-        Proposal(
-            kind="constraint",
-            constraint=None,
+        ConstraintProposal(
             rationale="missing its payload",
             confidence=0.5,
         )
@@ -86,8 +85,7 @@ def test_proposal_carries_a_ranking_target_bridge():
     """A ranking-target-kind proposal embeds the RankingTarget it compiles to —
     the same model the ranker already consumes — so an accepted proposal drops
     straight into the deterministic scoring stage."""
-    prop = Proposal(
-        kind="ranking_target",
+    prop = RankingProposal(
         ranking_target=RankingTarget(property_name="band_gap", direction="maximize", weight=0.6),
         rationale="the goal prefers a wider gap",
         confidence=0.8,
@@ -103,8 +101,7 @@ def test_proposal_rejects_a_payload_foreign_to_its_kind():
     rejected rather than letting the compiler guess which one to use."""
     target = RankingTarget(property_name="band_gap", direction="maximize", weight=1.0)
     with pytest.raises(ValidationError):
-        Proposal(
-            kind="constraint",
+        ConstraintProposal(
             constraint=Constraint(property_name="band_gap", min=2.0),
             ranking_target=target,
             rationale="carries two payloads",
@@ -132,8 +129,7 @@ def test_element_rule_rejects_non_element_symbols():
 def test_proposal_carries_an_element_rule_bridge():
     """An element_rule-kind proposal embeds an ElementRule — the composition
     scoping the spec will push to retrieval — alongside its grounding."""
-    prop = Proposal(
-        kind="element_rule",
+    prop = ElementRuleProposal(
         element_rule=ElementRule(mode="exclude", elements=frozenset({"Co"})),
         rationale="'cheap' rules out cobalt",
         confidence=0.6,
@@ -147,7 +143,7 @@ def test_proposal_element_rule_kind_requires_an_element_rule_payload():
     """Same discriminator promise as the other kinds: an element_rule proposal
     with no ElementRule is rejected at construction."""
     with pytest.raises(ValidationError):
-        Proposal(kind="element_rule", element_rule=None, rationale="empty", confidence=0.5)
+        ElementRuleProposal(rationale="empty", confidence=0.5)
 
 
 def test_hypothesis_carries_its_proposals_and_mechanism():
@@ -155,8 +151,7 @@ def test_hypothesis_carries_its_proposals_and_mechanism():
     (load-bearing — they compile to the spec) plus a mechanistic 'why' narrative."""
     hyp = Hypothesis(
         proposals=(
-            Proposal(
-                kind="constraint",
+            ConstraintProposal(
                 constraint=Constraint(property_name="band_gap", min=2.0, max=4.0),
                 rationale="wide-gap semiconductor",
                 confidence=0.7,
@@ -178,9 +173,21 @@ def test_hypothesis_rejects_empty_proposals():
         Hypothesis(proposals=(), mechanism="proposed nothing")
 
 
+def test_hypothesis_schema_requires_each_proposal_kind_to_carry_its_payload():
+    """The kind->payload rule must live IN the JSON schema the LLM is handed (a
+    discriminated union), not only in a validator the schema hides. Otherwise a
+    structured-output model emits e.g. kind='ranking_target' with no
+    ranking_target and the whole Hypothesis is rejected at parse time — exactly
+    the failure observed against live Bedrock."""
+    defs = Hypothesis.model_json_schema()["$defs"]
+
+    assert "constraint" in defs["ConstraintProposal"]["required"]
+    assert "ranking_target" in defs["RankingProposal"]["required"]
+    assert "element_rule" in defs["ElementRuleProposal"]["required"]
+
+
 def _constraint_proposal(name="band_gap", **bounds):
-    return Proposal(
-        kind="constraint",
+    return ConstraintProposal(
         constraint=Constraint(property_name=name, **bounds),
         rationale=f"bound on {name}",
         confidence=0.7,
@@ -200,8 +207,7 @@ def test_compile_spec_builds_a_triagespec_with_the_constraint():
 
 
 def _ranking_proposal(name, weight, direction="maximize"):
-    return Proposal(
-        kind="ranking_target",
+    return RankingProposal(
         ranking_target=RankingTarget(property_name=name, direction=direction, weight=weight),
         rationale=f"prefer {direction} {name}",
         confidence=0.7,
@@ -234,8 +240,7 @@ def test_compile_spec_makes_a_lone_ranking_weight_one():
 
 
 def _element_proposal(mode, elements):
-    return Proposal(
-        kind="element_rule",
+    return ElementRuleProposal(
         element_rule=ElementRule(mode=mode, elements=frozenset(elements)),
         rationale=f"{mode} {elements}",
         confidence=0.7,

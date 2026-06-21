@@ -9,7 +9,7 @@ rejected before it can reach the deterministic core.
 """
 
 import math
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -54,41 +54,49 @@ class ElementRule(BaseModel):
         return self
 
 
-class Proposal(BaseModel):
-    """One cited bridge from a fuzzy goal to a queryable spec field.
+class _ProposalBase(BaseModel):
+    """Fields shared by every proposal kind: the grounding the human gate and
+    output validator judge a bridge by. ``extra="forbid"`` rejects any field
+    foreign to the kind, so a hallucinated or mis-nested payload is refused rather
+    than silently ignored."""
 
-    The LLM emits these; a deterministic compile step assembles the accepted ones
-    into a ``TriageSpec``. ``kind`` discriminates which spec field the proposal
-    compiles to and which payload it carries; ``rationale`` and ``citations`` are
-    the grounding the human gate and output validator judge it by.
-    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    model_config = ConfigDict(frozen=True)
-
-    kind: Literal["constraint", "ranking_target", "element_rule"]
-    constraint: Constraint | None = None
-    ranking_target: RankingTarget | None = None
-    element_rule: ElementRule | None = None
     rationale: str = Field(min_length=1)
     citations: tuple[Citation, ...] = ()
     confidence: float = Field(gt=0.0, le=1.0)
 
-    @model_validator(mode="after")
-    def _payload_matches_kind(self) -> Self:
-        # kind is the single source of truth for the payload: exactly the field it
-        # names must be present, and no foreign payload may ride along — so the
-        # compiler can dispatch on kind alone.
-        payloads = {
-            "constraint": self.constraint,
-            "ranking_target": self.ranking_target,
-            "element_rule": self.element_rule,
-        }
-        for name, value in payloads.items():
-            if name == self.kind and value is None:
-                raise ValueError(f"a {self.kind}-kind proposal must carry a {name}")
-            if name != self.kind and value is not None:
-                raise ValueError(f"a {self.kind}-kind proposal must not carry a {name}")
-        return self
+
+class ConstraintProposal(_ProposalBase):
+    """A cited bridge that compiles to a hard ``Constraint``."""
+
+    kind: Literal["constraint"] = "constraint"
+    constraint: Constraint
+
+
+class RankingProposal(_ProposalBase):
+    """A cited bridge that compiles to a soft ``RankingTarget``."""
+
+    kind: Literal["ranking_target"] = "ranking_target"
+    ranking_target: RankingTarget
+
+
+class ElementRuleProposal(_ProposalBase):
+    """A cited bridge that compiles to a composition ``ElementRule``."""
+
+    kind: Literal["element_rule"] = "element_rule"
+    element_rule: ElementRule
+
+
+#: One cited bridge from a fuzzy goal to a queryable spec field. A discriminated
+#: union on ``kind`` so the "this kind requires this payload" rule lives in the
+#: JSON schema the LLM is handed — not in a hidden validator — which is what makes
+#: structured output reliably emit the right payload. A deterministic compile step
+#: assembles the accepted proposals into a ``TriageSpec``.
+Proposal = Annotated[
+    ConstraintProposal | RankingProposal | ElementRuleProposal,
+    Field(discriminator="kind"),
+]
 
 
 class Hypothesis(BaseModel):

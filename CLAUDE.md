@@ -60,8 +60,11 @@ request bundling constraints, ranking targets, and composition rules) models in
 `ELEMENT_SYMBOLS` frozenset in `src/materials_triage/core/elements.py`. The
 hypothesis layer in `src/materials_triage/core/hypothesis.py` also exists — the
 frozen `Citation` (the untrusted-DATA analog of `Provenance`), `ElementRule` (a
-symbol-validated require/exclude composition rule), `Proposal` (one cited bridge
-whose `kind` discriminates a `Constraint`/`RankingTarget`/`ElementRule` payload),
+symbol-validated require/exclude composition rule), `Proposal` (one cited bridge,
+a `kind`-discriminated union of `ConstraintProposal`/`RankingProposal`/`ElementRuleProposal`
+subclasses with `extra="forbid"`, so the kind→payload requirement lives in the JSON
+schema the LLM is handed rather than a hidden validator and structured output emits
+the right payload),
 and `Hypothesis` (the LLM's whole emission: `proposals` + `mechanism`) models,
 plus the pure `compile_spec(proposals) -> TriageSpec` seam that dispatches on
 `kind`, unions element rules into required/excluded sets, and normalizes ranking
