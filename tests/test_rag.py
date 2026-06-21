@@ -182,6 +182,67 @@ def test_parse_work_tolerates_ragged_metadata():
     assert passage.text == "Hello"
 
 
+def test_parse_work_null_title_with_abstract_kept_blank_title():
+    """A null title coerces to "" and the work stays rankable on its abstract."""
+    passage = _parse_work(_openalex_work(title=None, abstract_inverted_index={"Hello": [0]}))
+
+    assert passage.title == ""
+    assert passage.text == "Hello"
+    assert passage.missing is False
+
+
+def test_parse_work_missing_title_key_coerces_to_blank():
+    """An absent title key does not raise KeyError; it becomes "" instead."""
+    work = {
+        "id": "https://openalex.org/W-notitle",
+        "abstract_inverted_index": {"Hello": [0]},
+    }
+    assert _parse_work(work).title == ""
+
+
+def test_parse_work_tolerates_null_author_display_name():
+    """A null author display_name is skipped, not propagated; batch is not aborted."""
+    work = _openalex_work(
+        authorships=[
+            {"author": {"display_name": "Jane Doe"}},
+            {"author": {"display_name": None}},
+            {"author": None},
+        ]
+    )
+    assert _parse_work(work).authors == ["Jane Doe"]
+
+
+def test_search_drops_works_empty_in_both_title_and_abstract():
+    """A work with no title and no abstract has nothing to rank/ground; it is dropped."""
+    empty = _openalex_work(
+        id="https://openalex.org/W-empty",
+        title=None,
+        abstract_inverted_index=None,
+    )
+    fetcher = _FakeFetcher([_oer_work(), empty, _pv_work()])
+
+    results = LiteratureRAG(fetcher).search("oxygen evolution", k=10)
+
+    assert "W-empty" not in {r.provenance.record_id for r in results}
+
+
+def test_search_keeps_work_with_blank_title_but_abstract():
+    """A blank-title work with an abstract is kept (only both-empty drops)."""
+    blank_title = _openalex_work(
+        id="https://openalex.org/W-blanktitle",
+        title=None,
+        abstract_inverted_index=_inverted("oxygen evolution catalyst surface"),
+    )
+    fetcher = _FakeFetcher([_battery_work(), blank_title])
+
+    results = LiteratureRAG(fetcher).search("oxygen evolution catalyst", k=10)
+
+    by_id = {r.provenance.record_id: r for r in results}
+    assert "W-blanktitle" in by_id
+    assert by_id["W-blanktitle"].title == ""
+    assert by_id["W-blanktitle"].missing is False
+
+
 def test_rank_orders_by_relevance():
     """A passage sharing the query terms ranks above ones that don't."""
     relevant = _passage(

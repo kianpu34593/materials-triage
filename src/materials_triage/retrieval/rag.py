@@ -74,8 +74,12 @@ def _parse_work(work: dict) -> LiteraturePassage:
             source="openalex",
             record_id=_strip_prefix(work["id"], "https://openalex.org/"),
         ),
-        title=work["title"],
-        authors=[a["author"]["display_name"] for a in work.get("authorships", [])],
+        title=work.get("title") or "",
+        authors=[
+            name
+            for a in work.get("authorships", [])
+            if (name := (a.get("author") or {}).get("display_name"))
+        ],
         year=work.get("publication_year"),
         venue=venue.get("display_name"),
         doi=_strip_prefix(work.get("doi"), "https://doi.org/"),
@@ -139,7 +143,7 @@ class LiteratureRAG:
     def search(self, query: str, k: int = 10) -> list[LiteraturePassage]:
         """Return the top-``k`` passages most relevant to ``query``, best-first."""
         works = self._fetcher.fetch(query, self._pool_size)
-        passages = [_parse_work(w) for w in works]
+        passages = [p for p in (_parse_work(w) for w in works) if p.title != "" or p.text != ""]
         return _rank(query, passages)[:k]
 
 
