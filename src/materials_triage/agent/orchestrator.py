@@ -105,9 +105,9 @@ class OrchestratorState(TypedDict, total=False):
 
 
 def _passthrough(state: OrchestratorState) -> dict:
-    """A skeleton node that contributes no state update yet (gate, spec_build,
-    hypothesis, synthesis, output_validate, render are filled in by later
-    slices / tasks)."""
+    """A skeleton node that contributes no state update yet. Backs the steps not
+    wired so far — gate, synthesis, output_validate, render — which their own
+    slices / tasks fill in (hypothesis and spec_build are now real nodes)."""
     return {}
 
 
@@ -184,17 +184,31 @@ def _spec_build_node(state: OrchestratorState) -> dict:
         math.fsum(proposed_weights), 1.0, abs_tol=1e-9
     )
 
+    note = (
+        "Confirm the recommended spec; resume with the approved TriageSpec "
+        "(echo to accept, or send an edited one)."
+    )
+    if weights_were_normalized:
+        note = (
+            "Ranking weights were rescaled to sum to 1. "
+            "Confirm the recommended spec; resume with the approved TriageSpec "
+            "(echo to accept, or send an edited one)."
+        )
     approved_spec = interrupt(
         {
             "recommended_spec": recommended,
             "weights_were_normalized": weights_were_normalized,
-            "note": (
-                "Confirm the recommended spec. Ranking weights were rescaled to "
-                "sum to 1; resume with the approved TriageSpec (echo to accept, "
-                "or send an edited one)."
-            ),
+            "note": note,
         }
     )
+    # The resume value is the human's approved spec; guard the documented
+    # "always a TriageSpec" contract so a bad resume surfaces as an attributable
+    # error here, not an opaque AttributeError downstream in the filter node.
+    if not isinstance(approved_spec, TriageSpec):
+        raise SpecCompilationError(
+            "the resumed spec-build decision must be a TriageSpec, "
+            f"got {type(approved_spec).__name__}"
+        )
     return {"spec": approved_spec}
 
 

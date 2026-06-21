@@ -470,3 +470,48 @@ def test_spec_build_wraps_an_incoherent_compile_spec_error():
         orchestrator.invoke({"goal": "wide-gap oxide"}, config)
 
     assert isinstance(excinfo.value.__cause__, ValidationError)
+
+
+def test_spec_build_note_does_not_claim_rescaling_when_weights_already_sum_to_one():
+    """Honesty: the human-facing note must not contradict the
+    weights_were_normalized flag. When the proposed weights already sum to 1
+    (here a single weight of 1.0), the flag is False and the prose must not claim
+    the weights were rescaled."""
+    hypothesis = Hypothesis(
+        proposals=(
+            ConstraintProposal(
+                constraint=Constraint(property_name="band_gap", min=2.0),
+                rationale="wide gap",
+                confidence=0.8,
+            ),
+            RankingProposal(
+                ranking_target=RankingTarget(
+                    property_name="band_gap", direction="maximize", weight=1.0
+                ),
+                rationale="prefer wider",
+                confidence=0.8,
+            ),
+        ),
+        mechanism="m",
+    )
+    provider = _StubProvider(hypothesis)
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "no-rescale"}}
+    result = orchestrator.invoke({"goal": "wide-gap oxide"}, config)
+
+    payload = result["__interrupt__"][0].value
+    assert payload["weights_were_normalized"] is False
+    assert "rescaled" not in payload["note"].lower()
+
+
+def test_spec_build_rejects_a_resume_value_that_is_not_a_triagespec():
+    """The resume contract is 'an approved TriageSpec'. A resume of the wrong
+    type is caught here as an attributable SpecCompilationError, not left to
+    surface as an opaque AttributeError in a downstream node."""
+    provider = _StubProvider(_hypothesis_with_unnormalized_weights())
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "bad-resume"}}
+    orchestrator.invoke({"goal": "wide-gap oxide"}, config)  # pauses
+
+    with pytest.raises(SpecCompilationError, match="must be a TriageSpec"):
+        orchestrator.invoke(Command(resume="not a spec"), config)
