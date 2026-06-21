@@ -106,15 +106,21 @@ END — a static pipeline, not an autonomous tool-calling loop) and backed by an
 in-process `MemorySaver` checkpointer (the substrate for the #9 trace export and
 `resume --from`). `OrchestratorState` is a `total=False` `TypedDict` with one
 typed channel per step output (`goal`, `run_id`, `spec`, `hypothesis`,
-`candidates`, `survivors`, `excluded`, `result`), holding the rich domain objects
-(provenance, missing-data flags, exclusion reasons, citations) so the
-checkpointer round-trips them losslessly for the audit export; validation stays
-in the domain models, not on every channel write. Only the `retrieve` → `filter`
-→ `rank` nodes carry real logic — they wrap the existing pure
+`candidates`, `survivors`, `filter_excluded`, `rank_excluded`, `result`), holding
+the rich domain objects (provenance, missing-data flags, exclusion reasons,
+citations) so the checkpointer round-trips them losslessly for the audit export;
+validation stays in the domain models, not on every channel write. Exclusions are
+split by stage into two single-writer channels — the `filter` node writes
+`filter_excluded` (hard-filter drops) and the `rank` node writes `rank_excluded`
+(the ranker's `on_missing="exclude"` missing-policy drops) — so neither channel
+undercounts and no node reads-then-writes the same channel (avoiding a resume
+double-fold); the slice-6 audit exporter derives from these per-stage channels per
+ADR 0003, which lets the audit view label drops by stage. Only the `retrieve` →
+`filter` → `rank` nodes carry real logic — they wrap the existing pure
 `adapter.retrieve` / `apply_hard_filters` / `rank` behind the injected
 `SourceAdapter` seam (a fake makes the whole graph offline-testable, no LLM), and
-the `rank` node folds the hard-filter drops in with the ranker's own
-missing-policy drops so every exclusion carries its reason. The other six steps
+the `rank` node sets `result.excluded` to the union of both stages — the complete
+presentation set the renderers read, every exclusion carrying its reason. The other six steps
 are intentional pass-throughs in this slice (real logic — the retry node and the
 `interrupt()` spec gate — lands in later slices/tasks). It adds `langgraph>=0.2`
 as a runtime dependency. It proceeds as single-function
