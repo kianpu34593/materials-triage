@@ -57,9 +57,16 @@ inclusive min/max bound on one property), `RankingTarget` (a soft scoring prefer
 whose `weight` is a proportional share in `(0, 1]`), and `TriageSpec` (the fully-resolved
 request bundling constraints, ranking targets, and composition rules) models in
 `src/materials_triage/core/schema.py` exist so far, alongside the canonical 118-symbol
-`ELEMENT_SYMBOLS` frozenset in `src/materials_triage/core/elements.py`. It proceeds as
-single-function TDD increments (see the build order in the deep plan), and only on an
-explicit go-ahead.
+`ELEMENT_SYMBOLS` frozenset in `src/materials_triage/core/elements.py`. The
+hypothesis layer in `src/materials_triage/core/hypothesis.py` also exists — the
+frozen `Citation` (the untrusted-DATA analog of `Provenance`), `ElementRule` (a
+symbol-validated require/exclude composition rule), `Proposal` (one cited bridge
+whose `kind` discriminates a `Constraint`/`RankingTarget`/`ElementRule` payload),
+and `Hypothesis` (the LLM's whole emission: `proposals` + `mechanism`) models,
+plus the pure `compile_spec(proposals) -> TriageSpec` seam that dispatches on
+`kind`, unions element rules into required/excluded sets, and normalizes ranking
+weights to sum to 1. It proceeds as single-function TDD increments (see the build
+order in the deep plan), and only on an explicit go-ahead.
 
 The repo's agent-coding setup (commands, skills, settings) is documented in
 [`.claude/README.md`](.claude/README.md).
