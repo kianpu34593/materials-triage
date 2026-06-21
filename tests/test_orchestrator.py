@@ -108,7 +108,7 @@ def test_state_channels_round_trip_domain_objects_through_the_checkpointer():
             "spec": spec,
             "hypothesis": hypothesis,
             "candidates": (candidate,),
-            "excluded": (excluded,),
+            "filter_excluded": (excluded,),
             "result": result,
         },
     )
@@ -122,8 +122,8 @@ def test_state_channels_round_trip_domain_objects_through_the_checkpointer():
     assert values["candidates"][0].properties["bulk_modulus"].missing is True
     assert values["candidates"][0].properties["bulk_modulus"].value is None
     # The structured exclusion reason survives.
-    assert values["excluded"][0].reason == "below_min"
-    assert values["excluded"][0].bound == 4.0
+    assert values["filter_excluded"][0].reason == "below_min"
+    assert values["filter_excluded"][0].bound == 4.0
     # A literature citation on a hypothesis proposal survives.
     assert values["hypothesis"].proposals[0].citations[0].record_id == "W1"
     # The ranked result (score + contributions) survives.
@@ -181,3 +181,57 @@ def test_deterministic_core_runs_retrieve_filter_rank_end_to_end():
     # The hard-filter drop is carried in the result with its reason.
     drops = {ex.candidate.identifier: ex.reason for ex in result.excluded}
     assert drops == {"mp-drop": "below_min"}
+
+
+def test_filter_and_ranking_exclusions_live_in_separate_authoritative_channels():
+    """Slice 3b: exclusions are split by STAGE into two single-writer channels —
+    `filter_excluded` (the hard-filter node) and `rank_excluded` (the ranking
+    node's on_missing='exclude' drops) — so neither undercounts and no node
+    reads-then-writes the same channel (resume-safe). `result.excluded` remains
+    the union for presentation. The audit exporter reads the stage channels."""
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=2.0),),
+        ranking_targets=(
+            RankingTarget(property_name="band_gap", direction="maximize", weight=0.5),
+            # An exclude-policy target: a candidate missing `density` is dropped
+            # at the ranking stage (a missing_data drop that is NOT a hard-filter drop).
+            RankingTarget(
+                property_name="density",
+                direction="minimize",
+                weight=0.5,
+                on_missing="exclude",
+            ),
+        ),
+    )
+
+    def candidate(identifier, band_gap, density=None):
+        provenance = Provenance(source="Materials Project", record_id=identifier)
+        properties = {"band_gap": PropertyValue(value=band_gap, unit="eV", provenance=provenance)}
+        if density is not None:
+            properties["density"] = PropertyValue(
+                value=density, unit="g/cm^3", provenance=provenance
+            )
+        return Candidate(identifier=identifier, formula="ZnO", properties=properties)
+
+    keep = candidate("mp-keep", band_gap=4.0, density=5.0)  # passes both stages
+    filter_drop = candidate("mp-filterdrop", band_gap=1.0, density=5.0)  # below_min
+    rank_drop = candidate("mp-rankdrop", band_gap=3.0)  # passes filter, no density
+    adapter = _FakeAdapter([keep, filter_drop, rank_drop])
+
+    orchestrator = build_orchestrator(adapter=adapter)
+    config = {"configurable": {"thread_id": "stage-split"}}
+    final = orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    # Each stage channel is authoritative for exactly its own stage's drops.
+    filter_drops = {ex.candidate.identifier: ex.reason for ex in final["filter_excluded"]}
+    rank_drops = {ex.candidate.identifier: ex.reason for ex in final["rank_excluded"]}
+    assert filter_drops == {"mp-filterdrop": "below_min"}
+    assert rank_drops == {"mp-rankdrop": "missing_data"}
+
+    # result.excluded is the union of both stages (the presentation model).
+    assert {ex.candidate.identifier for ex in final["result"].excluded} == {
+        "mp-filterdrop",
+        "mp-rankdrop",
+    }
+    # Only the fully-scored candidate survives to the ranking.
+    assert [sc.candidate.identifier for sc in final["result"].ranked] == ["mp-keep"]

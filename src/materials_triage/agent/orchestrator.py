@@ -61,7 +61,11 @@ class OrchestratorState(TypedDict, total=False):
     hypothesis: Hypothesis | None
     candidates: tuple[Candidate, ...]
     survivors: tuple[Candidate, ...]
-    excluded: tuple[ExcludedCandidate, ...]
+    # Exclusions are split by stage so each channel has a single writer (no
+    # undercount, no read-then-write-the-same-channel resume hazard): the hard
+    # filter writes `filter_excluded`, the ranker writes `rank_excluded`.
+    filter_excluded: tuple[ExcludedCandidate, ...]
+    rank_excluded: tuple[ExcludedCandidate, ...]
     result: TriageResult | None
 
 
@@ -87,20 +91,24 @@ def _make_retrieve_node(adapter: SourceAdapter | None):
 
 def _filter_node(state: OrchestratorState) -> dict:
     """The hard-filter step: partition retrieved candidates into survivors and
-    structured exclusions against the spec's constraints."""
+    the stage's own structured exclusions against the spec's constraints."""
     survivors, excluded = apply_hard_filters(
         list(state.get("candidates", ())), state["spec"].constraints
     )
-    return {"survivors": tuple(survivors), "excluded": tuple(excluded)}
+    return {"survivors": tuple(survivors), "filter_excluded": tuple(excluded)}
 
 
 def _rank_node(state: OrchestratorState) -> dict:
-    """The ranking step: weighted-average rank the survivors, then fold the
-    hard-filter exclusions in with the ranker's own missing-policy drops so the
-    result carries every dropped candidate with its reason."""
+    """The ranking step: weighted-average rank the survivors. The ranker's own
+    missing-policy drops are recorded in the `rank_excluded` channel (the ranking
+    stage's authoritative exclusions), and `result.excluded` is the union of both
+    stages — the complete presentation set the renderers read."""
     ranked = rank(list(state.get("survivors", ())), state["spec"].ranking_targets)
-    excluded = tuple(state.get("excluded", ())) + ranked.excluded
-    return {"result": TriageResult(ranked=ranked.ranked, excluded=excluded)}
+    union = tuple(state.get("filter_excluded", ())) + ranked.excluded
+    return {
+        "rank_excluded": ranked.excluded,
+        "result": TriageResult(ranked=ranked.ranked, excluded=union),
+    }
 
 
 def build_orchestrator(
