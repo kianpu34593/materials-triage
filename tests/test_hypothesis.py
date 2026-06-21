@@ -9,7 +9,7 @@ deterministic core.
 import pytest
 from pydantic import ValidationError
 
-from materials_triage.core.hypothesis import Citation, ElementRule, Proposal
+from materials_triage.core.hypothesis import Citation, ElementRule, Hypothesis, Proposal
 from materials_triage.core.schema import Constraint, RankingTarget
 
 
@@ -142,3 +142,31 @@ def test_proposal_element_rule_kind_requires_an_element_rule_payload():
     with no ElementRule is rejected at construction."""
     with pytest.raises(ValidationError):
         Proposal(kind="element_rule", element_rule=None, rationale="empty", confidence=0.5)
+
+
+def test_hypothesis_carries_its_proposals_and_mechanism():
+    """A Hypothesis is the LLM's whole emission: the cited spec-bridge proposals
+    (load-bearing — they compile to the spec) plus a mechanistic 'why' narrative."""
+    hyp = Hypothesis(
+        proposals=(
+            Proposal(
+                kind="constraint",
+                constraint=Constraint(property_name="band_gap", min=2.0, max=4.0),
+                rationale="wide-gap semiconductor",
+                confidence=0.7,
+            ),
+        ),
+        mechanism="Wide-gap stable oxides tend to ...",
+    )
+
+    assert len(hyp.proposals) == 1
+    assert hyp.proposals[0].kind == "constraint"
+    assert hyp.mechanism.startswith("Wide-gap")
+
+
+def test_hypothesis_rejects_empty_proposals():
+    """A hypothesis that proposes nothing is meaningless and cannot compile to a
+    spec, so an empty proposal tuple is refused (characterization: the model
+    declares proposals min_length=1)."""
+    with pytest.raises(ValidationError):
+        Hypothesis(proposals=(), mechanism="proposed nothing")

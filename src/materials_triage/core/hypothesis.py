@@ -88,3 +88,19 @@ class Proposal(BaseModel):
             if name != self.kind and value is not None:
                 raise ValueError(f"a {self.kind}-kind proposal must not carry a {name}")
         return self
+
+
+class Hypothesis(BaseModel):
+    """The LLM's whole hypothesis-step emission.
+
+    ``proposals`` are the load-bearing, cited bridges that compile to a
+    ``TriageSpec``; ``mechanism`` is the grounded mechanistic "why" narrative.
+    A hypothesis that proposes nothing is meaningless, so at least one proposal
+    is required. Cross-proposal coherence (e.g. duplicate constraints, ranking
+    weights) is enforced downstream when the proposals compile to a spec.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    proposals: tuple[Proposal, ...] = Field(min_length=1)
+    mechanism: str = ""
