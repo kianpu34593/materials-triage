@@ -1,4 +1,4 @@
-# Session Handoff - 2026-06-21 13:24
+# Session Handoff - 2026-06-21 13:59
 
 > Single living handoff, git-tracked at `docs/handoff.md` (PR #35). Do NOT recreate dated copies or
 > a `docs/handoffs/` subdir — untracked handoffs get wiped by parallel sessions' `git clean`. Keep
@@ -18,10 +18,13 @@ still ahead.
   (SourceAdapter + Materials Project adapter), **literature RAG (#17)**, **hypothesis layer
   (models + `compile_spec`, now a `kind`-discriminated union)**, **Bedrock LLM provider (#21)**,
   demo notebooks + ADRs 0001/0002.
-- **Next up:** prompts (#22) → orchestrator (#23, LangGraph); guardrails (#18–#20); then
-  renderers (#25/#26), CLI (#27), eval (#28), design note (#29-doc), README (#30-doc).
-- **PARKED behind a LangGraph decision:** #9 TriageRun/Step trace + #10 lab memory store —
-  revisit before #23 (LangGraph checkpointer ⊇ #9 trace+resume; BaseStore ↦ #10 lab memory).
+- **Next up (DECIDED this session): orchestrator #23 on LangGraph** (resume + HITL are v1 scope);
+  then guardrails (#18–#20); then renderers (#25/#26), CLI (#27), eval (#28), design note (#29-doc),
+  README (#30-doc). Prompts (#22) fold into the #23 nodes.
+- **UN-PARKED — LangGraph decision RESOLVED:** #9 TriageRun/Step trace + #10 lab memory are
+  subsumed by LangGraph (checkpointer ⊇ #9 trace+resume; `BaseStore` ⊇ #10 lab memory; `interrupt()`
+  = spec HITL). `runs/<id>.json` becomes a **derived read-model exported from checkpoint history**,
+  not a second store. [memory: langgraph-orchestrator-decision]
 - **Collaboration rules (CLAUDE.md — follow exactly):** ask before choosing between approaches;
   implement ONE function at a time then stop for approval; TDD via the `tdd` skill (one red→green
   at a time, never batch); discuss behavior before coding; **don't start coding until told**.
@@ -55,8 +58,12 @@ still ahead.
 - `pyproject.toml` — runtime deps `pydantic>=2`, `requests>=2`, `rank-bm25>=0.2`; extras `dev`
   (+`python-dotenv`), `notebook`, **`llm` (`langchain-aws`)**; `live` pytest marker (deselected).
 - `docs/design/0001-retrieval-rest-adapters.md` (#29) · `0002-literature-abstracts-only.md` (#31).
-- `notebooks/deterministic_pipeline_demo.ipynb` (#29) · `literature_rag_demo.ipynb` (#32/#33).
+- `notebooks/deterministic_pipeline_demo.ipynb` (#29) · `literature_rag_demo.ipynb` (#32/#33) ·
+  one-shot **LLM→spec** and **RAG→spec** demo notebooks (#38, parallel session).
 - `docs/handoff.md` — this file (tracked, #35).
+- *(not yet created — #23 targets)* `src/materials_triage/agent/orchestrator.py` (LangGraph state
+  machine), `core/run_trace.py` (now the checkpoint→`runs/<id>.json` exporter), `memory/store.py`
+  (`BaseStore` lab memory), `docs/design/0003-orchestrator-on-langgraph.md` (ADR, pending Kian's call).
 
 ## Discoveries (gotchas — most also in auto-memory; see MEMORY.md)
 *(Append-only. Prior findings preserved; newest at the end.)*
@@ -114,6 +121,23 @@ still ahead.
   secret — better than checking env-var names (creds from `~/.aws/credentials` never hit `os.environ`).
 - **`load_dotenv()` does NOT load `~/.aws/credentials`** (INI read by boto3, not a `.env`). conftest
   loads `.env` at collection time so `skipif` sees vars; AWS keys in `.env` must use UPPERCASE names.
+- **— Session 7 (2026-06-21, this session): LangGraph orchestrator decision —**
+- **LangGraph-vs-hand-roll RESOLVED → LangGraph**, because Kian confirmed **real `resume --from` +
+  human-in-the-loop (spec gate) are in v1 scope** — those ARE LangGraph's checkpointer + `interrupt()`,
+  so hand-rolling them is reinventing tested framework storage/resume. [memory: langgraph-orchestrator-decision]
+- **The reframing that settled it (Kian's):** checkpointer and `runs/<id>.json` are *two different
+  jobs*, not competitors. Checkpointer = **live execution state** (resume/recovery, framework-owned,
+  transient); `runs/<id>.json` = **durable audit report** (what `view=audit` renders, OURS) — a
+  **read-only export from `get_state_history()`**, ONE write path + one derived read model, NOT two stores.
+- **This dissolves the earlier "opaque checkpoint" worry:** the durable artifact is our exported JSON
+  (our schema); the checkpoint DB is ephemeral; and because the graph is **linear**
+  (gate→spec→hypothesis→retrieve→filter→rank→synth→validate→render) the super-step↔named-step mapping
+  is ~1:1, so the exporter is thin (`.values` / `.metadata.writes` → `TriageRun`/`Step`).
+- **Not free — design discipline:** the checkpointer only persists what's routed through **typed graph
+  state**, so make graph state = our domain pydantic state (one channel per step) or the audit export
+  loses provenance/excluded-set/missing-flags. Revises deep plan: `core/run_trace.py` → exporter,
+  `memory/store.py` → `BaseStore` wrapper. Node `RetryPolicy` ↦ the ~15% flakiness loop, but likely a
+  **custom node** to retry ONLY on pydantic `ValidationError` and feed the malformed output back.
 
 ## Work Done (all merged to `main` unless noted)
 *(Append-only history.)*
@@ -142,35 +166,61 @@ still ahead.
     live test as flaky and recorded [memory: llm-structured-output-flakiness].
   - Shipped **split** PRs via no-mistakes: **#34** (discriminated union) and **#36** (provider #21) —
     both 0 findings, CI green, merged. Pruned `docs/handoffs/` (kept this tracked `docs/handoff.md`).
+- **Session 7 (2026-06-21) — LangGraph orchestrator decision (no code):**
+  - Shipped **#37** (handoff update). A parallel session shipped **#38** (one-shot LLM→spec and
+    RAG→spec demo notebooks).
+  - **Settled the parked LangGraph decision → adopt LangGraph for #23** (resume + HITL in v1 scope).
+    Worked through the checkpointer-vs-`runs/<id>.json` confusion with Kian and landed on
+    checkpointer = live state / JSON = derived audit export. Recorded
+    [memory: langgraph-orchestrator-decision]; indexed in MEMORY.md.
+  - Proposed the #23 TDD build order (8 slices: compiling graph+checkpointer → domain state model →
+    deterministic-core nodes → retry node → `interrupt()` spec gate → exporter → `resume --from` →
+    `BaseStore` lab memory). Slices 4 & 5 clear the two orchestrator-23-carryforward debts.
+    **Awaiting "start building" + a decision on whether ADR 0003 (orchestrator-on-LangGraph) lands
+    first or folds into the #23 PR.**
+  - **Reconciled the task list:** marked #17 (RAG) and #21 (provider) completed; added #32
+    (hypothesis layer: models + `compile_spec` discriminated union) and #33 (LLM→spec / RAG→spec
+    demos) as completed retrofit entries; sharpened #23's description to include the retry loop +
+    the two weight-confirmation / error-wrap debts + the LangGraph checkpointer⊇#9 / BaseStore↦#10
+    mapping.
 
 ## Status
-- **Working / merged:** `main` @ **`cb26345`**. Full deterministic vertical slice + literature RAG +
-  hypothesis layer + **the Bedrock LLM provider (#21)** are live. Offline suite green
-  (`python -m pytest -q` → 138 passed, 3 live deselected); `ruff check .` clean. Live edges all green
-  by hand (`pytest -m live`): Bedrock, OpenAlex, Materials Project. Tree clean, no branches/worktrees.
+- **Working / merged:** `main` @ **`8203f11`**. Full deterministic vertical slice + literature RAG +
+  hypothesis layer + Bedrock LLM provider (#21) are live; demo notebooks incl. LLM→spec / RAG→spec
+  (#38). Last verified offline suite green (138 passed, 3 live deselected); `ruff check .` clean. Tree
+  clean, on `main`, no local feature branches or worktrees.
+- **DECIDED, not yet built:** orchestrator #23 architecture = **LangGraph** (resume + HITL in v1).
+  No orchestrator code exists yet — this session was design-only.
 - **Known issues:** none for merged work. The **live Bedrock smoke test is ~15% flaky by design**
-  (single-shot; gate rejects malformed LLM output) — deselected from CI and no-mistakes, so it gates
-  nothing; reliability awaits the #23 retry loop.
-- **Open threads:** LangGraph decision (gates #9/#10/#23); two #23 carry-forward debts
-  (weight-normalization confirmation gate; wrap `compile_spec` ValidationError for retry/human)
-  [memory: orchestrator-23-carryforward]; v2 debts (tokenizer, DFT/XC); #31 ExcludedCandidate reasons.
+  (single-shot; gate rejects malformed LLM output) — deselected from CI/no-mistakes, gates nothing;
+  reliability awaits the #23 retry node.
+- **Open threads:** two #23 carry-forward debts (weight-normalization confirmation gate; wrap
+  `compile_spec` ValidationError) [memory: orchestrator-23-carryforward]; ADR 0003 (orchestrator-on-
+  LangGraph) not yet written; v2 debts (tokenizer, DFT/XC); #31 ExcludedCandidate reasons.
 
 ## Next Steps
-1. **Decide what to pick up next** (don't start coding until told). Natural path: **#22 prompts**
-   (convert/recommend/hypothesis/synthesis templates feeding the provider) → **#23 orchestrator**.
-   Alternative: guardrails **#18 input gate → #19 trust boundary → #20 output validator**.
-2. **Before #23:** settle the **LangGraph** decision (checkpointer ↦ #9 trace+resume; BaseStore ↦ #10
-   lab memory) and build the **structured-output retry loop** — load-bearing per the ~15% finding —
-   plus the two carry-forward gate/error-wrap debts.
-3. **When coding:** branch off `main` (worktree if parallel sessions), `python -m pytest -q`
-   (+ `-m live` with creds for Bedrock/OpenAlex/MP), `ruff check src tests`. Ship via no-mistakes
-   (bootstrap: push to `no-mistakes` remote → abort → `axi run --intent`); squash-merge in the GitHub
-   UI; then `/sync-main`. Keep this handoff committed.
-4. **Eventually:** ExcludedCandidate element/composition reasons (#31); v2 items (tokenizer, DFT/XC);
-   renderers (#25/#26), CLI (#27), eval (#28), design note (#29-doc), README (#30-doc).
+1. **Get the green-light + ADR call, then build #23 on LangGraph** (don't start coding until told).
+   Open question for Kian: does **ADR 0003 (orchestrator-on-LangGraph)** land as the first commit, or
+   fold into the #23 PR description? (It reverses the deep plan's "traced state machine, no framework"
+   locked decision, so it's worth recording either way.)
+2. **#23 TDD build order (one function at a time, stop after each):**
+   1. add `langgraph` dep + an empty `StateGraph` that compiles with a `MemorySaver` (tracer bullet);
+   2. orchestrator **state model** (domain pydantic, one channel per step);
+   3. wrap deterministic core as **nodes** (retrieve→filter→rank), end-to-end on a fixture, no LLM;
+   4. **retry node** (re-invoke provider on pydantic `ValidationError`, capped, feed bad output back);
+   5. **`interrupt()` spec gate** incl. the **weight-normalization confirmation** debt;
+   6. **exporter** `get_state_history()` → `TriageRun`/`Step` → `runs/<id>.json` (audit-shaped);
+   7. **`resume --from`** (resume from checkpoint w/ state edit; assert upstream reused);
+   8. **`BaseStore`** lab memory (save Final Spec, retrieve as seed).
+3. **When coding:** branch off `main` (worktree, parallel sessions active — #38 just merged),
+   `python -m pytest -q` (+ `-m live` with creds), `ruff check src tests`. Ship via no-mistakes
+   (bootstrap from the **main repo**: push to `no-mistakes` remote → abort → `axi run --intent`);
+   squash-merge in the GitHub UI; then `/sync-main`. Keep this handoff committed.
+4. **After #23:** guardrails (#18–#20); ExcludedCandidate reasons (#31); v2 items (tokenizer,
+   DFT/XC); renderers (#25/#26), CLI (#27), eval (#28), design note (#29-doc), README (#30-doc).
 
 ## Context for Next Session
-- **Branch:** `main` @ `cb26345` == `origin/main`. Clean tree, no other local branches or worktrees.
+- **Branch:** `main` @ `8203f11` == `origin/main`. Clean tree, no other local branches or worktrees.
 - **How to verify merged state:** `python -m pytest -q` (138 passed, 3 deselected), `ruff check .`.
   Live (needs creds): `pytest -m live` (Bedrock via `~/.aws/credentials`, OpenAlex, MP). RAG quick
   check: `OPENALEX_MAILTO=… python -c "from materials_triage.retrieval.rag import LiteratureRAG,
@@ -184,5 +234,7 @@ still ahead.
   ranking-weight-normalization, orchestrator-23-carryforward, llm-structured-output-flakiness,
   dft-xc-functional-comparability-v2, rag-tokenizer-v2-todo, adapter-testing-seam, materials-project-api,
   handoff-doc-location, worktree-pythonpath, no-mistakes-run-bootstrap.
-- **Task list:** #1–#17 + #21 done (#34/#36 merged this session); #9/#10 parked; #18–#20, #22–#30
-  remain; #31 (element/composition drop reasons) deferred.
+- **Task list (reconciled):** #1–#17, #21, #32 (hypothesis layer), #33 (demos) completed; #9/#10
+  un-parked (subsumed by LangGraph #23 — checkpointer⊇#9, BaseStore↦#10); #18–#20, #22–#30 remain
+  (#22 prompts fold into #23); #31 deferred. #23 description now scopes the retry loop + the two
+  weight-confirmation / error-wrap debts.
