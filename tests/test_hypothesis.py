@@ -9,8 +9,14 @@ deterministic core.
 import pytest
 from pydantic import ValidationError
 
-from materials_triage.core.hypothesis import Citation, ElementRule, Hypothesis, Proposal
-from materials_triage.core.schema import Constraint, RankingTarget
+from materials_triage.core.hypothesis import (
+    Citation,
+    ElementRule,
+    Hypothesis,
+    Proposal,
+    compile_spec,
+)
+from materials_triage.core.schema import Constraint, RankingTarget, TriageSpec
 
 
 def test_citation_carries_its_source_record_and_title():
@@ -170,3 +176,91 @@ def test_hypothesis_rejects_empty_proposals():
     declares proposals min_length=1)."""
     with pytest.raises(ValidationError):
         Hypothesis(proposals=(), mechanism="proposed nothing")
+
+
+def _constraint_proposal(name="band_gap", **bounds):
+    return Proposal(
+        kind="constraint",
+        constraint=Constraint(property_name=name, **bounds),
+        rationale=f"bound on {name}",
+        confidence=0.7,
+    )
+
+
+def test_compile_spec_builds_a_triagespec_with_the_constraint():
+    """compile_spec is the seam from accepted proposals to the frozen TriageSpec
+    the deterministic core consumes: a lone constraint proposal yields a spec
+    carrying exactly that constraint."""
+    spec = compile_spec((_constraint_proposal(min=1.0, max=4.0),))
+
+    assert isinstance(spec, TriageSpec)
+    assert len(spec.constraints) == 1
+    assert spec.constraints[0].property_name == "band_gap"
+    assert spec.constraints[0].min == 1.0
+
+
+def _ranking_proposal(name, weight, direction="maximize"):
+    return Proposal(
+        kind="ranking_target",
+        ranking_target=RankingTarget(property_name=name, direction=direction, weight=weight),
+        rationale=f"prefer {direction} {name}",
+        confidence=0.7,
+    )
+
+
+def test_compile_spec_normalizes_ranking_weights_to_sum_to_one():
+    """The human gate accepts proposals independently, so surviving weights rarely
+    sum to 1 — but TriageSpec requires it. compile_spec normalizes them, preserving
+    ratios: proposed 0.6/0.2 (sum 0.8) compile to 0.75/0.25."""
+    spec = compile_spec(
+        (
+            _constraint_proposal(min=1.0),
+            _ranking_proposal("band_gap", 0.6),
+            _ranking_proposal("density", 0.2, direction="minimize"),
+        )
+    )
+
+    weights = {t.property_name: t.weight for t in spec.ranking_targets}
+    assert weights["band_gap"] == pytest.approx(0.75)
+    assert weights["density"] == pytest.approx(0.25)
+
+
+def test_compile_spec_makes_a_lone_ranking_weight_one():
+    """A single accepted ranking target must carry the whole weight, whatever the
+    LLM proposed (pin: the normalization formula already yields 1.0)."""
+    spec = compile_spec((_constraint_proposal(min=1.0), _ranking_proposal("band_gap", 0.4)))
+
+    assert spec.ranking_targets[0].weight == pytest.approx(1.0)
+
+
+def _element_proposal(mode, elements):
+    return Proposal(
+        kind="element_rule",
+        element_rule=ElementRule(mode=mode, elements=frozenset(elements)),
+        rationale=f"{mode} {elements}",
+        confidence=0.7,
+    )
+
+
+def test_compile_spec_maps_element_rules_to_required_and_excluded():
+    """element_rule proposals scope composition: require-mode rules union into
+    required_elements, exclude-mode into excluded_elements, so retrieval and the
+    hard filter see exactly the requested scoping."""
+    spec = compile_spec(
+        (
+            _constraint_proposal(min=1.0),
+            _element_proposal("require", {"Zn", "O"}),
+            _element_proposal("exclude", {"Pb"}),
+        )
+    )
+
+    assert spec.required_elements == frozenset({"Zn", "O"})
+    assert spec.excluded_elements == frozenset({"Pb"})
+
+
+def test_compile_spec_propagates_duplicate_constraint_rejection():
+    """compile_spec never silently merges: two constraint proposals on the same
+    property is incoherent, and TriageSpec's own validator rejects it — the error
+    propagates rather than being papered over."""
+    with pytest.raises(ValidationError):
+        compile_spec((_constraint_proposal(min=1.0), _constraint_proposal(max=4.0)))

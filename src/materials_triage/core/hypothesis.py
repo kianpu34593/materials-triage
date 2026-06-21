@@ -8,12 +8,13 @@ every reference resolves. Validation here is the gate: malformed LLM output is
 rejected before it can reach the deterministic core.
 """
 
+import math
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from materials_triage.core.elements import ELEMENT_SYMBOLS
-from materials_triage.core.schema import Constraint, RankingTarget
+from materials_triage.core.schema import Constraint, RankingTarget, TriageSpec
 
 
 class Citation(BaseModel):
@@ -104,3 +105,33 @@ class Hypothesis(BaseModel):
 
     proposals: tuple[Proposal, ...] = Field(min_length=1)
     mechanism: str = ""
+
+
+def compile_spec(proposals: tuple[Proposal, ...]) -> TriageSpec:
+    """Compile accepted proposals into the frozen TriageSpec the core consumes.
+
+    The deterministic seam between the LLM layer and the pipeline: dispatch each
+    proposal on its kind, then construct a TriageSpec — whose own validators
+    enforce cross-proposal coherence (>=1 constraint, unique properties, no
+    require/exclude contradiction), so this function never has to.
+    """
+    constraints = tuple(p.constraint for p in proposals if p.kind == "constraint")
+    targets = tuple(p.ranking_target for p in proposals if p.kind == "ranking_target")
+    rules = [p.element_rule for p in proposals if p.kind == "element_rule"]
+    required = frozenset(e for r in rules if r.mode == "require" for e in r.elements)
+    excluded = frozenset(e for r in rules if r.mode == "exclude" for e in r.elements)
+    return TriageSpec(
+        constraints=constraints,
+        ranking_targets=_normalize_weights(targets),
+        required_elements=required,
+        excluded_elements=excluded,
+    )
+
+
+def _normalize_weights(targets: tuple[RankingTarget, ...]) -> tuple[RankingTarget, ...]:
+    """Rescale ranking weights to sum to 1 (TriageSpec requires it), preserving
+    ratios — the human gate accepts proposals independently, so the surviving
+    weights almost never sum to 1 on their own.
+    """
+    total = math.fsum(t.weight for t in targets)
+    return tuple(t.model_copy(update={"weight": t.weight / total}) for t in targets)
