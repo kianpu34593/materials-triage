@@ -6,11 +6,24 @@ from materials_triage.core.schema import Provenance
 from materials_triage.retrieval.rag import (
     LiteraturePassage,
     LiteratureRAG,
+    OpenAlexFetcher,
     _parse_work,
     _rank,
     _reconstruct_abstract,
     _tokenize,
 )
+
+
+class _FakeHttpGet:
+    """Records (url, params, headers) and returns a canned OpenAlex envelope."""
+
+    def __init__(self, envelope):
+        self.envelope = envelope
+        self.calls = []
+
+    def __call__(self, url, params, headers):
+        self.calls.append((url, dict(params), dict(headers)))
+        return self.envelope
 
 
 def _inverted(text):
@@ -339,3 +352,50 @@ def test_search_includes_missing_abstract_works_ranked_on_title():
     assert by_id["W-noabs"].missing is True
     assert by_id["W-noabs"].text == ""
     assert results[0].provenance.record_id == "W-noabs"
+
+
+def test_openalex_fetcher_queries_works_endpoint_and_returns_results():
+    """fetch() hits /works with search/per-page/select and unwraps the results list."""
+    works = [_oer_work(), _battery_work()]
+    http = _FakeHttpGet({"results": works, "meta": {"count": 2}})
+
+    result = OpenAlexFetcher(http_get=http).fetch("oxygen evolution", pool_size=25)
+
+    assert result == works
+    url, params, _headers = http.calls[0]
+    assert url == "/works"
+    assert params["search"] == "oxygen evolution"
+    assert params["per-page"] == "25"
+    assert "abstract_inverted_index" in params["select"]
+
+
+def test_openalex_fetcher_sends_polite_mailto_and_user_agent():
+    """A configured mailto rides in both the User-Agent header and the query."""
+    http = _FakeHttpGet({"results": []})
+
+    OpenAlexFetcher(http_get=http, mailto="me@example.com").fetch("x", pool_size=1)
+
+    _url, params, headers = http.calls[0]
+    assert params["mailto"] == "me@example.com"
+    assert "me@example.com" in headers["User-Agent"]
+
+
+def test_openalex_fetcher_omits_mailto_when_unset():
+    """With no mailto, no mailto param is sent and the User-Agent stays generic."""
+    http = _FakeHttpGet({"results": []})
+
+    OpenAlexFetcher(http_get=http, mailto="").fetch("x", pool_size=1)
+
+    _url, params, headers = http.calls[0]
+    assert "mailto" not in params
+    assert "mailto" not in headers["User-Agent"]
+
+
+@pytest.mark.live
+def test_openalex_fetcher_live_returns_works():
+    """Live OpenAlex call returns work records of the expected shape."""
+    results = OpenAlexFetcher().fetch("perovskite oxygen evolution catalyst", pool_size=5)
+
+    assert len(results) > 0
+    assert "id" in results[0]
+    assert "abstract_inverted_index" in results[0]

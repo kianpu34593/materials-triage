@@ -3,13 +3,18 @@
 Deterministic retriever, never the LLM. Retrieved text is untrusted DATA.
 """
 
+import os
 import re
+from collections.abc import Callable, Mapping
 from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rank_bm25 import BM25Okapi
 
 from materials_triage.core.schema import Provenance
+
+#: A transport: ``(url, params, headers) -> parsed JSON envelope (dict)``.
+HttpGet = Callable[[str, Mapping[str, str], Mapping[str, str]], dict]
 
 
 class LiteraturePassage(BaseModel):
@@ -136,3 +141,71 @@ class LiteratureRAG:
         works = self._fetcher.fetch(query, self._pool_size)
         passages = [_parse_work(w) for w in works]
         return _rank(query, passages)[:k]
+
+
+OPENALEX_BASE_URL = "https://api.openalex.org"
+
+#: Work fields requested from OpenAlex — exactly what _parse_work reads, trimming
+#: the otherwise large payload.
+_SELECT_FIELDS = (
+    "id",
+    "title",
+    "publication_year",
+    "doi",
+    "authorships",
+    "primary_location",
+    "abstract_inverted_index",
+)
+
+
+class OpenAlexFetcher:
+    """The real :class:`AbstractFetcher`: a coarse keyword search over OpenAlex.
+
+    The HTTP call is injected (``http_get``) so URL building is exercised offline;
+    the real transport is built lazily so importing this module never needs
+    ``requests``. A ``mailto`` joins OpenAlex's faster "polite pool".
+    """
+
+    def __init__(
+        self,
+        http_get: HttpGet | None = None,
+        mailto: str | None = None,
+        base_url: str = OPENALEX_BASE_URL,
+    ) -> None:
+        self._http_get = http_get or _requests_transport(base_url)
+        self._mailto = mailto or os.environ.get("OPENALEX_MAILTO", "")
+
+    def fetch(self, query: str, pool_size: int) -> list[dict]:
+        params = {
+            "search": query,
+            "per-page": str(pool_size),
+            "select": ",".join(_SELECT_FIELDS),
+        }
+        if self._mailto:
+            params["mailto"] = self._mailto
+        headers = {"User-Agent": _user_agent(self._mailto)}
+        envelope = self._http_get("/works", params, headers)
+        return envelope["results"]
+
+
+def _user_agent(mailto: str) -> str:
+    """A descriptive User-Agent; embedding a contact email is OpenAlex etiquette
+    and also dodges the bare-urllib User-Agent bans some CDNs apply.
+    """
+    contact = f" (mailto:{mailto})" if mailto else ""
+    return f"materials-triage/0.0.1{contact}"
+
+
+def _requests_transport(base_url: str) -> HttpGet:
+    """Build the real HTTP transport. ``requests`` is imported only when the
+    transport is actually called, so offline use never requires the dependency.
+    """
+
+    def transport(url: str, params: Mapping[str, str], headers: Mapping[str, str]) -> dict:
+        import requests
+
+        response = requests.get(base_url + url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+    return transport
