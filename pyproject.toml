@@ -18,12 +18,18 @@ dependencies = [
 dev = [
     "pytest>=8",
     "ruff>=0.6",
+    "python-dotenv>=1",  # conftest.py loads .env so live tests can read credentials
 ]
 # Optional: run the live demo notebook (notebooks/deterministic_pipeline_demo.ipynb).
 notebook = [
     "jupyter>=1",
     "ipykernel>=6",
     "python-dotenv>=1",
+]
+# Optional: the real Bedrock transport for the LLM provider (agent/llm.py).
+# Imported lazily, so offline tests never need it; required only for the live path.
+llm = [
+    "langchain-aws>=0.2",
 ]
 
 [tool.setuptools.packages.find]
@@ -43,5 +49,5 @@ testpaths = ["tests"]
 # Live tests hit the real network; deselected by default. Run with: pytest -m live
 addopts = "-m 'not live'"
 markers = [
-    "live: exercises a real external API (Materials Project needs X_API_KEY; OpenAlex needs network)",
+    "live: exercises a real external API (Materials Project needs X_API_KEY; OpenAlex needs network; Bedrock needs AWS credentials)",
 ]
