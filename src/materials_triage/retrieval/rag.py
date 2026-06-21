@@ -4,7 +4,7 @@ Deterministic retriever, never the LLM. Retrieved text is untrusted DATA.
 """
 
 import re
-from typing import Self
+from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rank_bm25 import BM25Okapi
@@ -108,3 +108,31 @@ def _rank(query: str, passages: list[LiteraturePassage]) -> list[LiteraturePassa
         p.model_copy(update={"score": float(s)}) for p, s in zip(passages, scores, strict=True)
     ]
     return sorted(scored, key=lambda p: p.score, reverse=True)
+
+
+class AbstractFetcher(Protocol):
+    """Seam over the literature source: returns raw OpenAlex work dicts.
+
+    Real implementations hit OpenAlex; tests/eval inject a fake returning cached
+    JSON. Keeps the live network out of the deterministic parse + rank core.
+    """
+
+    def fetch(self, query: str, pool_size: int) -> list[dict]: ...
+
+
+class LiteratureRAG:
+    """Public abstracts retriever: fetch a coarse pool, then BM25 re-rank locally.
+
+    Deterministic and LLM-free; query construction lives in the orchestrator, not
+    here. Retrieved abstract text is untrusted DATA.
+    """
+
+    def __init__(self, fetcher: AbstractFetcher, pool_size: int = 200):
+        self._fetcher = fetcher
+        self._pool_size = pool_size
+
+    def search(self, query: str, k: int = 10) -> list[LiteraturePassage]:
+        """Return the top-``k`` passages most relevant to ``query``, best-first."""
+        works = self._fetcher.fetch(query, self._pool_size)
+        passages = [_parse_work(w) for w in works]
+        return _rank(query, passages)[:k]

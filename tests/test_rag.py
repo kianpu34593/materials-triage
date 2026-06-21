@@ -5,11 +5,56 @@ import pytest
 from materials_triage.core.schema import Provenance
 from materials_triage.retrieval.rag import (
     LiteraturePassage,
+    LiteratureRAG,
     _parse_work,
     _rank,
     _reconstruct_abstract,
     _tokenize,
 )
+
+
+def _inverted(text):
+    """Build an OpenAlex-style abstract_inverted_index from plain text."""
+    index = {}
+    for pos, word in enumerate(text.split()):
+        index.setdefault(word, []).append(pos)
+    return index
+
+
+class _FakeFetcher:
+    """Records its calls and returns canned OpenAlex work dicts (offline seam)."""
+
+    def __init__(self, works):
+        self.works = works
+        self.calls = []
+
+    def fetch(self, query, pool_size):
+        self.calls.append((query, pool_size))
+        return self.works
+
+
+def _oer_work():
+    return _openalex_work(
+        id="https://openalex.org/W-oer",
+        title="Oxygen evolution catalysis",
+        abstract_inverted_index=_inverted("oxygen evolution catalyst for water splitting"),
+    )
+
+
+def _battery_work():
+    return _openalex_work(
+        id="https://openalex.org/W-bat",
+        title="Lithium battery anodes",
+        abstract_inverted_index=_inverted("graphite anode capacity in lithium ion cells"),
+    )
+
+
+def _pv_work():
+    return _openalex_work(
+        id="https://openalex.org/W-pv",
+        title="Silicon photovoltaics",
+        abstract_inverted_index=_inverted("solar cell efficiency in crystalline silicon"),
+    )
 
 
 def _passage(**overrides):
@@ -230,3 +275,67 @@ def test_tokenize_keeps_decimal_stoichiometry_and_values_intact():
 def test_tokenize_strips_sentence_punctuation():
     """Trailing punctuation and hyphens are split off, not glued into tokens."""
     assert _tokenize("thin-film OER.") == ["thin", "film", "oer"]
+
+
+def test_search_returns_ranked_passages():
+    """search() fetches, parses, and BM25-ranks into attributed passages."""
+    fetcher = _FakeFetcher([_battery_work(), _oer_work(), _pv_work()])
+    rag = LiteratureRAG(fetcher)
+
+    results = rag.search("oxygen evolution catalyst", k=3)
+
+    assert len(results) == 3
+    assert all(isinstance(r, LiteraturePassage) for r in results)
+    assert results[0].provenance.record_id == "W-oer"
+
+
+def test_search_respects_k():
+    """search() returns at most k passages."""
+    fetcher = _FakeFetcher([_battery_work(), _oer_work(), _pv_work()])
+    results = LiteratureRAG(fetcher).search("oxygen evolution", k=2)
+    assert len(results) == 2
+
+
+def test_search_is_best_first():
+    """Returned passages are ordered by non-increasing BM25 score."""
+    fetcher = _FakeFetcher([_battery_work(), _oer_work(), _pv_work()])
+    results = LiteratureRAG(fetcher).search("oxygen evolution catalyst", k=3)
+    scores = [r.score for r in results]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_search_passes_default_pool_size_to_fetcher():
+    """search() requests the coarse pool from the fetcher (default 200)."""
+    fetcher = _FakeFetcher([_oer_work()])
+    LiteratureRAG(fetcher).search("oxygen", k=1)
+    assert fetcher.calls == [("oxygen", 200)]
+
+
+def test_search_uses_configured_pool_size():
+    """A custom pool_size is forwarded to the fetcher."""
+    fetcher = _FakeFetcher([_oer_work()])
+    LiteratureRAG(fetcher, pool_size=50).search("oxygen", k=1)
+    assert fetcher.calls == [("oxygen", 50)]
+
+
+def test_search_empty_fetch_returns_empty():
+    """An empty pool yields no passages."""
+    assert LiteratureRAG(_FakeFetcher([])).search("anything", k=10) == []
+
+
+def test_search_includes_missing_abstract_works_ranked_on_title():
+    """Works with no abstract are kept, flagged missing, and rank on their title."""
+    no_abstract = _openalex_work(
+        id="https://openalex.org/W-noabs",
+        title="oxygen evolution catalyst on perovskite surfaces",
+        abstract_inverted_index=None,
+    )
+    fetcher = _FakeFetcher([_battery_work(), no_abstract, _pv_work()])
+
+    results = LiteratureRAG(fetcher).search("oxygen evolution catalyst", k=3)
+
+    by_id = {r.provenance.record_id: r for r in results}
+    assert "W-noabs" in by_id
+    assert by_id["W-noabs"].missing is True
+    assert by_id["W-noabs"].text == ""
+    assert results[0].provenance.record_id == "W-noabs"
