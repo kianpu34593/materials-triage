@@ -65,8 +65,20 @@ whose `kind` discriminates a `Constraint`/`RankingTarget`/`ElementRule` payload)
 and `Hypothesis` (the LLM's whole emission: `proposals` + `mechanism`) models,
 plus the pure `compile_spec(proposals) -> TriageSpec` seam that dispatches on
 `kind`, unions element rules into required/excluded sets, and normalizes ranking
-weights to sum to 1. It proceeds as single-function TDD increments (see the build
-order in the deep plan), and only on an explicit go-ahead.
+weights to sum to 1. The literature RAG in `src/materials_triage/retrieval/rag.py`
+also exists — the frozen `LiteraturePassage` model (an OpenAlex abstract bound to
+its `Provenance`, kept and flagged `missing` rather than dropped when absent),
+`_reconstruct_abstract` (rebuilds OpenAlex's `abstract_inverted_index` into ordered
+text), `_parse_work` (one OpenAlex work → passage), a formula-aware `_tokenize`
+that keeps chemical formulas/decimals intact, BM25 `_rank` over title+abstract
+(ties keep input order), and the public `LiteratureRAG.search(query, k)` wiring
+fetch→parse→rank→top-k behind an injected `AbstractFetcher` Protocol whose live
+transport is `OpenAlexFetcher` (lazy `requests` import, `live` pytest marker). Its
+abstract-only, no-full-text grounding is recorded in
+[`docs/design/0002-literature-abstracts-only.md`](docs/design/0002-literature-abstracts-only.md),
+and it adds `rank-bm25` as a runtime dependency. It proceeds as single-function
+TDD increments (see the build order in the deep plan), and only on an explicit
+go-ahead.
 
 The repo's agent-coding setup (commands, skills, settings) is documented in
 [`.claude/README.md`](.claude/README.md).
