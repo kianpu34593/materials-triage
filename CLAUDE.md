@@ -95,7 +95,35 @@ left to the orchestrator's retry loop. It adds an optional `llm` extra
 CI) and gated on botocore-resolvable AWS credentials. A `tests/conftest.py`
 `load_dotenv()`s at collection time (defensive optional import) so live tests read
 credentials from `.env` before the `skipif` gates evaluate, with `python-dotenv`
-added to the dev extra. It proceeds as single-function
+added to the dev extra. The orchestrator skeleton in
+`src/materials_triage/agent/orchestrator.py` also exists — per ADR 0003
+([`docs/design/0003-orchestrator-on-langgraph.md`](docs/design/0003-orchestrator-on-langgraph.md))
+the nine `WORKFLOW_STEPS` (`gate`, `spec_build`, `hypothesis`, `retrieve`,
+`filter`, `rank`, `synthesis`, `output_validate`, `render`) are compiled by
+`build_orchestrator(adapter=None, checkpointer=None)` into a LangGraph
+`StateGraph` wired in a fixed linear edge order (START → gate → … → render →
+END — a static pipeline, not an autonomous tool-calling loop) and backed by an
+in-process `MemorySaver` checkpointer (the substrate for the #9 trace export and
+`resume --from`). `OrchestratorState` is a `total=False` `TypedDict` with one
+typed channel per step output (`goal`, `run_id`, `spec`, `hypothesis`,
+`candidates`, `survivors`, `filter_excluded`, `rank_excluded`, `result`), holding
+the rich domain objects (provenance, missing-data flags, exclusion reasons,
+citations) so the checkpointer round-trips them losslessly for the audit export;
+validation stays in the domain models, not on every channel write. Exclusions are
+split by stage into two single-writer channels — the `filter` node writes
+`filter_excluded` (hard-filter drops) and the `rank` node writes `rank_excluded`
+(the ranker's `on_missing="exclude"` missing-policy drops) — so neither channel
+undercounts and no node reads-then-writes the same channel (avoiding a resume
+double-fold); the slice-6 audit exporter derives from these per-stage channels per
+ADR 0003, which lets the audit view label drops by stage. Only the `retrieve` →
+`filter` → `rank` nodes carry real logic — they wrap the existing pure
+`adapter.retrieve` / `apply_hard_filters` / `rank` behind the injected
+`SourceAdapter` seam (a fake makes the whole graph offline-testable, no LLM), and
+the `rank` node sets `result.excluded` to the union of both stages — the complete
+presentation set the renderers read, every exclusion carrying its reason. The other six steps
+are intentional pass-throughs in this slice (real logic — the retry node and the
+`interrupt()` spec gate — lands in later slices/tasks). It adds `langgraph>=0.2`
+as a runtime dependency. It proceeds as single-function
 TDD increments (see the build order in the deep plan), and only on an explicit
 go-ahead.
 
