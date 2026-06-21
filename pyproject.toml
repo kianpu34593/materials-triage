@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "pydantic>=2",
+    "rank-bm25>=0.2",
     "requests>=2",
 ]
 
@@ -42,5 +43,5 @@ testpaths = ["tests"]
 # Live tests hit the real network; deselected by default. Run with: pytest -m live
 addopts = "-m 'not live'"
 markers = [
-    "live: exercises the real Materials Project API (needs network + X_API_KEY)",
+    "live: exercises a real external API (Materials Project needs X_API_KEY; OpenAlex needs network)",
 ]
