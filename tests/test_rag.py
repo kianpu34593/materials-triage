@@ -1,6 +1,30 @@
 """Tests for the literature RAG (#17): OpenAlex abstract retrieval + BM25 re-rank."""
 
-from materials_triage.retrieval.rag import _reconstruct_abstract
+import pytest
+
+from materials_triage.core.schema import Provenance
+from materials_triage.retrieval.rag import (
+    LiteraturePassage,
+    _parse_work,
+    _reconstruct_abstract,
+)
+
+
+def _passage(**overrides):
+    """Build a valid LiteraturePassage, overriding individual fields per test."""
+    fields = dict(
+        provenance=Provenance(source="openalex", record_id="W1"),
+        title="A study of perovskite oxides",
+        authors=["Doe, J."],
+        year=2020,
+        venue="Nature Materials",
+        doi="10.1/abc",
+        text="some abstract text",
+        missing=False,
+        score=0.0,
+    )
+    fields.update(overrides)
+    return LiteraturePassage(**fields)
 
 
 def test_reconstruct_abstract_single_word():
@@ -26,3 +50,73 @@ def test_reconstruct_abstract_none_index_is_empty():
 def test_reconstruct_abstract_empty_index_is_empty():
     """An empty inverted index reconstructs to ""."""
     assert _reconstruct_abstract({}) == ""
+
+
+def test_passage_missing_requires_empty_text():
+    """A passage flagged missing cannot carry abstract text (honesty invariant)."""
+    with pytest.raises(ValueError):
+        _passage(missing=True, text="an abstract is present")
+
+
+def test_passage_present_requires_nonempty_text():
+    """A passage not flagged missing must carry abstract text (honesty invariant)."""
+    with pytest.raises(ValueError):
+        _passage(missing=False, text="")
+
+
+def _openalex_work(**overrides):
+    """A representative OpenAlex work record, overridable per test."""
+    work = {
+        "id": "https://openalex.org/W123",
+        "title": "Perovskite oxides for oxygen evolution",
+        "publication_year": 2021,
+        "doi": "https://doi.org/10.1/abc",
+        "authorships": [
+            {"author": {"display_name": "Jane Doe"}},
+            {"author": {"display_name": "Sam Roe"}},
+        ],
+        "primary_location": {"source": {"display_name": "Nature Materials"}},
+        "abstract_inverted_index": {"Perovskites": [0], "catalyze": [1], "OER.": [2]},
+    }
+    work.update(overrides)
+    return work
+
+
+def test_parse_work_happy_path():
+    """A full OpenAlex work parses into a fully-populated passage."""
+    passage = _parse_work(_openalex_work())
+
+    assert passage.provenance == Provenance(source="openalex", record_id="W123")
+    assert passage.title == "Perovskite oxides for oxygen evolution"
+    assert passage.authors == ["Jane Doe", "Sam Roe"]
+    assert passage.year == 2021
+    assert passage.venue == "Nature Materials"
+    assert passage.doi == "10.1/abc"
+    assert passage.text == "Perovskites catalyze OER."
+    assert passage.missing is False
+    assert passage.score == 0.0
+
+
+def test_parse_work_no_abstract_is_flagged_missing():
+    """A work with a null abstract index parses to empty text, flagged missing."""
+    passage = _parse_work(_openalex_work(abstract_inverted_index=None))
+
+    assert passage.text == ""
+    assert passage.missing is True
+    assert passage.title == "Perovskite oxides for oxygen evolution"
+
+
+def test_parse_work_tolerates_ragged_metadata():
+    """Missing doi/venue/year and empty authorships degrade to None/[], not errors."""
+    sparse = {
+        "id": "https://openalex.org/W9",
+        "title": "Minimal record",
+        "abstract_inverted_index": {"Hello": [0]},
+    }
+    passage = _parse_work(sparse)
+
+    assert passage.authors == []
+    assert passage.year is None
+    assert passage.venue is None
+    assert passage.doi is None
+    assert passage.text == "Hello"
