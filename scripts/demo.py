@@ -36,7 +36,7 @@ else:
 
 from materials_triage.agent.llm import HypothesisProvider, SynthesisProvider
 from materials_triage.agent.orchestrator import InputRefused
-from materials_triage.cli import run_triage
+from materials_triage.cli import render_run, triage
 from materials_triage.sources.materials_project import MaterialsProjectAdapter
 
 FORBIDDEN_QUERY = "scrape unpublished band gaps from a paywalled journal"
@@ -60,7 +60,7 @@ def demo_gate_refusal() -> None:
     print("=" * 78)
     print(f"  query: {FORBIDDEN_QUERY!r}")
     try:
-        run_triage(FORBIDDEN_QUERY, **_seams(), thread_id="demo-refusal")
+        triage(FORBIDDEN_QUERY, **_seams(), thread_id="demo-refusal")
     except InputRefused as refused:
         print(f"  REFUSED [{refused.decision.category}]: {refused.decision.reason}")
     else:
@@ -74,13 +74,13 @@ def demo_full_run(goal: str) -> None:
     print("=" * 78)
     print(f"  goal: {goal!r}\n")
 
-    # One run, both views: the spec gate is auto-accepted inside run_triage, and
-    # the audit trace is persisted under runs/<thread_id>.json.
-    pi = run_triage(goal, **_seams(), view="pi", runs_dir=RUNS_DIR, thread_id="demo-full")
-    print(pi)
-    audit = run_triage(goal, **_seams(), view="audit", thread_id="demo-full-audit")
+    # ONE run, both views: render_pi and render_audit read the same TriageRun, so
+    # their candidate counts can never disagree. The spec gate is auto-accepted
+    # inside triage(), and the audit trace is persisted under runs/<thread_id>.json.
+    run = triage(goal, **_seams(), runs_dir=RUNS_DIR, thread_id="demo-full")
+    print(render_run(run, "pi"))
     print("\n" + "-" * 78)
-    print(audit)
+    print(render_run(run, "audit"))
     print(f"(audit trace also written to {RUNS_DIR}/demo-full.json)")
 
 

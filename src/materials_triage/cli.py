@@ -20,22 +20,22 @@ from materials_triage.core.schema import TriageResult
 from materials_triage.render import render_audit, render_pi
 
 
-def run_triage(
+def triage(
     goal,
     *,
     adapter,
     provider,
     synthesis_provider,
-    view="pi",
     runs_dir=None,
     thread_id="cli",
 ):
-    """Run one triage request end-to-end and return the rendered ``view``.
+    """Run one triage request end-to-end and return its :class:`TriageRun`.
 
-    The spec gate's ``interrupt()`` is answered by echoing the recommended spec
-    back (auto-accept), so the run completes in one call. When ``runs_dir`` is
-    given, the derived audit trace is persisted to ``<runs_dir>/<run_id>.json``.
-    Raises :class:`InputRefused` if the goal is refused at the gate.
+    Drives the whole graph once: the spec gate's ``interrupt()`` is answered by
+    echoing the recommended spec back (auto-accept), so the run completes in one
+    call. When ``runs_dir`` is given, the derived audit trace is persisted to
+    ``<runs_dir>/<run_id>.json``. Both views render from this single run, so they
+    can never disagree. Raises :class:`InputRefused` if the goal is refused.
     """
     orchestrator = build_orchestrator(
         adapter=adapter, provider=provider, synthesis_provider=synthesis_provider
@@ -46,15 +46,25 @@ def run_triage(
     interrupts = state.get("__interrupt__")
     if interrupts:
         recommended = interrupts[0].value["recommended_spec"]
-        state = orchestrator.invoke(Command(resume=recommended), config)
+        orchestrator.invoke(Command(resume=recommended), config)
 
     run = export_run(orchestrator, config)
     if runs_dir is not None:
         write_run(run, runs_dir)
+    return run
 
+
+def render_run(run, view="pi") -> str:
+    """Render a completed :class:`TriageRun` as the ``pi`` or ``audit`` view."""
     if view == "audit":
         return render_audit(run)
     return render_pi(run.result or TriageResult(), run.synthesis)
+
+
+def run_triage(goal, *, view="pi", **kwargs) -> str:
+    """Run one request and return the rendered ``view`` (convenience wrapper over
+    :func:`triage` + :func:`render_run`)."""
+    return render_run(triage(goal, **kwargs), view)
 
 
 def main(argv=None) -> int:
