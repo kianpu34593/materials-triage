@@ -104,8 +104,15 @@ def wrap_untrusted(
 
 def check_input(text: str) -> GateDecision:
     """Return the gate's verdict for ``text`` (a query or a manual spec field)."""
-    lowered = text.lower()
+    # Normalize before matching so obfuscations don't slip the denylist: ``_scrub``
+    # folds compatibility forms (fullwidth) and strips zero-width chars; the
+    # whitespace-collapsed form additionally catches spaced-out evasions
+    # ("s y n t h e s i z e"). Still best-effort — capability-by-construction is the
+    # guarantee (ADR 0004).
+    lowered = _scrub(text).lower()
+    collapsed = "".join(lowered.split())
     for category, reason, terms in _FORBIDDEN_ACTIONS:
-        if any(term in lowered for term in terms):
-            return GateDecision(allowed=False, category=category, reason=reason)
+        for term in terms:
+            if term in lowered or term.replace(" ", "") in collapsed:
+                return GateDecision(allowed=False, category=category, reason=reason)
     return GateDecision(allowed=True, category="in_scope")

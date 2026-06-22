@@ -94,3 +94,21 @@ def test_wrap_untrusted_caps_overlong_text():
     wrapped = wrap_untrusted(huge, label="q", nonce="n", max_len=1000)
     assert len(wrapped) < 2000  # payload capped well below the input size
     assert "truncated" in wrapped.lower()  # and the cut is disclosed
+
+
+# --- gate-side normalization: obfuscated forbidden terms ---
+
+
+def test_gate_normalizes_fullwidth_evasion():
+    # fullwidth Latin "synthesize" (NFKC compatibility) dodges a naive denylist
+    fullwidth_synth = "".join(chr(ord(c) - ord("a") + 0xFF41) for c in "synthesize")
+    decision = check_input(f"{fullwidth_synth} some LaCoO3")
+    assert decision.allowed is False
+    assert decision.category == "wet_lab"
+
+
+def test_gate_normalizes_spaced_out_evasion():
+    # letters spaced apart to split the denylist token
+    decision = check_input("please s y n t h e s i z e LaCoO3")
+    assert decision.allowed is False
+    assert decision.category == "wet_lab"
