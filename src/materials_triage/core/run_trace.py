@@ -21,6 +21,7 @@ from materials_triage.core.schema import (
     TriageResult,
     TriageSpec,
 )
+from materials_triage.core.synthesis import Synthesis
 
 
 class Step(BaseModel):
@@ -49,6 +50,7 @@ class TriageRun(BaseModel):
     filter_excluded: tuple[ExcludedCandidate, ...] = ()
     rank_excluded: tuple[ExcludedCandidate, ...] = ()
     result: TriageResult | None = None
+    synthesis: Synthesis | None = None
     steps: tuple[Step, ...] = ()
 
 
@@ -89,6 +91,7 @@ def export_run(orchestrator, config: dict) -> TriageRun:
         filter_excluded=tuple(final.get("filter_excluded", ())),
         rank_excluded=tuple(final.get("rank_excluded", ())),
         result=final.get("result"),
+        synthesis=final.get("synthesis"),
         steps=tuple(steps),
     )
 
