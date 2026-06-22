@@ -97,7 +97,10 @@ def _requests_transport(base_url: str) -> HttpGet:
 def _doc_to_candidate(doc: dict) -> Candidate:
     """Turn one SummaryDoc into a provenance-tagged Candidate."""
     material_id = doc["material_id"]
-    provenance = Provenance(source=SOURCE_NAME, record_id=material_id)
+    # Every summary-endpoint property MP serves is DFT-computed (the endpoint
+    # contract; corroborated per value by origins[].task_id), so the whole doc's
+    # provenance is computational.
+    provenance = Provenance(source=SOURCE_NAME, record_id=material_id, method="computational")
     properties = {
         name: _property_value(doc[name], unit, provenance)
         for name, unit in FIELD_UNITS.items()

@@ -73,7 +73,7 @@ def _pv_work():
 def _passage(**overrides):
     """Build a valid LiteraturePassage, overriding individual fields per test."""
     fields = dict(
-        provenance=Provenance(source="openalex", record_id="W1"),
+        provenance=Provenance(source="openalex", record_id="W1", method="literature"),
         title="A study of perovskite oxides",
         authors=["Doe, J."],
         year=2020,
@@ -146,7 +146,9 @@ def test_parse_work_happy_path():
     """A full OpenAlex work parses into a fully-populated passage."""
     passage = _parse_work(_openalex_work())
 
-    assert passage.provenance == Provenance(source="openalex", record_id="W123")
+    assert passage.provenance == Provenance(
+        source="openalex", record_id="W123", method="literature"
+    )
     assert passage.title == "Perovskite oxides for oxygen evolution"
     assert passage.authors == ["Jane Doe", "Sam Roe"]
     assert passage.year == 2021
@@ -246,17 +248,17 @@ def test_search_keeps_work_with_blank_title_but_abstract():
 def test_rank_orders_by_relevance():
     """A passage sharing the query terms ranks above ones that don't."""
     relevant = _passage(
-        provenance=Provenance(source="openalex", record_id="W-rel"),
+        provenance=Provenance(source="openalex", record_id="W-rel", method="literature"),
         title="Oxygen evolution reaction",
         text="oxygen evolution catalyst materials for water splitting",
     )
     battery = _passage(
-        provenance=Provenance(source="openalex", record_id="W-bat"),
+        provenance=Provenance(source="openalex", record_id="W-bat", method="literature"),
         title="Lithium battery anodes",
         text="graphite anode capacity in lithium ion cells",
     )
     photovoltaic = _passage(
-        provenance=Provenance(source="openalex", record_id="W-pv"),
+        provenance=Provenance(source="openalex", record_id="W-pv", method="literature"),
         title="Silicon photovoltaics",
         text="solar cell efficiency in crystalline silicon devices",
     )
@@ -269,17 +271,17 @@ def test_rank_orders_by_relevance():
 def test_rank_counts_title_terms():
     """A query term present only in the title still lifts that passage."""
     title_hit = _passage(
-        provenance=Provenance(source="openalex", record_id="W-title"),
+        provenance=Provenance(source="openalex", record_id="W-title", method="literature"),
         title="Perovskite solar absorbers",
         text="this abstract discusses unrelated thin-film deposition methods",
     )
     other_a = _passage(
-        provenance=Provenance(source="openalex", record_id="W-a"),
+        provenance=Provenance(source="openalex", record_id="W-a", method="literature"),
         title="Graphite anodes",
         text="capacity fade in lithium ion battery cells over cycling",
     )
     other_b = _passage(
-        provenance=Provenance(source="openalex", record_id="W-b"),
+        provenance=Provenance(source="openalex", record_id="W-b", method="literature"),
         title="Zeolite catalysis",
         text="acid site density governs cracking selectivity in zeolites",
     )
@@ -292,13 +294,16 @@ def test_rank_counts_title_terms():
 def test_rank_populates_score():
     """Ranked passages carry their BM25 score (nonzero for a real match)."""
     a = _passage(
-        provenance=Provenance(source="openalex", record_id="W-a"), text="oxygen evolution catalyst"
+        provenance=Provenance(source="openalex", record_id="W-a", method="literature"),
+        text="oxygen evolution catalyst",
     )
     b = _passage(
-        provenance=Provenance(source="openalex", record_id="W-b"), text="lithium battery anode"
+        provenance=Provenance(source="openalex", record_id="W-b", method="literature"),
+        text="lithium battery anode",
     )
     c = _passage(
-        provenance=Provenance(source="openalex", record_id="W-c"), text="silicon solar cell"
+        provenance=Provenance(source="openalex", record_id="W-c", method="literature"),
+        text="silicon solar cell",
     )
 
     ranked = _rank("oxygen evolution", [a, b, c])
@@ -314,13 +319,16 @@ def test_rank_empty_pool_returns_empty():
 def test_rank_keeps_zero_relevance_in_stable_order():
     """A query matching nothing still returns all passages, score 0.0, input order."""
     first = _passage(
-        provenance=Provenance(source="openalex", record_id="W-1"), text="alpha beta gamma"
+        provenance=Provenance(source="openalex", record_id="W-1", method="literature"),
+        text="alpha beta gamma",
     )
     second = _passage(
-        provenance=Provenance(source="openalex", record_id="W-2"), text="delta epsilon zeta"
+        provenance=Provenance(source="openalex", record_id="W-2", method="literature"),
+        text="delta epsilon zeta",
     )
     third = _passage(
-        provenance=Provenance(source="openalex", record_id="W-3"), text="eta theta iota"
+        provenance=Provenance(source="openalex", record_id="W-3", method="literature"),
+        text="eta theta iota",
     )
 
     ranked = _rank("nonexistentterm", [first, second, third])

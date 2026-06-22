@@ -35,7 +35,9 @@ def test_concrete_adapter_output_flows_through_hard_filters():
             "band_gap": PropertyValue(
                 value=2.0,
                 unit="eV",
-                provenance=Provenance(source="Materials Project", record_id="mp-x"),
+                provenance=Provenance(
+                    source="Materials Project", record_id="mp-x", method="computational"
+                ),
             )
         },
     )

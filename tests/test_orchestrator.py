@@ -75,7 +75,9 @@ def test_state_channels_round_trip_domain_objects_through_the_checkpointer():
     objects without flattening them. If a channel were missing or lossy, the
     audit export would silently drop provenance, missing-data flags, exclusion
     reasons, or citations — so this asserts all four survive a run."""
-    provenance = Provenance(source="Materials Project", record_id="mp-aaaaadyf")
+    provenance = Provenance(
+        source="Materials Project", record_id="mp-aaaaadyf", method="computational"
+    )
     candidate = Candidate(
         identifier="mp-aaaaadyf",
         formula="ZnO",
@@ -158,7 +160,9 @@ class _FakeAdapter(SourceAdapter):
 
 
 def _candidate(identifier, band_gap):
-    provenance = Provenance(source="Materials Project", record_id=identifier)
+    provenance = Provenance(
+        source="Materials Project", record_id=identifier, method="computational"
+    )
     return Candidate(
         identifier=identifier,
         formula="ZnO",
@@ -220,7 +224,9 @@ def test_filter_and_ranking_exclusions_live_in_separate_authoritative_channels()
     )
 
     def candidate(identifier, band_gap, density=None):
-        provenance = Provenance(source="Materials Project", record_id=identifier)
+        provenance = Provenance(
+            source="Materials Project", record_id=identifier, method="computational"
+        )
         properties = {"band_gap": PropertyValue(value=band_gap, unit="eV", provenance=provenance)}
         if density is not None:
             properties["density"] = PropertyValue(

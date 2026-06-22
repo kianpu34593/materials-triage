@@ -25,6 +25,7 @@ class Provenance(BaseModel):
 
     source: str = Field(min_length=1)
     record_id: str = Field(min_length=1)
+    method: Literal["experimental", "computational", "ml_predicted", "literature"]
 
 
 class PropertyValue(BaseModel):
