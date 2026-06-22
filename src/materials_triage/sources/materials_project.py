@@ -64,8 +64,11 @@ class MaterialsProjectAdapter(SourceAdapter):
 
     def retrieve(self, spec: TriageSpec) -> list[Candidate]:
         headers = {"X-API-KEY": self._api_key}
-        envelope = self._http_get("/materials/summary/", _query_params(spec), headers)
-        return [_doc_to_candidate(doc) for doc in envelope["data"]]
+        docs = self._http_get("/materials/summary/", _query_params(spec), headers)["data"]
+        # The functional isn't in the summary; resolve every retrieved value's task
+        # and read its run_type in one batched call, then stamp each provenance.
+        run_types = _fetch_run_types(self._http_get, headers, _page_task_ids(docs))
+        return [_doc_to_candidate(doc, run_types) for doc in docs]
 
 
 #: Identity fields always requested alongside the spec's properties.
@@ -80,7 +83,8 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
     """
     properties = {c.property_name for c in spec.constraints}
     properties |= {t.property_name for t in spec.ranking_targets}
-    fields = list(_IDENTITY_FIELDS) + sorted(properties)
+    # origins is the per-property bridge to the task carrying each value's XC functional.
+    fields = list(_IDENTITY_FIELDS) + ["origins"] + sorted(properties)
     params = {"_fields": ",".join(fields), "_limit": str(_DEFAULT_LIMIT)}
     # Composition scoping is pushed server-side; the numeric bounds stay with
     # apply_hard_filters, which remains the authority on what survives. Only the
@@ -154,23 +158,40 @@ def _field_task_id(field: str, origin_index: Mapping[str, str]) -> str | None:
     return origin_index.get(origin_name)
 
 
-def _doc_to_candidate(doc: dict) -> Candidate:
-    """Turn one SummaryDoc into a provenance-tagged Candidate."""
+def _page_task_ids(docs: list[dict]) -> list[str]:
+    """Every retrieved value's task_id across a page of docs — the batch whose
+    run_types we fetch once. Fields with no traceable task contribute nothing.
+    """
+    ids: list[str] = []
+    for doc in docs:
+        origin_index = _origin_task_ids(doc.get("origins"))
+        for name in FIELD_UNITS:
+            if name in doc and (task_id := _field_task_id(name, origin_index)):
+                ids.append(task_id)
+    return ids
+
+
+def _doc_to_candidate(doc: dict, run_types: Mapping[str, str]) -> Candidate:
+    """Turn one SummaryDoc into a Candidate whose every value carries its own
+    provenance — including the XC functional of the task that produced it.
+    """
     material_id = doc["material_id"]
-    # Every summary-endpoint property MP serves is DFT-computed (the endpoint
-    # contract; corroborated per value by origins[].task_id), so the whole doc's
-    # provenance is computational.
-    provenance = Provenance(source=SOURCE_NAME, record_id=material_id, method="computational")
-    properties = {
-        name: _property_value(doc[name], unit, provenance)
-        for name, unit in FIELD_UNITS.items()
-        if name in doc  # a field never returned stays absent; a returned null is "missing"
-    }
-    return Candidate(
-        identifier=material_id,
-        formula=doc["formula_pretty"],
-        properties=properties,
-    )
+    origin_index = _origin_task_ids(doc.get("origins"))
+    properties = {}
+    for name, unit in FIELD_UNITS.items():
+        if name not in doc:  # a field never returned stays absent; a returned null is "missing"
+            continue
+        task_id = _field_task_id(name, origin_index)
+        # Every summary value MP serves is DFT-computed (the endpoint contract);
+        # the functional is the producing task's run_type, or unknown if untraceable.
+        provenance = Provenance(
+            source=SOURCE_NAME,
+            record_id=material_id,
+            method="computational",
+            xc_functional=run_types.get(task_id) if task_id else None,
+        )
+        properties[name] = _property_value(doc[name], unit, provenance)
+    return Candidate(identifier=material_id, formula=doc["formula_pretty"], properties=properties)
 
 
 def _property_value(raw: float | None, unit: str, provenance: Provenance) -> PropertyValue:

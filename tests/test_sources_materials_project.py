@@ -104,6 +104,91 @@ def test_fetch_run_types_skips_the_call_when_there_are_no_task_ids():
     assert _fetch_run_types(transport, {}, []) == {}
 
 
+def _two_endpoint(summary: dict, tasks: dict):
+    """A transport that answers the summary and tasks endpoints by URL (offline)."""
+
+    def transport(url, params, headers):
+        return tasks if url == "/materials/tasks/" else summary
+
+    return MaterialsProjectAdapter(http_get=transport)
+
+
+def test_retrieve_stamps_each_property_with_its_own_xc_functional():
+    """The payoff: a value's provenance carries the functional of the task that
+    produced IT — band_gap (GGA bandstructure) and the energy (r2SCAN) differ
+    within one material, traced via origins -> tasks run_type."""
+    summary = {
+        "data": [
+            {
+                "material_id": "mp-x",
+                "formula_pretty": "Ac2O3",
+                "band_gap": 3.0,
+                "formation_energy_per_atom": -3.0,
+                "origins": [
+                    {"name": "electronic_structure", "task_id": "t-bands"},
+                    {"name": "energy", "task_id": "t-energy"},
+                ],
+            }
+        ],
+        "meta": {},
+    }
+    tasks = {
+        "data": [
+            {"task_id": "t-bands", "run_type": "GGA"},
+            {"task_id": "t-energy", "run_type": "r2SCAN"},
+        ]
+    }
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        ranking_targets=(
+            RankingTarget(
+                property_name="formation_energy_per_atom", direction="minimize", weight=1.0
+            ),
+        ),
+    )
+
+    props = _two_endpoint(summary, tasks).retrieve(spec)[0].properties
+
+    assert props["band_gap"].provenance.xc_functional == "GGA"
+    assert props["formation_energy_per_atom"].provenance.xc_functional == "r2SCAN"
+
+
+def test_retrieve_leaves_xc_functional_none_when_the_origin_is_absent():
+    """A property with no origin doc (no elasticity run) gets no functional —
+    honestly unknown, not fabricated."""
+    summary = {
+        "data": [
+            {
+                "material_id": "mp-x",
+                "formula_pretty": "Ac2O3",
+                "bulk_modulus": 200.0,
+                "origins": [{"name": "energy", "task_id": "t-energy"}],
+            }
+        ],
+        "meta": {},
+    }
+    tasks = {"data": [{"task_id": "t-energy", "run_type": "r2SCAN"}]}
+    spec = TriageSpec(constraints=(Constraint(property_name="bulk_modulus", min=1.0),))
+
+    props = _two_endpoint(summary, tasks).retrieve(spec)[0].properties
+
+    assert props["bulk_modulus"].provenance.xc_functional is None
+
+
+def test_retrieve_requests_origins_to_trace_the_functional():
+    """The adapter must ask the summary endpoint for origins, the bridge from a
+    value to the task carrying its functional."""
+    captured: dict = {}
+
+    def transport(url, params, headers):
+        captured.setdefault("summary_params", params)
+        return {"data": [], "meta": {}}
+
+    MaterialsProjectAdapter(http_get=transport).retrieve(_spec())
+
+    assert "origins" in captured["summary_params"]["_fields"].split(",")
+
+
 def test_retrieve_maps_a_one_doc_payload_to_a_candidate():
     """A single SummaryDoc becomes one Candidate carrying its returned id, pretty
     formula, and band_gap pinned to eV (the payload never states units)."""
