@@ -1,4 +1,4 @@
-# Session Handoff - 2026-06-22 13:12
+# Session Handoff - 2026-06-22 16:17
 
 > Single living handoff, git-tracked at `docs/handoff.md` (PR #35). Do NOT recreate dated copies or
 > a `docs/handoffs/` subdir — untracked handoffs get wiped by parallel sessions' `git clean`. Keep
@@ -106,6 +106,11 @@ merged (#48/#49) — the real build re-implements via TDD.
 - `docs/design/0003-orchestrator-on-langgraph.md` (ADR, #40) · `0004-guardrail-architecture-threat-model.md`
   (ADR, #42; **expanded** with wrapper construction + attack-surface table, #43).
 - `docs/design/0001-retrieval-rest-adapters.md` (#29) · `0002-literature-abstracts-only.md` (#31).
+- `docs/design/0005-hosting-and-step-cache.md` — **hosting/billing/step-cache ADR (Session 10, this
+  PR on `docs/hosting-adr-0005`).** Was force-added (`git add -f`) past a stale local
+  `.git/info/exclude` line 9 that pre-emptively excluded this exact path; once merged the file is
+  tracked normally and that exclude line can be deleted. `.lavish/` is now in the tracked `.gitignore`
+  (was only in `.git/info/exclude`).
 - `notebooks/deterministic_pipeline_demo.ipynb` (#29) · `literature_rag_demo.ipynb` (#32/#33) ·
   one-shot **LLM→spec** and **RAG→spec** demo notebooks (#38, parallel session).
 - `docs/handoff.md` — this file (tracked, #35).
@@ -234,6 +239,35 @@ merged (#48/#49) — the real build re-implements via TDD.
 - **Synthesis ordering-fidelity is NOT enforced.** Observed: the prose called a candidate "first" that
   the deterministic ranker placed fourth — grounding passed (ids resolve) but ordering wasn't checked.
   The narrative must agree with the numeric rank (folded into #40).
+- **— Session 10 (2026-06-22): hosting & step-cache design (brainstorm, no v1 code) —**
+- **Frontend = render-only; backend = the whole agent.** The chat UI + the right-side 9-step banner
+  (a live render of the `TriageRun`/checkpoint stream) are `web/`; everything that touches secrets or
+  holds the paused-run state is `server/`. The HITL `interrupt()` makes a stateful backend mandatory.
+- **Bedrock has NO paste-able user API key** (auth is AWS IAM / SigV4) — so "BYOK on Bedrock" is
+  awkward by nature. Standard practice = **Pattern 1: pooled account + meter-and-bill** ("their
+  account" = an account on *our* platform). True BYO-spend is Pattern 4 (paste an Anthropic key → 2nd
+  `ChatAnthropic` transport) or enterprise Pattern 2 (cross-account IAM `AssumeRole` + `ExternalId`),
+  both deferred. One cloud = **AWS** specifically because Bedrock is there (IAM role, no key juggling).
+- **Monolith on AWS now, designed to split FE/BE later; serverless rejected** (Lambda's 15-min cap +
+  statelessness fight long, *pausable*, streaming runs). **Monorepo** (`server/` + `web/` siblings
+  importing the pure core) — no separate repos; the boundary that matters is "don't pollute the core."
+- **Step cache = the cross-attempt "check."** Content-addressed `key(step)=H(step_name, RECURSIVE
+  resolved_inputs, source_version, llm_salt for LLM steps)`. Recursive inputs + a real `source_version`
+  are the two correctness load-bearers (get either wrong → silently stale science). Decisions: **cache
+  LLM steps for repro + a force-fresh toggle** (global first; bumps `llm_salt`); force-fresh hypothesis
+  cascades downstream *automatically* because keys change. **No TTL** (correctness via `source_version`,
+  age-evict for space). **Global shared cache incl. LLM** — public data ⇒ cross-user reuse is free,
+  zero privacy cost; per-user scoping only on `thread`/`attempt`/lab-memory. Hosted UI adds a NEW
+  `thread`/`attempt` grouping (v1 resume was crash-recovery only). All in **ADR 0005**.
+- **Checkpointer must move off `MemorySaver`** to a durable+shared backend (Postgres/DynamoDB) before
+  >1 instance, or paused HITL runs are lost on restart. Both `view=pi`/`view=audit` read ONE stored
+  `TriageRun` (re-confirms the Session-9 double-LLM-render fix). SSE for step events, POST for actions.
+- **`.git/info/exclude` gotcha:** a prior session put both `.lavish/` (correct) and the exact path
+  `docs/design/0005-hosting-and-step-cache.md` (a hack) into the *local, shared-across-worktrees*
+  exclude file — so the freshly-written ADR showed `git status` clean and would never have committed.
+  A **no-mistakes session was running on the `feat/spec-expressiveness-37` worktree**, so docs work was
+  moved to a separate `docs/hosting-adr-0005` worktree off `origin/main`; the ADR was `git add -f`'d
+  there (leaving the shared exclude untouched to keep the #37 worktree clean for its gate).
 
 ## Work Done (all merged to `main` unless noted)
 *(Append-only history.)*
@@ -315,47 +349,80 @@ merged (#48/#49) — the real build re-implements via TDD.
     **#37** expand spec expressiveness (booleans/counts/element-class — fixes H₂O), **#38** server-side
     filter pushdown, **#39** schema-derived vocabulary, **#40** wire literature RAG into synthesis
     (citations + caveats + ordering-fidelity). Deps wired: #38/#39 ← #37; #40 ← #35 + #20.
+- **Session 10 (2026-06-22) — hosting & step-cache design (brainstorm; no v1 code):**
+  - Briefly explored the **output validator (#20)** via `/tdd` (read the fast-track `validator.py` +
+    `synthesis.py` reference, scoped the slice, surfaced the coupled-vs-decoupled `Synthesis`
+    dependency) — then **paused** because a parallel session is editing the spec (#37).
+  - Long **hosting brainstorm** with Kian: sorted his 3 asks into FE/BE; settled topology (monolith on
+    AWS → splittable), billing (**Pattern 1** pooled+meter; Bedrock has no user API key), repo layout
+    (**monorepo**, `server/` + `web/` siblings), the SSE+POST request/stream protocol incl. the HITL
+    spec-gate pause, the storage layers, and the **content-addressed step cache** (both caching +
+    idempotency + cross-attempt diff; LLM cached-for-repro + force-fresh; no TTL; global shared cache).
+  - **Visualized via `/lavish`** (`.lavish/hosting-design.html`) — Kian reviewed in-browser, requested
+    the §4 flow as a **Mermaid sequence diagram** (applied), and queued answers resolving all 4 open
+    questions (Q1 global force-fresh first · Q2 no-TTL/`source_version` · Q3 global shared cache · Q4
+    → write ADR + add tasks).
+  - **Wrote ADR 0005** (`docs/design/0005-hosting-and-step-cache.md`) and **added 10 harness tasks**
+    (#1–#10) for the hosting build with deps (2←1, 3←2, 4←1, 7←6, 8←7, 9←7+2, 10←2); #1/#5/#6 unblocked.
+  - **Worktree shuffle:** discovered ADR 0005 + `.lavish/` were locally excluded via `.git/info/exclude`
+    (a no-mistakes session is running on the `feat/spec-expressiveness-37` worktree). Reverted a stray
+    `handoff.md` edit there to keep that worktree clean, then moved all docs work to a fresh
+    **`docs/hosting-adr-0005`** worktree off `origin/main`; force-added the ADR, added `.lavish/` to the
+    tracked `.gitignore`. **This PR is docs-only.**
 
 ## Status
-- **Working / merged:** `main` @ **`5f5dc2c`** == `origin/main`. Full deterministic slice + RAG (#17)
-  + hypothesis layer (#32) + Bedrock provider (#21) + **complete LangGraph orchestrator** (#23 retry/
-  HITL #45; #24/#9/#10 audit-export/resume/lab-memory #47) + **input-side guardrails** (#18/#19 + role
-  prompt #46) + ADRs 0001–0004 all live. **178 tests** (175 pass, 3 `live` deselected). No open PRs.
-- **Saved (NOT on `main`):** the fast-track reference implementation on `feat/fast-track-wire-guardrails`
-  (local + `origin`) — full end-to-end wiring + CLI, 196 tests. Port from it during the real build.
-- **Not yet started on `main`:** #34 (wire primitives into orchestrator nodes — still pass-throughs),
-  #20 (output validator), rest of #22 (prompts), #35 (synthesis), #25/#26 (renderers), #27 (CLI),
-  #28 (eval), #29 (design note), #30 (README/CLAUDE finalize), #31 (element-drop reasons), #36 (docs),
-  and the fast-track quality fixes **#37** (spec expressiveness — fixes H₂O), **#38** (server-side
-  pushdown), **#39** (schema-derived vocabulary), **#40** (RAG into synthesis).
-- **Known issues:** Live Bedrock smoke test ~15% flaky by design (mitigated by the merged #45 retry).
-  `stash@{0}` (readme-kid-flowchart WIP) is unmerged — drop it if not wanted.
+- **This worktree:** `docs/hosting-adr-0005` off `origin/main` (`1c174cc`, #50). **Docs-only,
+  uncommitted** as of this writing: new `docs/design/0005-hosting-and-step-cache.md` (force-added past
+  the stale local exclude), `.gitignore` (+`.lavish/`), and this `docs/handoff.md` update. Ready to
+  commit (signed) → PR; **awaiting Kian's go** (don't push while the #37 no-mistakes session runs).
+- **Parallel session:** `feat/spec-expressiveness-37` is mid-flight on **#37 (spec expressiveness)** —
+  a no-mistakes gate is running on its worktree. Recent #37 commits: `BooleanConstraint` (#37),
+  `ElementPredicate` unification, `CountConstraint`. **Do not edit that worktree.**
+- **Working / merged (`main` lineage `5f5dc2c`→`1c174cc`):** full deterministic slice + RAG (#17) +
+  hypothesis layer (#32) + Bedrock provider (#21) + complete LangGraph orchestrator (#23/#24/#9/#10) +
+  input-side guardrails (#18/#19 + role prompt #46) + ADRs 0001–0004. Fast-track reference impl on
+  `feat/fast-track-wire-guardrails` (no PR) — port from it during the real build.
+- **Not yet started on `main`:** #34 (orchestrator nodes still pass-throughs), #20 (output validator),
+  rest of #22 (prompts), #35 (synthesis), #25/#26 (renderers), #27 (CLI), #28 (eval), #29 (design
+  note), #30 (README/CLAUDE finalize), #31 (element-drop reasons), #36 (docs); fast-track quality
+  fixes #37 (in flight) → #38/#39 → #40.
+- **NEW — hosting build (ADR 0005, harness tasks #1–#10, this session):** scaffold `server/` + run
+  API/SSE + HITL-over-HTTP + auth/limits/metering + durable checkpointer + `source_version` + step
+  cache + force-fresh/idempotency + thread/attempt+diff + `web/` frontend. Net-new, **outside the v1
+  deep-plan**; sequence against v1 only after Kian confirms.
+- **Known issues:** Live Bedrock smoke test ~15% flaky by design (mitigated by #45 retry). Stale local
+  `.git/info/exclude` line 9 (the ADR path) becomes deletable once this PR merges. `stash@{0}`
+  (readme-kid-flowchart WIP) still unmerged.
 - **Open threads:** v2 hybrid LLM scope check; v2 debts (RAG tokenizer, DFT/XC comparability);
   cross-source merge (doc-only ladder in `docs/ultimate-design.md`).
 
 ## Next Steps
-*(Real build, resuming TDD — one function at a time, stop for approval after each; see CLAUDE.md.)*
-1. **Pick the next increment.** Natural order from the deep plan's build order: **#20 output validator**
-   (a pure `validate_output(result, synthesis, retrieved_ids)` rejecting ungrounded IDs/citations) →
-   **#35 synthesis step** (grounded, cited `Synthesis`) → **#34 wire** gate/hypothesis/synthesis/
-   validator into the orchestrator nodes. The fast-track branch has a working version of each to port.
-   **Note: #37 (expand spec expressiveness)** is foundational — it changes the `Constraint`/spec model
-   that synthesis, the validator, and the wiring all build against, and it's the highest-leverage fix
-   for the H₂O quality bug — so consider sequencing it early; confirm the order with Kian.
-2. **Confirm the slice with Kian before coding** (ask-before-approaches; don't start until told). For
-   #20: confirm the `Synthesis`/`GroundedClaim` model shape and where it lives (`core/synthesis.py`).
-3. **Build via the `tdd` skill** in a worktree (run pytest with `PYTHONPATH="$PWD/src"`); ship via
-   no-mistakes (bootstrap from the **main repo**, not a worktree: push to `no-mistakes` remote → abort
-   → `axi run --intent`); squash-merge in the GitHub UI; then `/sync-main`. Keep this handoff committed.
-4. **Then:** renderers (#25/#26), CLI (#27), eval harness (#28), design note (#29), README/CLAUDE
-   finalize (#30), element-drop reasons (#31), docs follow-up (#36). **Fast-track quality fixes:**
-   #37 (spec expressiveness) → #38 (server-side pushdown) / #39 (schema-derived vocab) → #40 (RAG into
-   synthesis) — the design note (#29) must articulate this leverage order regardless of build sequence.
+*(One function at a time, stop for approval after each; see CLAUDE.md. Don't start coding until told.)*
+1. **Land this docs PR.** From the `docs/hosting-adr-0005` worktree: signed commit (ADR 0005 +
+   `.gitignore` + handoff), then PR → squash-merge in the GitHub UI → `/sync-main`. **Hold the push
+   until the #37 no-mistakes session finishes** (don't contend the gate). After merge, the stale
+   `.git/info/exclude` line 9 (ADR path) can be deleted.
+2. **Let #37 land first.** The parallel spec-expressiveness work changes the `Constraint`/spec model
+   that #20/#35/#34 all build against — resume v1 only after it merges and Kian confirms sequencing.
+3. **Resume v1 (real build, TDD).** Natural order: **#20 output validator** (pure
+   `validate_output(result, synthesis, retrieved_ids)` rejecting ungrounded IDs/citations; confirm the
+   coupled-vs-decoupled `Synthesis` dependency) → **#35 synthesis** → **#34 wire** the
+   gate/hypothesis/synthesis/validator nodes. Port from `feat/fast-track-wire-guardrails`. Build in a
+   worktree (`PYTHONPATH="$PWD/src"`), ship via no-mistakes (bootstrap from the **main repo**).
+4. **Then:** renderers (#25/#26), CLI (#27), eval (#28), design note (#29 — must articulate the
+   spec-expressiveness > server-filters > prompt leverage order), README/CLAUDE (#30), element-drop
+   reasons (#31), docs (#36).
+5. **Hosting build (when prioritized): harness tasks #1–#10 under ADR 0005.** Start with the unblocked
+   #1 (scaffold `server/`), #5 (durable checkpointer), #6 (`source_version`). Net-new, outside the v1
+   deep-plan — confirm priority vs. finishing v1 first.
 
 ## Context for Next Session
-- **Branch:** `main` @ `5f5dc2c` == `origin/main`; clean except untracked `.mcp.json` (kept). No
-  worktrees. Saved fast-build branch `feat/fast-track-wire-guardrails` (local + origin, no PR) is the
-  reference implementation to port from.
+- **Branch:** active work on **`docs/hosting-adr-0005`** worktree (`/Users/kianpu/Projects/Job
+  search/Takehome/Lila/mt-hosting-docs`, off `origin/main` `1c174cc`) — docs-only ADR 0005 PR pending.
+  A **parallel `feat/spec-expressiveness-37` worktree** (the main repo dir) has a no-mistakes session
+  running — don't touch it. Saved `feat/fast-track-wire-guardrails` (local + origin, no PR) is the
+  reference impl to port from. Clean up the `mt-hosting-docs` worktree (`git worktree remove`) after
+  the docs PR merges.
 - **How to verify merged state:** `python -m pytest -q` (175 passed, 3 deselected), `ruff check .`.
   Live (needs creds): `pytest -m live` (Bedrock via `~/.aws/credentials`, OpenAlex, MP). RAG quick
   check: `OPENALEX_MAILTO=… python -c "from materials_triage.retrieval.rag import LiteratureRAG,

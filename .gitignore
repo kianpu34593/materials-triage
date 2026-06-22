@@ -4,6 +4,9 @@
 # Deep-plan scratchpads (ephemeral)
 Deep-Plan-*.md
 
+# Lavish review artifacts (throwaway HTML review surfaces)
+.lavish/
+
 # macOS
 .DS_Store
 
