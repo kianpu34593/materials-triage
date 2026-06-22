@@ -142,6 +142,23 @@ def _gate_node(state: OrchestratorState) -> dict:
     return {}
 
 
+#: Hard-constraint guidance for the hypothesis prompt. The demo surfaced two
+#: spec-fidelity failure modes once property names were bound: (a) over-aggressive
+#: one-sided thresholds (e.g. formation_energy <= -5.0) that exclude every real
+#: candidate, and (b) a bare lower bound where the goal implies a *window* (a
+#: "semiconductor" wants a moderate band gap, not the widest insulator). This
+#: steers the LLM toward bounds real materials satisfy and two-sided windows where
+#: the goal implies one — improving result quality without inventing facts.
+_BOUND_GUIDANCE = (
+    "\n\nChoose hard constraints that real materials can satisfy — avoid "
+    "over-aggressive one-sided thresholds that would exclude every candidate. "
+    "When the goal implies a target range rather than an extreme (e.g. a "
+    "semiconductor wants a moderate band gap, not the widest possible), set BOTH "
+    "a min and a max to express that window, and leave ranking to express "
+    "'as high/low as possible' preferences."
+)
+
+
 def _vocabulary_clause(vocabulary: Mapping[str, str]) -> str:
     """Render the retrievable-property constraint for the hypothesis prompt: the
     exact property names (with units) the source can populate, and the rule that
@@ -174,6 +191,7 @@ def _hypothesis_prompt(goal: str, prior_error: str | None, vocabulary: Mapping[s
     wrapped = wrap_untrusted(goal, label="user query", nonce=secrets.token_hex(8))
     prompt = f"Propose a materials triage hypothesis for the goal in this data:\n{wrapped}"
     prompt += _vocabulary_clause(vocabulary)
+    prompt += _BOUND_GUIDANCE
     if prior_error is not None:
         prompt += (
             "\n\nYour previous response was rejected because it did not conform "

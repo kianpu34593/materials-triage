@@ -625,6 +625,8 @@ def test_hypothesis_prompt_constrains_proposals_to_the_sources_vocabulary():
     assert "Use ONLY these retrievable property names" in prompt
     assert "band_gap (eV)" in prompt
     assert "density (g/cm³)" in prompt
+    # #22 fidelity: the prompt steers away from candidate-wiping one-sided bounds.
+    assert "avoid" in prompt and "exclude every candidate" in prompt
 
 
 def test_gate_refuses_a_forbidden_request_before_any_llm_call():
