@@ -52,6 +52,12 @@ class MaterialsProjectAdapter(SourceAdapter):
         envelope = self._http_get("/materials/summary/", _query_params(spec), headers)
         return [_doc_to_candidate(doc) for doc in envelope["data"]]
 
+    def property_vocabulary(self) -> Mapping[str, str]:
+        """The summary-API properties this adapter can populate, mapped to their
+        units — exactly the keys ``_doc_to_candidate`` parses, so a hypothesis
+        built from this vocabulary names only properties ``retrieve`` returns."""
+        return FIELD_UNITS
+
 
 #: Identity fields always requested alongside the spec's properties.
 _IDENTITY_FIELDS = ("material_id", "formula_pretty")

@@ -599,6 +599,34 @@ class _CapturingProvider:
         return self._hypothesis
 
 
+class _VocabAdapter(SourceAdapter):
+    """An adapter that declares a property vocabulary (and retrieves nothing) — to
+    check the vocabulary reaches the hypothesis prompt."""
+
+    def retrieve(self, spec):
+        return []
+
+    def property_vocabulary(self):
+        return {"band_gap": "eV", "density": "g/cm³"}
+
+
+def test_hypothesis_prompt_constrains_proposals_to_the_sources_vocabulary():
+    """#1 vocabulary binding: the retrieval source's property names reach the
+    hypothesis prompt with an explicit "use ONLY these" instruction, so the LLM
+    cannot free-name a property (band_gap_eV) the source can't return (band_gap)
+    — which would otherwise drop every candidate as missing-data downstream."""
+    provider = _CapturingProvider(_hypothesis_with_unnormalized_weights())
+    orchestrator = build_orchestrator(adapter=_VocabAdapter(), provider=provider)
+    config = {"configurable": {"thread_id": "vocab"}}
+
+    orchestrator.invoke({"goal": "wide-gap oxide"}, config)  # pauses at spec_build
+
+    prompt = provider.prompts[0]
+    assert "Use ONLY these retrievable property names" in prompt
+    assert "band_gap (eV)" in prompt
+    assert "density (g/cm³)" in prompt
+
+
 def test_gate_refuses_a_forbidden_request_before_any_llm_call():
     """#34 (input policy gate): a goal naming a forbidden capability (here,
     scraping a paywalled source) is refused at the gate node — the run raises

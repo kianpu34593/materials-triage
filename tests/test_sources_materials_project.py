@@ -73,6 +73,23 @@ def test_retrieve_marks_a_null_field_as_missing():
     assert band_gap.unit == "eV"
 
 
+def test_property_vocabulary_lists_exactly_the_parseable_fields_with_units():
+    """The adapter advertises the property names it can populate (mapped to units),
+    so the spec-building prompt binds a hypothesis to retrievable properties. The
+    vocabulary is exactly the keys retrieve parses — band_gap, the two energies,
+    density, and the two moduli — each with the unit retrieve stamps."""
+    vocab = MaterialsProjectAdapter(http_get=lambda *a: {"data": []}).property_vocabulary()
+
+    assert dict(vocab) == {
+        "band_gap": "eV",
+        "energy_above_hull": "eV/atom",
+        "formation_energy_per_atom": "eV/atom",
+        "density": "g/cm³",
+        "bulk_modulus": "GPa",
+        "shear_modulus": "GPa",
+    }
+
+
 def test_retrieve_maps_all_pinned_fields_with_their_units():
     """Every property the adapter knows is mapped with the unit it pins, since the
     payload itself never carries units (band_gap eV, energies eV/atom, density
