@@ -6,9 +6,9 @@ linear edge order and compiled with a checkpointer (the substrate for the #9
 trace export and `resume --from`). Wired so far: the ``gate`` step (the
 deterministic input policy gate), the ``hypothesis`` and ``synthesis`` steps
 (LLM, with retry-on-malformed-output and, for synthesis, grounding retry; the
-user goal confined to a trust-boundary data block) and the ``retrieve`` ->
-``filter`` -> ``rank`` deterministic core. The remaining steps (output_validate,
-render) are pass-throughs their own slices/tasks replace.
+user goal confined to a trust-boundary data block), the ``retrieve`` ->
+``filter`` -> ``rank`` deterministic core, and the ``output_validate`` grounding
+gate. Only ``render`` remains a pass-through until its slice lands.
 """
 
 import math
@@ -22,6 +22,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
+from materials_triage.agent.validator import validate_output
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
 from materials_triage.core.ranking import rank
 from materials_triage.core.schema import (
@@ -138,9 +139,8 @@ class OrchestratorState(TypedDict, total=False):
 
 
 def _passthrough(state: OrchestratorState) -> dict:
-    """A skeleton node that contributes no state update yet. Backs the steps not
-    wired so far — output_validate, render — which their own slices / tasks fill
-    in (gate, hypothesis, spec_build, the core and synthesis are real nodes)."""
+    """A skeleton node that contributes no state update yet. Backs ``render``, the
+    only step not wired so far (every other step is now a real node)."""
     return {}
 
 
@@ -437,6 +437,19 @@ def _make_synthesis_node(
     return synthesis
 
 
+def _output_validate_node(state: OrchestratorState) -> dict:
+    """The output validator (step 8): refuse to render anything ungrounded. Every
+    presented candidate and every narrative citation must resolve to a retrieved
+    record id, else UngroundedOutputError halts the run. With no result yet there
+    is nothing to validate. This contributes no state — it is a pure gate."""
+    result = state.get("result")
+    if result is None:
+        return {}
+    retrieved_ids = {c.identifier for c in state.get("candidates", ())}
+    validate_output(result, state.get("synthesis"), retrieved_ids)
+    return {}
+
+
 def build_orchestrator(
     adapter: SourceAdapter | None = None,
     provider: HypothesisProvider | None = None,
@@ -464,6 +477,7 @@ def build_orchestrator(
         "filter": _filter_node,
         "rank": _rank_node,
         "synthesis": _make_synthesis_node(synthesis_provider),
+        "output_validate": _output_validate_node,
     }
     builder = StateGraph(OrchestratorState)
     for step in WORKFLOW_STEPS:
