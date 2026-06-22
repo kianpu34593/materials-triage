@@ -10,9 +10,21 @@ import sys
 
 import pytest
 
-from materials_triage.agent.llm import HypothesisProvider
+from materials_triage.agent.llm import HypothesisProvider, _role_messages
+from materials_triage.agent.prompts import ROLE_SYSTEM_PROMPT
 from materials_triage.core.hypothesis import ConstraintProposal, Hypothesis
 from materials_triage.core.schema import Constraint
+
+
+def test_role_messages_prepends_system_role_to_human_prompt():
+    """Every real Bedrock call carries the role in the system slot (Layer 3), so the
+    role/trust-boundary directive is present on every call and cannot be forgotten by
+    a call site; the rendered prompt is the human content."""
+    messages = _role_messages("rendered hypothesis prompt")
+    assert messages == [
+        ("system", ROLE_SYSTEM_PROMPT),
+        ("human", "rendered hypothesis prompt"),
+    ]
 
 
 def _canned_hypothesis() -> Hypothesis:
