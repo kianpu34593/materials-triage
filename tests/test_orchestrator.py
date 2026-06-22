@@ -17,6 +17,7 @@ from materials_triage.agent.orchestrator import (
     HypothesisConformanceError,
     SpecCompilationError,
     build_orchestrator,
+    resume_run,
 )
 from materials_triage.core.hypothesis import (
     Citation,
@@ -515,3 +516,62 @@ def test_spec_build_rejects_a_resume_value_that_is_not_a_triagespec():
 
     with pytest.raises(SpecCompilationError, match="must be a TriageSpec"):
         orchestrator.invoke(Command(resume="not a spec"), config)
+
+
+class _CountingProvider:
+    """A provider that returns a fixed valid Hypothesis and counts its calls, so
+    a resume can prove the hypothesis step was NOT re-invoked."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def propose(self, prompt):
+        self.calls += 1
+        return _valid_hypothesis()
+
+
+class _FlakyAdapter(SourceAdapter):
+    """Raises an infra error on the first retrieve (transient outage), succeeds
+    on the second — mimicking a recovered backend."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def retrieve(self, spec):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("Materials Project transiently unavailable")
+        return [_candidate("mp-1", 4.0)]
+
+
+def test_resume_run_recovers_from_an_infra_failure_reusing_upstream_steps():
+    """Slice 7 (crash recovery): an infra error (not a ValidationError, so not
+    retried in-node) propagates and stops the run at the failing step. resume_run
+    continues from that checkpoint — re-running the failed step (now that the
+    backend recovered) while REUSING every upstream step's result, so the LLM
+    hypothesis call is not re-paid for."""
+    provider = _CountingProvider()
+    adapter = _FlakyAdapter()
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=2.0),),
+        ranking_targets=(
+            RankingTarget(property_name="band_gap", direction="maximize", weight=1.0),
+        ),
+    )
+    orchestrator = build_orchestrator(adapter=adapter, provider=provider)
+    config = {"configurable": {"thread_id": "resume-infra"}}
+
+    # First attempt: hypothesis runs, then retrieve hits the outage and the run
+    # stops (infra errors are deliberately not retried in-node).
+    with pytest.raises(RuntimeError, match="transiently unavailable"):
+        orchestrator.invoke({"goal": "wide-gap oxide", "run_id": "r", "spec": spec}, config)
+    assert provider.calls == 1
+    assert adapter.calls == 1
+
+    final = resume_run(orchestrator, config)
+
+    # The hypothesis step was reused from the checkpoint (not re-invoked); only
+    # the failed step onward re-ran, and the run completed.
+    assert provider.calls == 1
+    assert adapter.calls == 2
+    assert [sc.candidate.identifier for sc in final["result"].ranked] == ["mp-1"]
