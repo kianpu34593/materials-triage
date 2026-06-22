@@ -57,6 +57,28 @@ def test_retrieve_stores_the_returned_id_not_the_query_id():
     assert candidate.properties["band_gap"].provenance.source == "Materials Project"
 
 
+def test_retrieve_collapses_a_voigt_reuss_hill_modulus_dict_to_its_vrh_scalar():
+    """The MP summary API returns elastic moduli as a {voigt, reuss, vrh} dict, not
+    a number. The adapter collapses it to the VRH average (the standard scalar to
+    rank/filter on) so the modulus is a usable float, not a crash."""
+    envelope = {
+        "data": [
+            {
+                "material_id": "mp-mod",
+                "formula_pretty": "MgO",
+                "bulk_modulus": {"voigt": 305.263, "reuss": 292.8, "vrh": 299.032},
+            }
+        ],
+        "meta": {},
+    }
+
+    bulk = _fixed(envelope).retrieve(_spec())[0].properties["bulk_modulus"]
+
+    assert bulk.value == 299.032
+    assert bulk.unit == "GPa"
+    assert bulk.missing is False
+
+
 def test_retrieve_marks_a_null_field_as_missing():
     """A field present in the payload but null carries no number, so it becomes a
     flagged-missing PropertyValue (value=None) rather than a fabricated zero."""

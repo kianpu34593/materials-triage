@@ -111,6 +111,19 @@ def _doc_to_candidate(doc: dict) -> Candidate:
     )
 
 
-def _property_value(raw: float | None, unit: str, provenance: Provenance) -> PropertyValue:
-    """Wrap a raw payload number as a PropertyValue; a null becomes flagged-missing."""
-    return PropertyValue(value=raw, unit=unit, missing=raw is None, provenance=provenance)
+def _scalar(raw: float | dict | None) -> float | None:
+    """Collapse a raw payload value to a scalar. The MP summary API returns the
+    elastic moduli (bulk_modulus, shear_modulus) not as a number but as a
+    Voigt-Reuss-Hill dict ``{"voigt": .., "reuss": .., "vrh": ..}``; the VRH
+    average is the standard single value to rank/filter on, so a dict collapses to
+    its ``vrh`` entry. Plain numbers pass through; a null stays null (missing)."""
+    if isinstance(raw, dict):
+        return raw.get("vrh")
+    return raw
+
+
+def _property_value(raw: float | dict | None, unit: str, provenance: Provenance) -> PropertyValue:
+    """Wrap a raw payload value as a PropertyValue; a null (or a modulus dict with
+    no VRH average) becomes flagged-missing."""
+    value = _scalar(raw)
+    return PropertyValue(value=value, unit=unit, missing=value is None, provenance=provenance)
