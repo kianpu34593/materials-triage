@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from materials_triage.core.schema import (
     BooleanConstraint,
     Constraint,
+    CountConstraint,
     ElementPredicate,
     RankingTarget,
     TriageSpec,
@@ -64,6 +65,13 @@ class BooleanConstraintProposal(_ProposalBase):
     boolean_constraint: BooleanConstraint
 
 
+class CountConstraintProposal(_ProposalBase):
+    """A cited bridge that compiles to a hard ``CountConstraint``."""
+
+    kind: Literal["count_constraint"] = "count_constraint"
+    count_constraint: CountConstraint
+
+
 class RankingProposal(_ProposalBase):
     """A cited bridge that compiles to a soft ``RankingTarget``."""
 
@@ -84,7 +92,11 @@ class ElementPredicateProposal(_ProposalBase):
 #: structured output reliably emit the right payload. A deterministic compile step
 #: assembles the accepted proposals into a ``TriageSpec``.
 Proposal = Annotated[
-    ConstraintProposal | BooleanConstraintProposal | RankingProposal | ElementPredicateProposal,
+    ConstraintProposal
+    | BooleanConstraintProposal
+    | CountConstraintProposal
+    | RankingProposal
+    | ElementPredicateProposal,
     Field(discriminator="kind"),
 ]
 
@@ -117,11 +129,15 @@ def compile_spec(proposals: tuple[Proposal, ...]) -> TriageSpec:
     booleans = tuple(p.boolean_constraint for p in proposals if p.kind == "boolean_constraint")
     targets = tuple(p.ranking_target for p in proposals if p.kind == "ranking_target")
     predicates = tuple(p.element_predicate for p in proposals if p.kind == "element_predicate")
+    # The spec holds a single composition-cardinality bound; take the first count
+    # proposal (the human gate reviews the compiled spec, so a stray second is caught).
+    counts = [p.count_constraint for p in proposals if p.kind == "count_constraint"]
     return TriageSpec(
         constraints=constraints,
         boolean_constraints=booleans,
         ranking_targets=_normalize_weights(targets),
         element_predicates=predicates,
+        count=counts[0] if counts else None,
     )
 
 

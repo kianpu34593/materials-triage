@@ -137,6 +137,31 @@ class ElementPredicate(BaseModel):
         return self
 
 
+class CountConstraint(BaseModel):
+    """A hard filter on the number of distinct elements in a composition.
+
+    A bound on composition cardinality ("simple compositions" → few elements),
+    expressed as an inclusive ``min`` and/or ``max``. Modelled as its own typed
+    field rather than a numeric :class:`Constraint` on a magic property name,
+    because it takes part in a cross-field coherence check with the element
+    predicates (you cannot require more distinct elements than the cap allows) — a
+    typed slot keeps that invariant robust instead of string-matching a name.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    min: int | None = Field(default=None, ge=1)
+    max: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _bounds_some_count(self) -> Self:
+        if self.min is None and self.max is None:
+            raise ValueError("a count constraint must set at least one of min or max")
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError("a count constraint's min cannot exceed its max")
+        return self
+
+
 class RankingTarget(BaseModel):
     """A soft scoring preference on one property: the ranker normalises the
     property in the given direction and weights it in the weighted average.
@@ -165,7 +190,7 @@ class TriageSpec(BaseModel):
     boolean_constraints: tuple[BooleanConstraint, ...] = ()
     ranking_targets: tuple[RankingTarget, ...] = ()
     element_predicates: tuple[ElementPredicate, ...] = ()
-    max_nelements: int | None = Field(default=None, ge=1)
+    count: CountConstraint | None = None
 
     @model_validator(mode="after")
     def _has_a_hard_filter(self) -> Self:
@@ -197,8 +222,8 @@ class TriageSpec(BaseModel):
         # ElementPredicate validates its own members, so the spec only checks
         # cross-predicate coherence: elements that must ALL be present (the union of
         # every "all"-quantified predicate) cannot also be forbidden by a "none"
-        # predicate, nor outnumber the max_nelements cap. ("any" members need not
-        # all be present, so they bind neither check.)
+        # predicate, nor outnumber the count cap. ("any" members need not all be
+        # present, so they bind neither check.)
         must_have = frozenset(
             e for p in self.element_predicates if p.quantifier == "all" for e in p.members
         )
@@ -210,10 +235,11 @@ class TriageSpec(BaseModel):
             raise ValueError(
                 f"elements cannot be both required and excluded: {sorted(contradictory)}"
             )
-        if self.max_nelements is not None and len(must_have) > self.max_nelements:
+        cap = self.count.max if self.count is not None else None
+        if cap is not None and len(must_have) > cap:
             raise ValueError(
                 f"required elements demand {len(must_have)} distinct "
-                f"elements but max_nelements caps it at {self.max_nelements}"
+                f"elements but the count constraint caps it at {cap}"
             )
         return self
 

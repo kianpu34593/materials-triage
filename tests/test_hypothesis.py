@@ -13,6 +13,7 @@ from materials_triage.core.hypothesis import (
     BooleanConstraintProposal,
     Citation,
     ConstraintProposal,
+    CountConstraintProposal,
     ElementPredicateProposal,
     Hypothesis,
     RankingProposal,
@@ -21,6 +22,7 @@ from materials_triage.core.hypothesis import (
 from materials_triage.core.schema import (
     BooleanConstraint,
     Constraint,
+    CountConstraint,
     ElementPredicate,
     RankingTarget,
     TriageSpec,
@@ -254,6 +256,25 @@ def test_compile_spec_maps_element_predicates_onto_the_spec():
         ElementPredicate(quantifier="any", members=frozenset({"Fe", "Zn", "Ti"})),
         ElementPredicate(quantifier="none", members=frozenset({"Pb"})),
     )
+
+
+def test_compile_spec_maps_a_count_constraint_onto_the_spec():
+    """A count_constraint proposal compiles to a bound on composition cardinality —
+    'simple compositions' means few distinct elements. It is a typed field, not a
+    numeric Constraint on a magic property name, so the spec keeps a robust
+    cross-check against the element predicates."""
+    spec = compile_spec(
+        (
+            _constraint_proposal(min=1.0),
+            CountConstraintProposal(
+                count_constraint=CountConstraint(max=3),
+                rationale="simple compositions",
+                confidence=0.7,
+            ),
+        )
+    )
+
+    assert spec.count == CountConstraint(max=3)
 
 
 def test_compile_spec_propagates_duplicate_constraint_rejection():
