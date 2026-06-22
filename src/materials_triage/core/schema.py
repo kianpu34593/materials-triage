@@ -194,8 +194,13 @@ class TriageSpec(BaseModel):
 
     @model_validator(mode="after")
     def _has_a_hard_filter(self) -> Self:
-        if not self.constraints:
-            raise ValueError("a spec must have at least one constraint")
+        if not (
+            self.constraints
+            or self.boolean_constraints
+            or self.element_predicates
+            or self.count is not None
+        ):
+            raise ValueError("a spec must have at least one hard filter")
         seen: set[str] = set()
         for c in self.constraints:
             if c.property_name in seen:
@@ -204,6 +209,14 @@ class TriageSpec(BaseModel):
                     "combine bounds into a single constraint"
                 )
             seen.add(c.property_name)
+        seen_bool: set[str] = set()
+        for b in self.boolean_constraints:
+            if b.property_name in seen_bool:
+                raise ValueError(
+                    f"boolean property {b.property_name!r} is constrained more than once; "
+                    "a boolean property should have a single required value"
+                )
+            seen_bool.add(b.property_name)
         ranked: set[str] = set()
         for t in self.ranking_targets:
             if t.property_name in ranked:

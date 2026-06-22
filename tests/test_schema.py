@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from materials_triage.core.schema import (
+    BooleanConstraint,
     Candidate,
     Constraint,
     CountConstraint,
@@ -231,11 +232,45 @@ def test_element_predicate_rejects_non_element_symbols():
         ElementPredicate(quantifier="any", members=frozenset({"Fe", "Xx"}))
 
 
-def test_triagespec_requires_at_least_one_constraint():
-    """A spec with no hard filter is not a triage — without any constraint,
+def test_triagespec_requires_at_least_one_hard_filter():
+    """A spec with no hard filter is not a triage — without any gating rule,
     nothing is gated, so the spec is refused at construction."""
-    with pytest.raises(ValidationError, match="at least one constraint"):
+    with pytest.raises(ValidationError, match="at least one hard filter"):
         TriageSpec()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"boolean_constraints": (BooleanConstraint(property_name="is_stable", required=True),)},
+        {
+            "element_predicates": (
+                ElementPredicate(quantifier="any", members=frozenset({"Fe", "Co"})),
+            )
+        },
+        {"count": CountConstraint(max=3)},
+    ],
+)
+def test_triagespec_accepts_any_kind_of_hard_filter(kwargs):
+    """Any hard-filter kind satisfies the gate, not only a numeric constraint —
+    a request whose only gate is a boolean, an element predicate, or a count cap
+    is a valid triage and must construct without a numeric bound."""
+    spec = TriageSpec(**kwargs)
+
+    assert spec.constraints == ()
+
+
+def test_triagespec_rejects_duplicate_boolean_property():
+    """A boolean property required both True and False is an incoherent filter
+    that drops everything, so it is refused at construction — mirroring the
+    numeric-constraint dedup."""
+    with pytest.raises(ValidationError, match="constrained more than once"):
+        TriageSpec(
+            boolean_constraints=(
+                BooleanConstraint(property_name="is_stable", required=True),
+                BooleanConstraint(property_name="is_stable", required=False),
+            )
+        )
 
 
 def test_triagespec_assembles_a_fully_populated_request():
