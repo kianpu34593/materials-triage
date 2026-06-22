@@ -71,6 +71,25 @@ def test_provenance_accepts_literature_as_a_method():
     assert prov.method == "literature"
 
 
+def test_provenance_records_the_xc_functional_it_was_computed_with():
+    """A DFT value can record which exchange-correlation functional produced it."""
+    prov = Provenance(
+        source="Materials Project",
+        record_id="mp-2657",
+        method="computational",
+        xc_functional="r2SCAN",
+    )
+
+    assert prov.xc_functional == "r2SCAN"
+
+
+def test_provenance_leaves_xc_functional_unknown_by_default():
+    """The functional is honestly unknown unless the source states it — not assumed."""
+    prov = Provenance(source="openalex", record_id="W123", method="literature")
+
+    assert prov.xc_functional is None
+
+
 def test_property_value_reports_number_and_source():
     """A retrieved value reports its number and where it came from."""
     pv = PropertyValue(
