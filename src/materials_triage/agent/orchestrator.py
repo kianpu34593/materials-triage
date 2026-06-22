@@ -277,3 +277,21 @@ def build_orchestrator(
         builder.add_edge(earlier, later)
     builder.add_edge(WORKFLOW_STEPS[-1], END)
     return builder.compile(checkpointer=checkpointer or MemorySaver())
+
+
+def resume_run(orchestrator: CompiledStateGraph, config: dict) -> dict:
+    """Resume a run that stopped on an infra error, reusing upstream work.
+
+    Infra failures (anything that is not a pydantic ``ValidationError`` — a
+    transport outage, throttling, a crash) are deliberately not retried in-node;
+    they propagate and halt the run. The checkpointer leaves the run pending at
+    the failed step (its ``.next``), with every upstream step's result already
+    persisted. Resuming is simply continuing the same thread with ``None`` input:
+    LangGraph re-runs the failed step onward and reads the upstream results from
+    the checkpoint, so a recovered backend completes the run without re-paying
+    for the LLM hypothesis call or re-querying already-retrieved data.
+
+    (This is crash recovery, distinct from the HITL spec-gate resume, which
+    answers an ``interrupt()`` with ``Command(resume=...)``.)
+    """
+    return orchestrator.invoke(None, config)
