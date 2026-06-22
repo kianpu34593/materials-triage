@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from materials_triage.core.hypothesis import (
+    BooleanConstraintProposal,
     Citation,
     ConstraintProposal,
     ElementRule,
@@ -18,7 +19,12 @@ from materials_triage.core.hypothesis import (
     RankingProposal,
     compile_spec,
 )
-from materials_triage.core.schema import Constraint, RankingTarget, TriageSpec
+from materials_triage.core.schema import (
+    BooleanConstraint,
+    Constraint,
+    RankingTarget,
+    TriageSpec,
+)
 
 
 def test_citation_carries_its_source_record_and_title():
@@ -269,3 +275,29 @@ def test_compile_spec_propagates_duplicate_constraint_rejection():
     propagates rather than being papered over."""
     with pytest.raises(ValidationError):
         compile_spec((_constraint_proposal(min=1.0), _constraint_proposal(max=4.0)))
+
+
+def _boolean_proposal(name, required):
+    return BooleanConstraintProposal(
+        boolean_constraint=BooleanConstraint(property_name=name, required=required),
+        rationale=f"{name} must be {required}",
+        confidence=0.7,
+    )
+
+
+def test_compile_spec_maps_boolean_constraints_onto_the_spec():
+    """A boolean_constraint proposal compiles to a hard yes/no filter the spec
+    carries alongside its numeric constraints — the source-neutral way to express
+    facts like is_stable that a min/max bound cannot. Like the numeric Constraint,
+    the property name is unrestricted here: which booleans a source can answer is
+    the adapter's vocabulary concern, not the spec's."""
+    spec = compile_spec(
+        (
+            _constraint_proposal(min=1.0),
+            _boolean_proposal("is_stable", True),
+        )
+    )
+
+    assert spec.boolean_constraints == (
+        BooleanConstraint(property_name="is_stable", required=True),
+    )

@@ -14,7 +14,12 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from materials_triage.core.elements import ELEMENT_SYMBOLS
-from materials_triage.core.schema import Constraint, RankingTarget, TriageSpec
+from materials_triage.core.schema import (
+    BooleanConstraint,
+    Constraint,
+    RankingTarget,
+    TriageSpec,
+)
 
 
 class Citation(BaseModel):
@@ -74,6 +79,13 @@ class ConstraintProposal(_ProposalBase):
     constraint: Constraint
 
 
+class BooleanConstraintProposal(_ProposalBase):
+    """A cited bridge that compiles to a hard ``BooleanConstraint``."""
+
+    kind: Literal["boolean_constraint"] = "boolean_constraint"
+    boolean_constraint: BooleanConstraint
+
+
 class RankingProposal(_ProposalBase):
     """A cited bridge that compiles to a soft ``RankingTarget``."""
 
@@ -94,7 +106,7 @@ class ElementRuleProposal(_ProposalBase):
 #: structured output reliably emit the right payload. A deterministic compile step
 #: assembles the accepted proposals into a ``TriageSpec``.
 Proposal = Annotated[
-    ConstraintProposal | RankingProposal | ElementRuleProposal,
+    ConstraintProposal | BooleanConstraintProposal | RankingProposal | ElementRuleProposal,
     Field(discriminator="kind"),
 ]
 
@@ -124,12 +136,14 @@ def compile_spec(proposals: tuple[Proposal, ...]) -> TriageSpec:
     require/exclude contradiction), so this function never has to.
     """
     constraints = tuple(p.constraint for p in proposals if p.kind == "constraint")
+    booleans = tuple(p.boolean_constraint for p in proposals if p.kind == "boolean_constraint")
     targets = tuple(p.ranking_target for p in proposals if p.kind == "ranking_target")
     rules = [p.element_rule for p in proposals if p.kind == "element_rule"]
     required = frozenset(e for r in rules if r.mode == "require" for e in r.elements)
     excluded = frozenset(e for r in rules if r.mode == "exclude" for e in r.elements)
     return TriageSpec(
         constraints=constraints,
+        boolean_constraints=booleans,
         ranking_targets=_normalize_weights(targets),
         required_elements=required,
         excluded_elements=excluded,

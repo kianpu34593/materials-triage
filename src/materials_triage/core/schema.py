@@ -98,6 +98,22 @@ class Constraint(BaseModel):
         return self
 
 
+class BooleanConstraint(BaseModel):
+    """A hard filter on one boolean property: a candidate whose value does not
+    match ``required`` is dropped.
+
+    The source-neutral analog of :class:`Constraint` for the yes/no facts a source
+    exposes (e.g. ``is_stable``, ``is_metal``) — things a numeric min/max cannot
+    express. Like :class:`Constraint` it does not restrict ``property_name``: which
+    booleans a source can actually answer is the adapter's vocabulary concern.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    property_name: str = Field(min_length=1)
+    required: bool
+
+
 class RankingTarget(BaseModel):
     """A soft scoring preference on one property: the ranker normalises the
     property in the given direction and weights it in the weighted average.
@@ -123,6 +139,7 @@ class TriageSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     constraints: tuple[Constraint, ...] = ()
+    boolean_constraints: tuple[BooleanConstraint, ...] = ()
     ranking_targets: tuple[RankingTarget, ...] = ()
     required_elements: frozenset[str] = frozenset()
     excluded_elements: frozenset[str] = frozenset()
