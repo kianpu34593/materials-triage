@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from materials_triage.core.schema import (
     Candidate,
     Constraint,
+    ElementPredicate,
     ExcludedCandidate,
     PropertyValue,
     Provenance,
@@ -210,6 +211,25 @@ def test_ranking_target_defaults_on_missing_to_impute_medium():
     assert target.on_missing == "impute_medium"
 
 
+def test_element_predicate_carries_its_quantifier_and_members():
+    """An ElementPredicate is one quantified composition filter: a quantifier over
+    a set of element symbols. 'any' means HAS-ANY — at least one member present —
+    which a require (HAS-ALL) / exclude (HAS-NONE) pair cannot express."""
+    pred = ElementPredicate(quantifier="any", members=frozenset({"Fe", "Zn", "Ti"}))
+
+    assert pred.quantifier == "any"
+    assert pred.members == frozenset({"Fe", "Zn", "Ti"})
+
+
+def test_element_predicate_rejects_non_element_symbols():
+    """An ElementPredicate validates its members against the canonical element set
+    at construction, so a hallucinated symbol like 'Xx' never reaches the spec —
+    the same guard the require/exclude path always had, now on the unified
+    quantified predicate."""
+    with pytest.raises(ValidationError, match="Xx"):
+        ElementPredicate(quantifier="any", members=frozenset({"Fe", "Xx"}))
+
+
 def test_triagespec_requires_at_least_one_constraint():
     """A spec with no hard filter is not a triage — without any constraint,
     nothing is gated, so the spec is refused at construction."""
@@ -229,15 +249,19 @@ def test_triagespec_assembles_a_fully_populated_request():
             RankingTarget(property_name="band_gap", direction="maximize", weight=0.6),
             RankingTarget(property_name="density", direction="minimize", weight=0.4),
         ),
-        required_elements=frozenset({"Ti", "O"}),
-        excluded_elements=frozenset({"Pb"}),
+        element_predicates=(
+            ElementPredicate(quantifier="all", members=frozenset({"Ti", "O"})),
+            ElementPredicate(quantifier="none", members=frozenset({"Pb"})),
+        ),
         max_nelements=4,
     )
 
     assert len(spec.constraints) == 2
     assert len(spec.ranking_targets) == 2
-    assert spec.required_elements == frozenset({"Ti", "O"})
-    assert spec.excluded_elements == frozenset({"Pb"})
+    assert spec.element_predicates == (
+        ElementPredicate(quantifier="all", members=frozenset({"Ti", "O"})),
+        ElementPredicate(quantifier="none", members=frozenset({"Pb"})),
+    )
     assert spec.max_nelements == 4
 
 
@@ -256,23 +280,16 @@ def test_triagespec_allows_same_property_as_constraint_and_ranking_target():
     assert spec.ranking_targets[0].property_name == "band_gap"
 
 
-def test_triagespec_rejects_unknown_required_element():
-    """Composition rules name real chemical elements; a symbol that isn't on the
-    periodic table is an authoring error, so the spec refuses it."""
-    with pytest.raises(ValidationError, match="Xx"):
-        TriageSpec(
-            constraints=(Constraint(property_name="band_gap", min=1.0),),
-            required_elements=frozenset({"Fe", "Xx"}),
-        )
-
-
 def test_triagespec_rejects_more_required_elements_than_max_nelements():
     """Demanding more distinct elements than the cap allows admits nothing —
-    the two rules contradict, so the spec is refused."""
+    the two rules contradict, so the spec is refused. (Only "all"-quantifier
+    members must all be present, so they are what the cap counts against.)"""
     with pytest.raises(ValidationError, match="max_nelements"):
         TriageSpec(
             constraints=(Constraint(property_name="band_gap", min=1.0),),
-            required_elements=frozenset({"Li", "Fe", "O"}),
+            element_predicates=(
+                ElementPredicate(quantifier="all", members=frozenset({"Li", "Fe", "O"})),
+            ),
             max_nelements=2,
         )
 
@@ -293,8 +310,10 @@ def test_triagespec_rejects_element_required_and_excluded():
     with pytest.raises(ValidationError, match="Fe"):
         TriageSpec(
             constraints=(Constraint(property_name="band_gap", min=1.0),),
-            required_elements=frozenset({"Fe"}),
-            excluded_elements=frozenset({"Fe"}),
+            element_predicates=(
+                ElementPredicate(quantifier="all", members=frozenset({"Fe"})),
+                ElementPredicate(quantifier="none", members=frozenset({"Fe"})),
+            ),
         )
 
 

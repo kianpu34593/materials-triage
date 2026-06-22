@@ -9,7 +9,12 @@ import os
 import pytest
 
 from materials_triage.core.ranking import rank
-from materials_triage.core.schema import Constraint, RankingTarget, TriageSpec
+from materials_triage.core.schema import (
+    Constraint,
+    ElementPredicate,
+    RankingTarget,
+    TriageSpec,
+)
 from materials_triage.core.scoring import apply_hard_filters
 from materials_triage.sources.materials_project import MaterialsProjectAdapter
 
@@ -143,9 +148,9 @@ def test_retrieve_requests_the_fields_the_pipeline_will_read():
 
 
 def test_retrieve_scopes_the_query_by_required_elements():
-    """required_elements scopes the pool server-side via the sorted, comma-joined
-    `elements` param; numeric bounds stay the deterministic core's job, so this is
-    only a composition filter on what gets fetched."""
+    """An "all"-quantifier ElementPredicate scopes the pool server-side via the
+    sorted, comma-joined `elements` param; numeric bounds stay the deterministic
+    core's job, so this is only a composition filter on what gets fetched."""
     captured: dict = {}
 
     def spy(url, params, headers):
@@ -154,7 +159,7 @@ def test_retrieve_scopes_the_query_by_required_elements():
 
     spec = TriageSpec(
         constraints=(Constraint(property_name="band_gap", min=1.0),),
-        required_elements=frozenset({"Ga", "N"}),
+        element_predicates=(ElementPredicate(quantifier="all", members=frozenset({"Ga", "N"})),),
     )
 
     MaterialsProjectAdapter(http_get=spy).retrieve(spec)

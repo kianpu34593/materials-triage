@@ -67,10 +67,15 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
     properties |= {t.property_name for t in spec.ranking_targets}
     fields = list(_IDENTITY_FIELDS) + sorted(properties)
     params = {"_fields": ",".join(fields), "_limit": str(_DEFAULT_LIMIT)}
-    if spec.required_elements:
-        # Composition scoping is pushed server-side; the numeric bounds stay with
-        # apply_hard_filters, which remains the authority on what survives.
-        params["elements"] = ",".join(sorted(spec.required_elements))
+    # Composition scoping is pushed server-side; the numeric bounds stay with
+    # apply_hard_filters, which remains the authority on what survives. Only the
+    # "all" quantifier maps to MP's AND-semantics `elements` param — "any"/"none"
+    # are honoured by the deterministic filter, not the query.
+    must_have = sorted(
+        e for p in spec.element_predicates if p.quantifier == "all" for e in p.members
+    )
+    if must_have:
+        params["elements"] = ",".join(must_have)
     return params
 
 
