@@ -10,6 +10,7 @@ The caller (orchestrator) decides what to do with a refusal: a forbidden request
 is logged and refused, and is *not* recorded as a ``TriageRun``.
 """
 
+import re
 import unicodedata
 
 from pydantic import BaseModel, ConfigDict
@@ -40,7 +41,11 @@ _FORBIDDEN_ACTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "wet_lab",
         "Request names a physical wet-lab action; no capability exists to comply.",
-        ("synthesize", "synthesise", "in the lab", "cv scan"),
+        # Anchor on lab-action phrasing, not the bare verb "synthesize" — that stem is
+        # polysemous ("synthesize the literature") and its past form is a common
+        # in-scope screening property ("synthesized below 400 C"), so matching it
+        # over-refuses legitimate triage.
+        ("in the lab", "cv scan"),
     ),
     (
         "private_data",
@@ -104,15 +109,15 @@ def wrap_untrusted(
 
 def check_input(text: str) -> GateDecision:
     """Return the gate's verdict for ``text`` (a query or a manual spec field)."""
-    # Normalize before matching so obfuscations don't slip the denylist: ``_scrub``
-    # folds compatibility forms (fullwidth) and strips zero-width chars; the
-    # whitespace-collapsed form additionally catches spaced-out evasions
-    # ("s y n t h e s i z e"). Still best-effort — capability-by-construction is the
-    # guarantee (ADR 0004).
+    # Normalize before matching so compatibility/zero-width obfuscations don't slip
+    # the denylist: ``_scrub`` folds fullwidth forms (NFKC) and strips zero-width
+    # chars. Match on word boundaries so a trigger only fires as a whole word —
+    # "in the lab" must not match inside "within the lab", and "scrape" must not
+    # match inside "telescraper". Still best-effort — capability-by-construction is
+    # the guarantee (ADR 0004).
     lowered = _scrub(text).lower()
-    collapsed = "".join(lowered.split())
     for category, reason, terms in _FORBIDDEN_ACTIONS:
         for term in terms:
-            if term in lowered or term.replace(" ", "") in collapsed:
+            if re.search(rf"\b{re.escape(term)}\b", lowered):
                 return GateDecision(allowed=False, category=category, reason=reason)
     return GateDecision(allowed=True, category="in_scope")

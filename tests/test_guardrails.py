@@ -96,19 +96,25 @@ def test_wrap_untrusted_caps_overlong_text():
     assert "truncated" in wrapped.lower()  # and the cut is disclosed
 
 
-# --- gate-side normalization: obfuscated forbidden terms ---
+# --- gate-side normalization + word-boundary matching ---
 
 
 def test_gate_normalizes_fullwidth_evasion():
-    # fullwidth Latin "synthesize" (NFKC compatibility) dodges a naive denylist
-    fullwidth_synth = "".join(chr(ord(c) - ord("a") + 0xFF41) for c in "synthesize")
-    decision = check_input(f"{fullwidth_synth} some LaCoO3")
+    # fullwidth Latin (NFKC) must not let a forbidden term slip the gate
+    fullwidth_scrape = "".join(chr(ord(c) - ord("a") + 0xFF41) for c in "scrape")
+    decision = check_input(f"{fullwidth_scrape} the elsevier pdf")
     assert decision.allowed is False
-    assert decision.category == "wet_lab"
+    assert decision.category == "paywalled"
 
 
-def test_gate_normalizes_spaced_out_evasion():
-    # letters spaced apart to split the denylist token
-    decision = check_input("please s y n t h e s i z e LaCoO3")
-    assert decision.allowed is False
-    assert decision.category == "wet_lab"
+def test_synthesizability_property_query_is_allowed():
+    # "synthesize" is polysemous; synthesizability is a common in-scope screening
+    # property — the gate must not refuse it (wet-lab is anchored on action phrasing).
+    assert check_input("rank oxides synthesized below 400 C").allowed is True
+    assert check_input("prioritize easily synthesised perovskites").allowed is True
+
+
+def test_in_the_lab_trigger_does_not_match_within_the_lab():
+    # word-boundary matching: "within the lab" must not trip the "in the lab" trigger
+    decision = check_input("rank materials characterized within the lab's published dataset")
+    assert decision.allowed is True
