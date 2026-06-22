@@ -18,6 +18,7 @@ from materials_triage.core.schema import (
 from materials_triage.core.scoring import apply_hard_filters
 from materials_triage.sources.materials_project import (
     MaterialsProjectAdapter,
+    _fetch_run_types,
     _field_task_id,
     _origin_task_ids,
 )
@@ -68,6 +69,39 @@ def test_field_task_id_is_none_for_a_field_with_no_origin_mapping():
     """A field outside _FIELD_ORIGIN (not task-derived, e.g. a structural count)
     has no functional to trace."""
     assert _field_task_id("nsites", {"structure": "t-struct"}) is None
+
+
+def test_fetch_run_types_batches_task_ids_into_one_call():
+    """The functional lives in the task doc, not the summary: one batched
+    /materials/tasks/ call maps every task_id to its run_type."""
+    captured: dict = {}
+
+    def transport(url, params, headers):
+        captured["url"] = url
+        captured["params"] = params
+        return {
+            "data": [
+                {"task_id": "t-bands", "run_type": "GGA"},
+                {"task_id": "t-energy", "run_type": "r2SCAN"},
+            ]
+        }
+
+    run_types = _fetch_run_types(transport, {"X-API-KEY": "k"}, ["t-bands", "t-energy"])
+
+    assert run_types == {"t-bands": "GGA", "t-energy": "r2SCAN"}
+    assert captured["url"] == "/materials/tasks/"
+    assert set(captured["params"]["_fields"].split(",")) == {"task_id", "run_type"}
+    assert set(captured["params"]["task_ids"].split(",")) == {"t-bands", "t-energy"}
+
+
+def test_fetch_run_types_skips_the_call_when_there_are_no_task_ids():
+    """With nothing to trace (no task-derived fields / no origins) the adapter
+    makes no second network call at all."""
+
+    def transport(url, params, headers):
+        raise AssertionError("transport must not be called when there are no task_ids")
+
+    assert _fetch_run_types(transport, {}, []) == {}
 
 
 def test_retrieve_maps_a_one_doc_payload_to_a_candidate():

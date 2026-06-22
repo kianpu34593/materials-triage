@@ -119,6 +119,28 @@ def _origin_task_ids(origins: list[dict] | None) -> dict[str, str]:
     return {o["name"]: o["task_id"] for o in (origins or [])}
 
 
+def _fetch_run_types(
+    http_get: HttpGet, headers: Mapping[str, str], task_ids: list[str]
+) -> dict[str, str]:
+    """Map each task_id to its XC functional via one batched tasks call.
+
+    The summary endpoint never carries the functional; it lives in the task doc's
+    ``run_type``. All task_ids for a page are fetched in a single request. With no
+    task_ids to trace, no call is made. A task that returns no run_type is omitted,
+    so the caller treats its functional as unknown.
+    """
+    unique = sorted(set(task_ids))
+    if not unique:
+        return {}
+    params = {
+        "task_ids": ",".join(unique),
+        "_fields": "task_id,run_type",
+        "_limit": str(len(unique)),
+    }
+    envelope = http_get("/materials/tasks/", params, headers)
+    return {d["task_id"]: d["run_type"] for d in envelope["data"] if d.get("run_type")}
+
+
 def _field_task_id(field: str, origin_index: Mapping[str, str]) -> str | None:
     """Resolve a summary field to the task_id that produced it, or ``None``.
 
