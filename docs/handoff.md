@@ -4,6 +4,15 @@
 > a `docs/handoffs/` subdir — untracked handoffs get wiped by parallel sessions' `git clean`. Keep
 > this file committed.
 
+> **Design & learnings (read these first if picking up the real build):**
+> - [`docs/ultimate-design.md`](ultimate-design.md) — **target design for the real build**: closed-loop /
+>   multi-objective / multi-source / capability-aware; the DB-is-not-the-world coverage-gap principle;
+>   ranking beyond weighted-sum; cross-source merge (doc-only ladder); system-design prep
+>   (cost/latency/caching); and the take-home build-vs-articulate prioritization.
+> - [`docs/fast-track-learnings.md`](fast-track-learnings.md) — what the throwaway fast-track branch
+>   (`feat/fast-track-wire-guardrails`) proved: vocabulary-binding, prompt-fidelity before/after, the
+>   synthesis/RAG gap, and the H₂O spec-expressiveness root cause.
+
 ## Task
 Build **Materials-Triage** (public-data-only materials-research triage agent) as single-function
 TDD increments, per `Deep-Plan-materials-triage-agent-2026-06-19-1429.md`. Core data models,
