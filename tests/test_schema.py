@@ -4,8 +4,11 @@ import pytest
 from pydantic import ValidationError
 
 from materials_triage.core.schema import (
+    BooleanConstraint,
     Candidate,
     Constraint,
+    CountConstraint,
+    ElementPredicate,
     ExcludedCandidate,
     PropertyValue,
     Provenance,
@@ -210,11 +213,64 @@ def test_ranking_target_defaults_on_missing_to_impute_medium():
     assert target.on_missing == "impute_medium"
 
 
-def test_triagespec_requires_at_least_one_constraint():
-    """A spec with no hard filter is not a triage — without any constraint,
+def test_element_predicate_carries_its_quantifier_and_members():
+    """An ElementPredicate is one quantified composition filter: a quantifier over
+    a set of element symbols. 'any' means HAS-ANY — at least one member present —
+    which a require (HAS-ALL) / exclude (HAS-NONE) pair cannot express."""
+    pred = ElementPredicate(quantifier="any", members=frozenset({"Fe", "Zn", "Ti"}))
+
+    assert pred.quantifier == "any"
+    assert pred.members == frozenset({"Fe", "Zn", "Ti"})
+
+
+def test_element_predicate_rejects_non_element_symbols():
+    """An ElementPredicate validates its members against the canonical element set
+    at construction, so a hallucinated symbol like 'Xx' never reaches the spec —
+    the same guard the require/exclude path always had, now on the unified
+    quantified predicate."""
+    with pytest.raises(ValidationError, match="Xx"):
+        ElementPredicate(quantifier="any", members=frozenset({"Fe", "Xx"}))
+
+
+def test_triagespec_requires_at_least_one_hard_filter():
+    """A spec with no hard filter is not a triage — without any gating rule,
     nothing is gated, so the spec is refused at construction."""
-    with pytest.raises(ValidationError, match="at least one constraint"):
+    with pytest.raises(ValidationError, match="at least one hard filter"):
         TriageSpec()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"boolean_constraints": (BooleanConstraint(property_name="is_stable", required=True),)},
+        {
+            "element_predicates": (
+                ElementPredicate(quantifier="any", members=frozenset({"Fe", "Co"})),
+            )
+        },
+        {"count": CountConstraint(max=3)},
+    ],
+)
+def test_triagespec_accepts_any_kind_of_hard_filter(kwargs):
+    """Any hard-filter kind satisfies the gate, not only a numeric constraint —
+    a request whose only gate is a boolean, an element predicate, or a count cap
+    is a valid triage and must construct without a numeric bound."""
+    spec = TriageSpec(**kwargs)
+
+    assert spec.constraints == ()
+
+
+def test_triagespec_rejects_duplicate_boolean_property():
+    """A boolean property required both True and False is an incoherent filter
+    that drops everything, so it is refused at construction — mirroring the
+    numeric-constraint dedup."""
+    with pytest.raises(ValidationError, match="constrained more than once"):
+        TriageSpec(
+            boolean_constraints=(
+                BooleanConstraint(property_name="is_stable", required=True),
+                BooleanConstraint(property_name="is_stable", required=False),
+            )
+        )
 
 
 def test_triagespec_assembles_a_fully_populated_request():
@@ -229,16 +285,20 @@ def test_triagespec_assembles_a_fully_populated_request():
             RankingTarget(property_name="band_gap", direction="maximize", weight=0.6),
             RankingTarget(property_name="density", direction="minimize", weight=0.4),
         ),
-        required_elements=frozenset({"Ti", "O"}),
-        excluded_elements=frozenset({"Pb"}),
-        max_nelements=4,
+        element_predicates=(
+            ElementPredicate(quantifier="all", members=frozenset({"Ti", "O"})),
+            ElementPredicate(quantifier="none", members=frozenset({"Pb"})),
+        ),
+        count=CountConstraint(max=4),
     )
 
     assert len(spec.constraints) == 2
     assert len(spec.ranking_targets) == 2
-    assert spec.required_elements == frozenset({"Ti", "O"})
-    assert spec.excluded_elements == frozenset({"Pb"})
-    assert spec.max_nelements == 4
+    assert spec.element_predicates == (
+        ElementPredicate(quantifier="all", members=frozenset({"Ti", "O"})),
+        ElementPredicate(quantifier="none", members=frozenset({"Pb"})),
+    )
+    assert spec.count == CountConstraint(max=4)
 
 
 def test_triagespec_allows_same_property_as_constraint_and_ranking_target():
@@ -256,35 +316,46 @@ def test_triagespec_allows_same_property_as_constraint_and_ranking_target():
     assert spec.ranking_targets[0].property_name == "band_gap"
 
 
-def test_triagespec_rejects_unknown_required_element():
-    """Composition rules name real chemical elements; a symbol that isn't on the
-    periodic table is an authoring error, so the spec refuses it."""
-    with pytest.raises(ValidationError, match="Xx"):
+def test_triagespec_rejects_more_required_elements_than_count_cap():
+    """Demanding more distinct elements than the count cap allows admits nothing —
+    the two rules contradict, so the spec is refused. (Only "all"-quantifier members
+    must all be present, so they are what the cap counts against — the cross-check a
+    typed count field keeps robust instead of string-matching a property name.)"""
+    with pytest.raises(ValidationError, match="count constraint caps"):
         TriageSpec(
             constraints=(Constraint(property_name="band_gap", min=1.0),),
-            required_elements=frozenset({"Fe", "Xx"}),
+            element_predicates=(
+                ElementPredicate(quantifier="all", members=frozenset({"Li", "Fe", "O"})),
+            ),
+            count=CountConstraint(max=2),
         )
 
 
-def test_triagespec_rejects_more_required_elements_than_max_nelements():
-    """Demanding more distinct elements than the cap allows admits nothing —
-    the two rules contradict, so the spec is refused."""
-    with pytest.raises(ValidationError, match="max_nelements"):
-        TriageSpec(
-            constraints=(Constraint(property_name="band_gap", min=1.0),),
-            required_elements=frozenset({"Li", "Fe", "O"}),
-            max_nelements=2,
-        )
+def test_count_constraint_bounds_composition_cardinality():
+    """A count constraint bounds how many distinct elements a composition may have,
+    as an inclusive min and/or max — the source-neutral way to say 'simple'."""
+    count = CountConstraint(max=3)
+
+    assert count.max == 3
+    assert count.min is None
 
 
-def test_triagespec_rejects_nonpositive_max_nelements():
-    """A material has at least one element, so a cap below one admits nothing
-    and is refused."""
+def test_count_constraint_must_bound_something():
+    """A count constraint with neither a min nor a max bounds nothing — incoherent."""
     with pytest.raises(ValidationError):
-        TriageSpec(
-            constraints=(Constraint(property_name="band_gap", min=1.0),),
-            max_nelements=0,
-        )
+        CountConstraint()
+
+
+def test_count_constraint_rejects_min_above_max():
+    """A min above the max admits no count, so an impossible window is refused."""
+    with pytest.raises(ValidationError):
+        CountConstraint(min=4, max=2)
+
+
+def test_count_constraint_rejects_nonpositive_bound():
+    """A material has at least one element, so a bound below one admits nothing."""
+    with pytest.raises(ValidationError):
+        CountConstraint(max=0)
 
 
 def test_triagespec_rejects_element_required_and_excluded():
@@ -293,9 +364,38 @@ def test_triagespec_rejects_element_required_and_excluded():
     with pytest.raises(ValidationError, match="Fe"):
         TriageSpec(
             constraints=(Constraint(property_name="band_gap", min=1.0),),
-            required_elements=frozenset({"Fe"}),
-            excluded_elements=frozenset({"Fe"}),
+            element_predicates=(
+                ElementPredicate(quantifier="all", members=frozenset({"Fe"})),
+                ElementPredicate(quantifier="none", members=frozenset({"Fe"})),
+            ),
         )
+
+
+def test_triagespec_rejects_any_predicate_fully_excluded():
+    """An "any" predicate is satisfiable only if some member can be present, so when
+    every member is also forbidden by a "none" predicate the filter admits nothing
+    and the spec is refused."""
+    with pytest.raises(ValidationError, match="Fe"):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            element_predicates=(
+                ElementPredicate(quantifier="any", members=frozenset({"Fe"})),
+                ElementPredicate(quantifier="none", members=frozenset({"Fe"})),
+            ),
+        )
+
+
+def test_triagespec_allows_any_predicate_partially_excluded():
+    """An "any" predicate stays satisfiable while one member is still permitted, so
+    excluding only some of its members is allowed."""
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        element_predicates=(
+            ElementPredicate(quantifier="any", members=frozenset({"Fe", "Zn"})),
+            ElementPredicate(quantifier="none", members=frozenset({"Fe"})),
+        ),
+    )
+    assert len(spec.element_predicates) == 2
 
 
 def test_triagespec_rejects_duplicate_constraint_property():

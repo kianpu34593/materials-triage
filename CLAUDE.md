@@ -53,21 +53,32 @@ dropped or guessed) · no DB to host (HTTP client over public APIs; only local s
 Full design lives in `Deep-Plan-materials-triage-agent-2026-06-19-1429.md` (§0 has the workflow
 diagram). Implementation is **underway on the core data-model layer** — the frozen
 `Provenance`, `PropertyValue`, `Candidate`, `Constraint` (a hard filter holding an
-inclusive min/max bound on one property), `RankingTarget` (a soft scoring preference
+inclusive min/max bound on one numeric property), `BooleanConstraint` (the source-neutral
+hard filter for yes/no facts like `is_stable`/`is_metal`, asserting one property's
+`required` truth value), `ElementPredicate` (a hard composition filter unifying the old
+require/exclude into one OPTIMADE-shaped quantified membership test — `all`/`any`/`none`
+over a symbol-validated member set, adding the `any` = has-any operator require/exclude
+could not express), `CountConstraint` (an inclusive `min`/`max` bound on the number of
+distinct elements in a composition, replacing the scalar `max_nelements` with a typed
+slot so the "cannot require more distinct elements than the cap" cross-check stays a
+robust typed invariant), `RankingTarget` (a soft scoring preference
 whose `weight` is a proportional share in `(0, 1]`), and `TriageSpec` (the fully-resolved
-request bundling constraints, ranking targets, and composition rules) models in
+request bundling numeric/boolean constraints, ranking targets, element predicates, and
+an optional `count` cardinality bound) models in
 `src/materials_triage/core/schema.py` exist so far, alongside the canonical 118-symbol
 `ELEMENT_SYMBOLS` frozenset in `src/materials_triage/core/elements.py`. The
 hypothesis layer in `src/materials_triage/core/hypothesis.py` also exists — the
-frozen `Citation` (the untrusted-DATA analog of `Provenance`), `ElementRule` (a
-symbol-validated require/exclude composition rule), `Proposal` (one cited bridge,
-a `kind`-discriminated union of `ConstraintProposal`/`RankingProposal`/`ElementRuleProposal`
+frozen `Citation` (the untrusted-DATA analog of `Provenance`), `Proposal` (one cited
+bridge, a `kind`-discriminated union of `ConstraintProposal`/`BooleanConstraintProposal`/
+`CountConstraintProposal`/`RankingProposal`/`ElementPredicateProposal`
 subclasses with `extra="forbid"`, so the kind→payload requirement lives in the JSON
 schema the LLM is handed rather than a hidden validator and structured output emits
-the right payload),
+the right payload — each proposal carrying the matching core predicate as its payload,
+so the hypothesis layer no longer defines its own `ElementRule`),
 and `Hypothesis` (the LLM's whole emission: `proposals` + `mechanism`) models,
 plus the pure `compile_spec(proposals) -> TriageSpec` seam that dispatches on
-`kind`, unions element rules into required/excluded sets, and normalizes ranking
+`kind`, collecting numeric/boolean constraints and element predicates, taking the first
+`count_constraint` as the spec's cardinality bound, and normalizing ranking
 weights to sum to 1. The literature RAG in `src/materials_triage/retrieval/rag.py`
 also exists — the frozen `LiteraturePassage` model (an OpenAlex abstract bound to
 its `Provenance`, kept and flagged `missing` rather than dropped when absent),
