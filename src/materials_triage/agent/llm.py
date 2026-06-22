@@ -1,18 +1,23 @@
-"""The Bedrock-backed hypothesis provider.
+"""The Bedrock-backed LLM providers (hypothesis and synthesis).
 
-Turns a rendered prompt into a validated :class:`~materials_triage.core.hypothesis.Hypothesis`.
-The Bedrock call is injected (``complete``) so the provider is exercised fully
-offline; the real transport is built lazily only when the provider actually goes
-to Bedrock — mirroring the MaterialsProjectAdapter's ``http_get`` seam.
+Each turns a rendered prompt into a validated domain model
+(:class:`~materials_triage.core.hypothesis.Hypothesis` /
+:class:`~materials_triage.core.synthesis.Synthesis`). The Bedrock call is injected
+(``complete``) so the providers are exercised fully offline; the real transport is
+built lazily only when a provider actually goes to Bedrock — mirroring the
+MaterialsProjectAdapter's ``http_get`` seam.
 """
 
 from collections.abc import Callable
 
 from materials_triage.agent.prompts import ROLE_SYSTEM_PROMPT
 from materials_triage.core.hypothesis import Hypothesis
+from materials_triage.core.synthesis import Synthesis
 
 #: A completion seam: a rendered prompt string -> a validated Hypothesis.
 Complete = Callable[[str], Hypothesis]
+#: A completion seam: a rendered prompt string -> a validated Synthesis.
+CompleteSynthesis = Callable[[str], Synthesis]
 
 
 def _role_messages(prompt: str) -> list[tuple[str, str]]:
@@ -47,15 +52,38 @@ class HypothesisProvider:
         return self._complete(prompt)
 
 
-def _bedrock_complete(model_id: str, region: str) -> Complete:
-    """Build the real completion seam. ``langchain_aws`` is imported only when the
-    seam is actually invoked, so construction and offline use never require it.
-    """
+class SynthesisProvider:
+    """Produce a Synthesis (grounded narrative) from a rendered prompt via an
+    injected Bedrock seam — the same offline-testable pattern as
+    HypothesisProvider, structured to the Synthesis schema."""
 
-    def complete(prompt: str) -> Hypothesis:
+    def __init__(
+        self,
+        complete: CompleteSynthesis | None = None,
+        model_id: str = DEFAULT_MODEL_ID,
+        region: str = DEFAULT_REGION,
+    ) -> None:
+        self._complete = complete or _bedrock_structured(model_id, region, Synthesis)
+
+    def synthesize(self, prompt: str) -> Synthesis:
+        return self._complete(prompt)
+
+
+def _bedrock_complete(model_id: str, region: str) -> Complete:
+    """Build the real Hypothesis completion seam (kept as a thin named wrapper so
+    the existing live smoke test and call sites are unchanged)."""
+    return _bedrock_structured(model_id, region, Hypothesis)
+
+
+def _bedrock_structured(model_id: str, region: str, schema: type):
+    """Build a real completion seam structured to ``schema``. ``langchain_aws`` is
+    imported only when the seam is actually invoked, so construction and offline
+    use never require it (or AWS credentials)."""
+
+    def complete(prompt: str):
         from langchain_aws import ChatBedrockConverse
 
         model = ChatBedrockConverse(model=model_id, region_name=region)
-        return model.with_structured_output(Hypothesis).invoke(_role_messages(prompt))
+        return model.with_structured_output(schema).invoke(_role_messages(prompt))
 
     return complete

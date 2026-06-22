@@ -4,11 +4,11 @@ Per ADR 0003 the workflow is a deterministic, linear, *traced* state machine —
 not an autonomous tool-calling loop. The steps are graph nodes wired in a fixed
 linear edge order and compiled with a checkpointer (the substrate for the #9
 trace export and `resume --from`). Wired so far: the ``gate`` step (the
-deterministic input policy gate), the ``hypothesis`` step (LLM, with
-retry-on-malformed-output, the user goal confined to a trust-boundary data
-block) and the ``retrieve`` -> ``filter`` -> ``rank`` deterministic core. The
-remaining steps (synthesis, output_validate, render) are pass-throughs their own
-slices/tasks replace.
+deterministic input policy gate), the ``hypothesis`` and ``synthesis`` steps
+(LLM, with retry-on-malformed-output and, for synthesis, grounding retry; the
+user goal confined to a trust-boundary data block) and the ``retrieve`` ->
+``filter`` -> ``rank`` deterministic core. The remaining steps (output_validate,
+render) are pass-throughs their own slices/tasks replace.
 """
 
 import math
@@ -31,6 +31,7 @@ from materials_triage.core.schema import (
     TriageSpec,
 )
 from materials_triage.core.scoring import apply_hard_filters
+from materials_triage.core.synthesis import Synthesis, ungrounded_record_ids
 from materials_triage.policy.guardrails import GateDecision, check_input, wrap_untrusted
 from materials_triage.sources.base import SourceAdapter
 
@@ -44,6 +45,13 @@ class HypothesisProvider(Protocol):
     Hypothesis out (or a pydantic ValidationError if the output is malformed)."""
 
     def propose(self, prompt: str) -> Hypothesis: ...
+
+
+class SynthesisProvider(Protocol):
+    """The LLM seam the synthesis node calls: a rendered prompt in, a validated
+    Synthesis out (or a pydantic ValidationError if the output is malformed)."""
+
+    def synthesize(self, prompt: str) -> Synthesis: ...
 
 
 class InputRefused(RuntimeError):
@@ -65,6 +73,12 @@ class HypothesisConformanceError(RuntimeError):
     Carries the last pydantic ValidationError as its cause so the orchestrator
     (or a human) sees why every attempt was rejected, rather than a raw
     ValidationError leaking out of the node."""
+
+
+class SynthesisConformanceError(RuntimeError):
+    """The LLM could not produce a schema-valid, fully-grounded Synthesis within
+    the retry cap. Carries the last failure (a pydantic ValidationError, or a
+    grounding violation) as its cause."""
 
 
 class SpecCompilationError(RuntimeError):
@@ -120,12 +134,13 @@ class OrchestratorState(TypedDict, total=False):
     filter_excluded: tuple[ExcludedCandidate, ...]
     rank_excluded: tuple[ExcludedCandidate, ...]
     result: TriageResult | None
+    synthesis: Synthesis | None
 
 
 def _passthrough(state: OrchestratorState) -> dict:
     """A skeleton node that contributes no state update yet. Backs the steps not
-    wired so far — synthesis, output_validate, render — which their own slices /
-    tasks fill in (gate, hypothesis, spec_build and the core are real nodes)."""
+    wired so far — output_validate, render — which their own slices / tasks fill
+    in (gate, hypothesis, spec_build, the core and synthesis are real nodes)."""
     return {}
 
 
@@ -329,9 +344,103 @@ def _rank_node(state: OrchestratorState) -> dict:
     }
 
 
+#: How many top-ranked candidates the synthesis narrative is asked to explain.
+DEFAULT_SYNTHESIS_TOP_K = 5
+DEFAULT_MAX_SYNTHESIS_ATTEMPTS = 3
+
+
+def _candidate_facts(result: TriageResult, top_k: int) -> str:
+    """Render the top-k ranked candidates as a grounded facts block — the ONLY
+    materials and numbers the synthesis LLM may reference. Each line carries the
+    candidate's record_id (the citation key), its formula, and its retrieved
+    property values with units."""
+    lines = []
+    for scored in result.ranked[:top_k]:
+        cand = scored.candidate
+        props = ", ".join(
+            f"{name}={pv.value} {pv.unit}"
+            for name, pv in cand.properties.items()
+            if pv.value is not None
+        )
+        lines.append(f"- {cand.identifier} ({cand.formula}): {props}")
+    return "\n".join(lines)
+
+
+def _synthesis_prompt(
+    goal: str,
+    result: TriageResult,
+    mechanism: str,
+    prior_error: str | None,
+    top_k: int,
+) -> str:
+    """Render the synthesis prompt: explain the deterministically-ranked shortlist
+    for the (trust-boundary-wrapped) goal, citing only retrieved materials. The
+    facts block and proposed mechanism are trusted context in the instruction
+    channel; the goal is untrusted data. A grounding/schema rejection is fed back
+    on retry so the model can correct the specific citation or shape problem."""
+    wrapped = wrap_untrusted(goal, label="user query", nonce=secrets.token_hex(8))
+    prompt = (
+        f"The scientist's goal is in this data:\n{wrapped}\n\n"
+        "Deterministic retrieval and ranking produced this shortlist. These are the "
+        "ONLY materials and numbers you may reference — do not invent others, and "
+        f"every number you state must come from here:\n{_candidate_facts(result, top_k)}\n\n"
+        f"Proposed mechanism from the hypothesis step: {mechanism or '(none provided)'}\n\n"
+        "Write a concise PI-facing summary (2-3 sentences) of why these top candidates "
+        "fit the goal, then one grounded claim per candidate explaining mechanistically "
+        "why it ranks where it does. Each claim's record_id MUST be one of the "
+        "identifiers listed above."
+    )
+    if prior_error is not None:
+        prompt += (
+            f"\n\nYour previous response was rejected:\n{prior_error}\nReturn a corrected response."
+        )
+    return prompt
+
+
+def _make_synthesis_node(
+    provider: SynthesisProvider | None,
+    top_k: int = DEFAULT_SYNTHESIS_TOP_K,
+    max_attempts: int = DEFAULT_MAX_SYNTHESIS_ATTEMPTS,
+):
+    """The synthesis step: the LLM writes the grounded, cited narrative over the
+    ranked shortlist. It retries on a schema ValidationError AND on a grounding
+    violation (a claim citing a material not retrieved), feeding the specific
+    problem back, then raises a wrapped SynthesisConformanceError. With no provider
+    or no ranked candidates there is nothing to narrate and it passes through."""
+
+    def synthesis(state: OrchestratorState) -> dict:
+        result = state.get("result")
+        if provider is None or result is None or not result.ranked:
+            return {}
+        valid_ids = {c.identifier for c in state.get("candidates", ())}
+        mechanism = state["hypothesis"].mechanism if state.get("hypothesis") else ""
+        last_problem: str | None = None
+        for _ in range(max_attempts):
+            prompt = _synthesis_prompt(state["goal"], result, mechanism, last_problem, top_k)
+            try:
+                drafted = provider.synthesize(prompt)
+            except ValidationError as exc:
+                last_problem = str(exc)
+                continue
+            ungrounded = ungrounded_record_ids(drafted, valid_ids)
+            if ungrounded:
+                last_problem = (
+                    f"these cited record_ids were not in the shortlist: {', '.join(ungrounded)}. "
+                    "Cite only the listed identifiers."
+                )
+                continue
+            return {"synthesis": drafted}
+        raise SynthesisConformanceError(
+            f"LLM did not produce a grounded Synthesis in {max_attempts} attempts: {last_problem}"
+        )
+
+    return synthesis
+
+
 def build_orchestrator(
     adapter: SourceAdapter | None = None,
     provider: HypothesisProvider | None = None,
+    synthesis_provider: SynthesisProvider | None = None,
     checkpointer: MemorySaver | None = None,
 ) -> CompiledStateGraph:
     """Build and compile the triage orchestrator graph.
@@ -339,11 +448,12 @@ def build_orchestrator(
     The nine ``WORKFLOW_STEPS`` become nodes wired START -> gate -> ... ->
     render -> END, compiled with a checkpointer (v1 default: an in-process
     ``MemorySaver``) so execution state is captured for trace export and resume.
-    The ``gate`` step (deterministic input policy), the ``hypothesis`` step (LLM,
-    retry-on-malformed) and the ``retrieve`` -> ``filter`` -> ``rank``
-    deterministic core are wired; the rest are pass-throughs until their slices
-    land. ``adapter`` and ``provider`` are the
-    injected retrieval and LLM seams (fakes make the whole graph offline-testable).
+    The ``gate`` step (deterministic input policy), the ``hypothesis`` and
+    ``synthesis`` steps (LLM, retry-on-malformed) and the ``retrieve`` ->
+    ``filter`` -> ``rank`` deterministic core are wired; the rest are
+    pass-throughs until their slices land. ``adapter``, ``provider`` and
+    ``synthesis_provider`` are the injected retrieval and LLM seams (fakes make
+    the whole graph offline-testable).
     """
     vocabulary = adapter.property_vocabulary() if adapter is not None else {}
     nodes = {
@@ -353,6 +463,7 @@ def build_orchestrator(
         "retrieve": _make_retrieve_node(adapter),
         "filter": _filter_node,
         "rank": _rank_node,
+        "synthesis": _make_synthesis_node(synthesis_provider),
     }
     builder = StateGraph(OrchestratorState)
     for step in WORKFLOW_STEPS:

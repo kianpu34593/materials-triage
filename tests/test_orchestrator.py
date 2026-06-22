@@ -17,6 +17,7 @@ from materials_triage.agent.orchestrator import (
     HypothesisConformanceError,
     InputRefused,
     SpecCompilationError,
+    _make_synthesis_node,
     build_orchestrator,
     resume_run,
 )
@@ -627,6 +628,68 @@ def test_hypothesis_prompt_constrains_proposals_to_the_sources_vocabulary():
     assert "density (g/cm³)" in prompt
     # #22 fidelity: the prompt steers away from candidate-wiping one-sided bounds.
     assert "avoid" in prompt and "exclude every candidate" in prompt
+
+
+class _SynthesisProvider:
+    """A synthesis seam that returns each queued Synthesis in turn and records the
+    prompts — lets a test drive the grounding-retry loop deterministically."""
+
+    def __init__(self, *drafts):
+        self._drafts = list(drafts)
+        self.prompts = []
+
+    def synthesize(self, prompt):
+        self.prompts.append(prompt)
+        return self._drafts[len(self.prompts) - 1]
+
+
+def _ranked_result():
+    """A one-survivor TriageResult and the candidate tuple it came from, for
+    driving the synthesis node."""
+    cand = _candidate("mp-keep", 4.0)
+    result = TriageResult(ranked=(ScoredCandidate(candidate=cand, score=0.9),), excluded=())
+    return result, (cand,)
+
+
+def test_synthesis_writes_a_grounded_narrative_over_the_ranked_shortlist():
+    """#35: with a ranked result the synthesis node asks the LLM for a narrative,
+    accepts it when every claim cites a retrieved material, and lands it in the
+    `synthesis` channel (the renderers' source for the PI 'why')."""
+    from materials_triage.core.synthesis import GroundedClaim, Synthesis
+
+    result, candidates = _ranked_result()
+    grounded = Synthesis(
+        summary="ZnO is the standout wide-gap oxide.",
+        claims=(GroundedClaim(text="4.0 eV gap suits UV", record_id="mp-keep"),),
+    )
+    node = _make_synthesis_node(_SynthesisProvider(grounded))
+
+    out = node({"goal": "wide-gap oxide", "result": result, "candidates": candidates})
+
+    assert out["synthesis"] == grounded
+
+
+def test_synthesis_retries_when_a_draft_cites_an_unretrieved_material():
+    """#35 grounding: a first draft citing a material NOT in the shortlist is
+    rejected and fed back; the node retries and accepts the corrected, grounded
+    draft — so a fabricated citation never reaches the output."""
+    from materials_triage.core.synthesis import GroundedClaim, Synthesis
+
+    result, candidates = _ranked_result()
+    fabricated = Synthesis(
+        summary="draft", claims=(GroundedClaim(text="hallucinated", record_id="mp-ghost"),)
+    )
+    corrected = Synthesis(
+        summary="fixed", claims=(GroundedClaim(text="real", record_id="mp-keep"),)
+    )
+    provider = _SynthesisProvider(fabricated, corrected)
+    node = _make_synthesis_node(provider)
+
+    out = node({"goal": "wide-gap oxide", "result": result, "candidates": candidates})
+
+    assert out["synthesis"] == corrected
+    assert len(provider.prompts) == 2
+    assert "mp-ghost" in provider.prompts[1]  # the rejection was fed back
 
 
 def test_gate_refuses_a_forbidden_request_before_any_llm_call():
