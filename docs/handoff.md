@@ -1,4 +1,4 @@
-# Session Handoff - 2026-06-21 13:59
+# Session Handoff - 2026-06-21 18:15
 
 > Single living handoff, git-tracked at `docs/handoff.md` (PR #35). Do NOT recreate dated copies or
 > a `docs/handoffs/` subdir — untracked handoffs get wiped by parallel sessions' `git clean`. Keep
@@ -8,23 +8,30 @@
 Build **Materials-Triage** (public-data-only materials-research triage agent) as single-function
 TDD increments, per `Deep-Plan-materials-triage-agent-2026-06-19-1429.md`. Core data models,
 deterministic logic (scoring + ranking), retrieval (MP adapter), the literature RAG (#17), the
-hypothesis layer, **and the first real LLM code — the Bedrock provider (#21) — are all complete and
-merged to `main`.** The project is mid-way through the **LLM layer** (#21 done · #22 prompts · #23
-orchestrator next) with **guardrails** (#18 input gate / #19 trust boundary / #20 output validator)
-still ahead.
+hypothesis layer, the Bedrock provider (#21), **and now the LangGraph orchestrator (#23, incl. the
+hypothesis retry + spec-build HITL gate) are all complete and merged to `main`** (built by a parallel
+session). This session pivoted to the **input-side guardrails** — the input policy gate (#18) and
+trust boundary (#19) — built in a worktree. Remaining: output validator (#20), prompts (#22, folding
+into role system prompt), renderers/CLI/eval/docs.
 
 ## Scope
 - **DONE + merged:** data models (schema.py), logic (scoring.py + ranking.py), retrieval
   (SourceAdapter + Materials Project adapter), **literature RAG (#17)**, **hypothesis layer
   (models + `compile_spec`, now a `kind`-discriminated union)**, **Bedrock LLM provider (#21)**,
   demo notebooks + ADRs 0001/0002.
-- **Next up (DECIDED this session): orchestrator #23 on LangGraph** (resume + HITL are v1 scope);
-  then guardrails (#18–#20); then renderers (#25/#26), CLI (#27), eval (#28), design note (#29-doc),
-  README (#30-doc). Prompts (#22) fold into the #23 nodes.
-- **UN-PARKED — LangGraph decision RESOLVED:** #9 TriageRun/Step trace + #10 lab memory are
-  subsumed by LangGraph (checkpointer ⊇ #9 trace+resume; `BaseStore` ⊇ #10 lab memory; `interrupt()`
-  = spec HITL). `runs/<id>.json` becomes a **derived read-model exported from checkpoint history**,
-  not a second store. [memory: langgraph-orchestrator-decision]
+- **Orchestrator #23 on LangGraph — BUILT + MERGED** (parallel session): LangGraph skeleton with
+  per-stage exclusion channels (#41), then hypothesis retry + spec-build HITL gate (#23). #9/#10 are
+  subsumed (checkpointer ⊇ #9 trace+resume; `BaseStore` ⊇ #10 lab memory; `interrupt()` = spec HITL);
+  `runs/<id>.json` is a **derived read-model exported from checkpoint history**, not a second store.
+  [memory: langgraph-orchestrator-decision]
+- **THIS SESSION (8): input-side guardrails.** Building the **input policy gate (#18)** + **trust
+  boundary (#19)** in the `feat/input-policy-gate` worktree. Gate is DETERMINISTIC + **allowlist-first
+  scope triage**, right-sized as the **weakest of 5 layers** (NOT the safety guarantee). v1 leans on a
+  thin forbidden-action denylist + a **role system prompt** for scope/role; v2 = hybrid LLM scope
+  check. [memory: input-gate-mechanism-decision] · ADR 0004 (+expansion) records the threat model.
+- **Next up:** finish #18/#19 slices (trust-boundary `wrap_untrusted` + `ROLE_SYSTEM_PROMPT`), then
+  output validator (#20), renderers (#25/#26), CLI (#27), eval (#28), design note (#29-doc),
+  README (#30-doc).
 - **Collaboration rules (CLAUDE.md — follow exactly):** ask before choosing between approaches;
   implement ONE function at a time then stop for approval; TDD via the `tdd` skill (one red→green
   at a time, never batch); discuss behavior before coding; **don't start coding until told**.
@@ -57,13 +64,20 @@ still ahead.
   `monkeypatch.delenv` (merged #36).
 - `pyproject.toml` — runtime deps `pydantic>=2`, `requests>=2`, `rank-bm25>=0.2`; extras `dev`
   (+`python-dotenv`), `notebook`, **`llm` (`langchain-aws`)**; `live` pytest marker (deselected).
+- `src/materials_triage/agent/orchestrator.py` — **LangGraph orchestrator (#23), MERGED** (#41 skeleton
+  + per-stage exclusion channels; #23 hypothesis retry + spec-build HITL gate). Parallel session's work.
+- `src/materials_triage/policy/guardrails.py` — **input policy gate (#18), WIP on `feat/input-policy-gate`
+  (uncommitted).** `check_input(text) -> GateDecision`; frozen `GateDecision(allowed, reason, category)`;
+  deterministic forbidden-action denylist `_FORBIDDEN_ACTIONS` (categories `wet_lab`/`private_data`/
+  `paywalled`). Still to add: `wrap_untrusted` trust-boundary wrapper (#19), `ROLE_SYSTEM_PROMPT`.
+- `tests/test_guardrails.py` — gate tests (WIP, uncommitted): in-scope allowed + 3 forbidden-action
+  refusals (= persistent deterministic red-team cases). 4 passing.
+- `docs/design/0003-orchestrator-on-langgraph.md` (ADR, #40) · `0004-guardrail-architecture-threat-model.md`
+  (ADR, #42; **expanded** with wrapper construction + attack-surface table, #43).
 - `docs/design/0001-retrieval-rest-adapters.md` (#29) · `0002-literature-abstracts-only.md` (#31).
 - `notebooks/deterministic_pipeline_demo.ipynb` (#29) · `literature_rag_demo.ipynb` (#32/#33) ·
   one-shot **LLM→spec** and **RAG→spec** demo notebooks (#38, parallel session).
 - `docs/handoff.md` — this file (tracked, #35).
-- *(not yet created — #23 targets)* `src/materials_triage/agent/orchestrator.py` (LangGraph state
-  machine), `core/run_trace.py` (now the checkpoint→`runs/<id>.json` exporter), `memory/store.py`
-  (`BaseStore` lab memory), `docs/design/0003-orchestrator-on-langgraph.md` (ADR, pending Kian's call).
 
 ## Discoveries (gotchas — most also in auto-memory; see MEMORY.md)
 *(Append-only. Prior findings preserved; newest at the end.)*
@@ -138,6 +152,28 @@ still ahead.
   loses provenance/excluded-set/missing-flags. Revises deep plan: `core/run_trace.py` → exporter,
   `memory/store.py` → `BaseStore` wrapper. Node `RetryPolicy` ↦ the ~15% flakiness loop, but likely a
   **custom node** to retry ONLY on pydantic `ValidationError` and feed the malformed output back.
+- **— Session 8 (2026-06-21, this session): input-side guardrails / threat model —**
+- **A keyword denylist is NOT how guardrails work.** Frontier safety = defense-in-depth (training-time
+  alignment, trained input/output classifiers, capability gating, monitoring), never substring
+  matching. Kian pushed on this; reframed the gate accordingly. [memory: input-gate-mechanism-decision]
+- **Co-locate each defense with the capability it constrains — not at the query door.** The brief's 4
+  asks each belong to a *different* layer: forbidden-actions → capability-by-construction + (future)
+  per-tool egress allowlist + per-node least privilege; no-fabrication → output validator #20; stay-in-
+  role/social-eng → trust boundary #19 + constrained output + per-step role re-grounding. The input
+  gate is the **weakest of 5 layers**, not the safety guarantee. (ADR 0004.)
+- **v1 gate design (Kian rejected both "full hybrid now" and "deterministic allowlist"):** the brittle
+  part was the *scope* decision. Solution — put scope/role in the **spec-building LLM's system prompt**
+  (free: it already reads the query), keep a thin deterministic **forbidden-action denylist** for cheap
+  certain logged refusals, and defer a dedicated scope *classifier* to v2 (hybrid). Manual spec-field
+  edits are gated by **pydantic schema validation** (typed values can't carry an injection).
+- **Trust-boundary wrapper must be unforgeable.** A fixed delimiter is useless (open code → attacker
+  types the closer). Construction = **XML tags (model adherence) + an unguessable per-request nonce
+  (anti-breakout) + escaping (collisions) + the system-prompt directive (obey-in-place)**, plus input
+  hygiene (unicode-normalize, strip zero-width/control/bidi, max-length cap). The wrapper owns only the
+  *structural* boundary; the rest is other layers. (ADR 0004 expansion #43.)
+- **Granular forbidden categories** (`wet_lab`/`private_data`/`paywalled`) beat one `forbidden_action`
+  bucket — needed to log *why* it refused. Watch denylist false-positives: dropped `"run a"`
+  (would refuse "run a screening"); avoided `"internal"` alone (vs "internal energy").
 
 ## Work Done (all merged to `main` unless noted)
 *(Append-only history.)*
@@ -183,44 +219,58 @@ still ahead.
     demos) as completed retrofit entries; sharpened #23's description to include the retry loop +
     the two weight-confirmation / error-wrap debts + the LangGraph checkpointer⊇#9 / BaseStore↦#10
     mapping.
+- **Session 8 (2026-06-21) — input-side guardrails (#18/#19) + threat-model docs:**
+  - Resumed; decided **ADR 0003 lands as its own commit** → shipped **#40** (ADR 0003 orchestrator-on-
+    LangGraph). (Parallel session then merged **#41** skeleton + **#23** retry/HITL orchestrator.)
+  - Created the `feat/input-policy-gate` worktree; built the gate via TDD: `GateDecision` + in-scope
+    tracer (A) → wet-lab refusal (B) → private-data (C) → paywalled (D). **4 passing tests**, denylist
+    refactored to `_FORBIDDEN_ACTIONS`. WIP **uncommitted**.
+  - Long design discussion → **reframed the gate** (allowlist-first scope triage; weakest of 5 layers)
+    and chose the **v1 = denylist + role-system-prompt** approach. Shipped **#42** (ADR 0004 guardrail
+    architecture & threat model), then **#43** (ADR 0004 expansion: wrapper construction + attack-surface
+    table). Drafted a reader-facing exploit/social-engineering guide but **deleted it at Kian's request**
+    (shipped only the ADR in #43).
+  - Saved [memory: input-gate-mechanism-decision] (+ reframe); indexed in MEMORY.md.
 
 ## Status
-- **Working / merged:** `main` @ **`8203f11`**. Full deterministic vertical slice + literature RAG +
-  hypothesis layer + Bedrock LLM provider (#21) are live; demo notebooks incl. LLM→spec / RAG→spec
-  (#38). Last verified offline suite green (138 passed, 3 live deselected); `ruff check .` clean. Tree
-  clean, on `main`, no local feature branches or worktrees.
-- **DECIDED, not yet built:** orchestrator #23 architecture = **LangGraph** (resume + HITL in v1).
-  No orchestrator code exists yet — this session was design-only.
-- **Known issues:** none for merged work. The **live Bedrock smoke test is ~15% flaky by design**
-  (single-shot; gate rejects malformed LLM output) — deselected from CI/no-mistakes, gates nothing;
-  reliability awaits the #23 retry node.
-- **Open threads:** two #23 carry-forward debts (weight-normalization confirmation gate; wrap
-  `compile_spec` ValidationError) [memory: orchestrator-23-carryforward]; ADR 0003 (orchestrator-on-
-  LangGraph) not yet written; v2 debts (tokenizer, DFT/XC); #31 ExcludedCandidate reasons.
+- **Working / merged:** `main` @ **`5b8321a`**. Full deterministic slice + RAG + hypothesis layer +
+  Bedrock provider (#21) + **LangGraph orchestrator (#23 incl. retry + HITL gate, #41/#23)** + ADRs
+  0001–0004 all live. No open PRs.
+- **WIP (this session, uncommitted):** input policy gate (#18) on `feat/input-policy-gate` worktree —
+  `policy/guardrails.py` + `tests/test_guardrails.py`, **4 passing** (in-scope allowed + wet_lab/
+  private_data/paywalled refusals). Run with `PYTHONPATH="$PWD/src" pytest tests/test_guardrails.py`.
+- **Partial / next in #18/#19:** `wrap_untrusted` trust-boundary wrapper (nonce + XML + escaping +
+  hygiene) and `ROLE_SYSTEM_PROMPT` + `build_chat_messages` not yet written.
+- **Known issues:** the gate WIP is **untracked** — commit it before any parallel-session `git clean`
+  wipes it. Live Bedrock smoke test still ~15% flaky by design (now mitigated by the merged #23 retry).
+- **Open threads:** v2 hybrid LLM scope check (deferred); v2 debts (tokenizer, DFT/XC); #31
+  ExcludedCandidate reasons; output validator #20 still to build.
 
 ## Next Steps
-1. **Get the green-light + ADR call, then build #23 on LangGraph** (don't start coding until told).
-   Open question for Kian: does **ADR 0003 (orchestrator-on-LangGraph)** land as the first commit, or
-   fold into the #23 PR description? (It reverses the deep plan's "traced state machine, no framework"
-   locked decision, so it's worth recording either way.)
-2. **#23 TDD build order (one function at a time, stop after each):**
-   1. add `langgraph` dep + an empty `StateGraph` that compiles with a `MemorySaver` (tracer bullet);
-   2. orchestrator **state model** (domain pydantic, one channel per step);
-   3. wrap deterministic core as **nodes** (retrieve→filter→rank), end-to-end on a fixture, no LLM;
-   4. **retry node** (re-invoke provider on pydantic `ValidationError`, capped, feed bad output back);
-   5. **`interrupt()` spec gate** incl. the **weight-normalization confirmation** debt;
-   6. **exporter** `get_state_history()` → `TriageRun`/`Step` → `runs/<id>.json` (audit-shaped);
-   7. **`resume --from`** (resume from checkpoint w/ state edit; assert upstream reused);
-   8. **`BaseStore`** lab memory (save Final Spec, retrieve as seed).
-3. **When coding:** branch off `main` (worktree, parallel sessions active — #38 just merged),
-   `python -m pytest -q` (+ `-m live` with creds), `ruff check src tests`. Ship via no-mistakes
-   (bootstrap from the **main repo**: push to `no-mistakes` remote → abort → `axi run --intent`);
-   squash-merge in the GitHub UI; then `/sync-main`. Keep this handoff committed.
-4. **After #23:** guardrails (#18–#20); ExcludedCandidate reasons (#31); v2 items (tokenizer,
-   DFT/XC); renderers (#25/#26), CLI (#27), eval (#28), design note (#29-doc), README (#30-doc).
+1. **Merge latest `main` into `feat/input-policy-gate`** (worktree is stale at `c5664e0`; brings ADRs
+   0003/0004 + the merged orchestrator). Then **commit the gate WIP** so it survives.
+2. **Finish the gate slices (#18) — one red→green at a time, stop after each:** (the next slice, per
+   Kian's call, is the trust-boundary wrapper):
+   - **E** `wrap_untrusted(text, *, label, nonce)` — XML + unguessable nonce + escaping (anti-breakout);
+     optional E4 unicode/zero-width/bidi hygiene + E5 max-length cap. **Open Qs for Kian:** E1–E3 only
+     vs include E4/E5 now; **inject** the nonce vs generate inside (lean inject, for testability).
+   - **F** `ROLE_SYSTEM_PROMPT` + pure `build_chat_messages(query) -> [("system",…),("human", wrapped)]`
+     (user text NEVER in the system slot).
+   - **G** wire `build_chat_messages` into `_bedrock_complete` — **coordinate with the parallel session**
+     (they own `agent/llm.py`; keep the edit minimal/additive).
+   - **RT** red-team tests: deterministic (denylist + wrapper breakout-neutralization) in CI; behavioral
+     (poem→declined, "ignore instructions"→stays in role, prompt-leak→refused) `live`-marked.
+3. **When shipping:** ship via no-mistakes (bootstrap from the **main repo**: push to `no-mistakes`
+   remote → abort → `axi run --intent`); squash-merge in the GitHub UI; then `/sync-main`. Keep this
+   handoff committed.
+4. **After #18/#19:** output validator (#20); prompts (#22, mostly = the role system prompt);
+   ExcludedCandidate reasons (#31); v2 items (hybrid scope check, tokenizer, DFT/XC); renderers
+   (#25/#26), CLI (#27), eval (#28), design note (#29-doc), README (#30-doc).
 
 ## Context for Next Session
-- **Branch:** `main` @ `8203f11` == `origin/main`. Clean tree, no other local branches or worktrees.
+- **Branch:** `main` @ `5b8321a` == `origin/main`. Active worktree `feat/input-policy-gate`
+  (`../materials-triage-policy-gate`, stale at `c5664e0`) holds the **uncommitted** gate WIP. A parallel
+  session works the orchestrator in the main checkout — coordinate; don't disturb its WIP.
 - **How to verify merged state:** `python -m pytest -q` (138 passed, 3 deselected), `ruff check .`.
   Live (needs creds): `pytest -m live` (Bedrock via `~/.aws/credentials`, OpenAlex, MP). RAG quick
   check: `OPENALEX_MAILTO=… python -c "from materials_triage.retrieval.rag import LiteratureRAG,
@@ -230,11 +280,12 @@ still ahead.
   conftest loads `.env` for live tests; AWS keys in `.env` must be UPPERCASE.
 - **Git workflow:** `main` protected, signed commits (`git commit -S`, SSH), squash-merge via GitHub
   UI, then `/sync-main`. pre-commit `ruff format` can abort a commit → re-add + re-commit.
-- **Auto-memory (persists):** see `MEMORY.md` — incl. hypothesis-layer (RESOLVED→MEDIUM),
-  ranking-weight-normalization, orchestrator-23-carryforward, llm-structured-output-flakiness,
-  dft-xc-functional-comparability-v2, rag-tokenizer-v2-todo, adapter-testing-seam, materials-project-api,
-  handoff-doc-location, worktree-pythonpath, no-mistakes-run-bootstrap.
-- **Task list (reconciled):** #1–#17, #21, #32 (hypothesis layer), #33 (demos) completed; #9/#10
-  un-parked (subsumed by LangGraph #23 — checkpointer⊇#9, BaseStore↦#10); #18–#20, #22–#30 remain
-  (#22 prompts fold into #23); #31 deferred. #23 description now scopes the retry loop + the two
-  weight-confirmation / error-wrap debts.
+- **Auto-memory (persists):** see `MEMORY.md` — incl. **input-gate-mechanism-decision** (new),
+  langgraph-orchestrator-decision, hypothesis-layer (RESOLVED→MEDIUM), ranking-weight-normalization,
+  orchestrator-23-carryforward, llm-structured-output-flakiness, langgraph-msgpack-unregistered-types,
+  orchestrator-exclusions-two-sources, dft-xc-functional-comparability-v2, rag-tokenizer-v2-todo,
+  adapter-testing-seam, materials-project-api, handoff-doc-location, worktree-pythonpath,
+  no-mistakes-run-bootstrap.
+- **Task list (reconciled):** #1–#17, #21, #32 (hypothesis layer), #33 (demos), **#23 orchestrator
+  (LangGraph, #41/#23)** completed; #9/#10 subsumed by #23; **#18/#19 in progress (this session)**;
+  #20, #22, #24–#30 remain (#22 ≈ the role system prompt); #31 deferred.
