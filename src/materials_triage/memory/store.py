@@ -30,7 +30,11 @@ class LabMemory:
         self._store = store or InMemoryStore()
 
     def save(self, key: str, spec: TriageSpec, goal: str = "") -> str:
-        """Remember ``spec`` (with the ``goal`` it served) under ``key``; returns the key."""
+        """Remember ``spec`` (with the ``goal`` it served) under ``key``; returns the key.
+
+        The ``goal`` is persisted intentionally for future (#22) seed-by-goal
+        matching; ``recall`` does not yet return it.
+        """
         self._store.put(
             self.NAMESPACE,
             key,
@@ -43,4 +47,6 @@ class LabMemory:
         item = self._store.get(self.NAMESPACE, key)
         if item is None:
             return None
+        if "spec" not in item.value:
+            raise ValueError(f"lab-memory item {key!r} has no 'spec' to recall")
         return TriageSpec.model_validate(item.value["spec"])

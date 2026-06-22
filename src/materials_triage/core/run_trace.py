@@ -100,9 +100,16 @@ def write_run(run: TriageRun, runs_dir: Path | str) -> Path:
     deliberately NOT the checkpointer's serde: this file is our own durable,
     human-/tool-readable record, independent of LangGraph's checkpoint format.
     Creates ``runs_dir`` if needed and returns the written path.
+
+    ``run_id`` is caller-supplied input, so it is validated to a single safe
+    filename segment before being joined: a value containing a path separator or
+    ``..`` is rejected (rather than silently escaping ``runs_dir``).
     """
+    run_id = run.run_id
+    if run_id in (".", "..") or run_id != Path(run_id).name:
+        raise ValueError(f"run_id {run_id!r} is not a safe filename segment")
     runs_dir = Path(runs_dir)
     runs_dir.mkdir(parents=True, exist_ok=True)
-    path = runs_dir / f"{run.run_id}.json"
+    path = runs_dir / f"{run_id}.json"
     path.write_text(run.model_dump_json(indent=2))
     return path

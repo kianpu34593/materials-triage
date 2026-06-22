@@ -6,6 +6,7 @@ a later, separate run can recall one as a seed. v1 has no mandatory profile —
 the spec is LLM-built and remembered here.
 """
 
+import pytest
 from langgraph.store.memory import InMemoryStore
 
 from materials_triage.core.schema import Constraint, RankingTarget, TriageSpec
@@ -39,3 +40,13 @@ def test_lab_memory_recall_returns_none_when_nothing_is_saved():
     """A first-time user (no remembered spec) recalls None — the spec-build step
     then falls back to built-in defaults rather than erroring."""
     assert LabMemory(InMemoryStore()).recall("unknown-scientist") is None
+
+
+def test_lab_memory_recall_raises_clearly_on_an_item_without_a_spec():
+    """Defensive cross-run read: if a foreign item (no 'spec') ever lands in the
+    namespace, recall raises an attributable ValueError, not a bare KeyError."""
+    backing = InMemoryStore()
+    backing.put(LabMemory.NAMESPACE, "foreign", {"goal": "no spec here"})
+
+    with pytest.raises(ValueError, match="no 'spec'"):
+        LabMemory(backing).recall("foreign")

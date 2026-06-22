@@ -7,6 +7,8 @@ produces a TriageRun: the final domain artifacts plus an ordered, per-step trace
 of what each workflow step wrote.
 """
 
+import pytest
+
 from materials_triage.agent.orchestrator import WORKFLOW_STEPS, build_orchestrator
 from materials_triage.core.run_trace import Step, TriageRun, export_run, write_run
 from materials_triage.core.schema import (
@@ -105,3 +107,14 @@ def test_write_run_persists_the_triagerun_as_json_under_its_run_id(tmp_path):
     assert reloaded.spec == spec
     assert [sc.candidate.identifier for sc in reloaded.result.ranked] == ["mp-keep"]
     assert {ex.candidate.identifier for ex in reloaded.result.excluded} == {"mp-drop"}
+
+
+def test_write_run_rejects_a_run_id_that_would_escape_the_runs_dir(tmp_path):
+    """run_id is caller-supplied and used as a filename, so a value containing a
+    path separator or '..' is rejected rather than writing outside runs_dir."""
+    for unsafe in ("../escape", "a/b", ".."):
+        with pytest.raises(ValueError, match="not a safe filename segment"):
+            write_run(TriageRun(run_id=unsafe), tmp_path / "runs")
+    # A normal run_id still writes the expected file.
+    path = write_run(TriageRun(run_id="run-ok"), tmp_path / "runs")
+    assert path == tmp_path / "runs" / "run-ok.json"
