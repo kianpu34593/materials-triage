@@ -31,6 +31,21 @@ FIELD_UNITS: Mapping[str, str] = {
     "shear_modulus": "GPa",
 }
 
+#: SummaryDoc field → the name of the MP "origin" (computed property doc) whose
+#: calculation produced it. ``origins`` is keyed by these internal doc names, not
+#: by our field names, so this table is the bridge used to trace each value back
+#: to its task (and thence its XC functional). Vendor knowledge, hence here in the
+#: adapter and not the source-neutral core. A field with no matching origin in a
+#: given doc simply has no traceable task → its functional stays unknown.
+_FIELD_ORIGIN: Mapping[str, str] = {
+    "band_gap": "electronic_structure",
+    "formation_energy_per_atom": "energy",
+    "energy_above_hull": "energy",
+    "density": "structure",
+    "bulk_modulus": "elasticity",
+    "shear_modulus": "elasticity",
+}
+
 
 class MaterialsProjectAdapter(SourceAdapter):
     """Retrieve candidates from the Materials Project summary API."""
@@ -92,6 +107,16 @@ def _requests_transport(base_url: str) -> HttpGet:
         return response.json()
 
     return transport
+
+
+def _origin_task_ids(origins: list[dict] | None) -> dict[str, str]:
+    """Index a SummaryDoc's ``origins`` list by origin name → task_id.
+
+    Each entry records which calculation produced one computed property doc; this
+    lookup is the first step in tracing a value to its run. A doc with no origins
+    (field unrequested or null) yields an empty lookup.
+    """
+    return {o["name"]: o["task_id"] for o in (origins or [])}
 
 
 def _doc_to_candidate(doc: dict) -> Candidate:

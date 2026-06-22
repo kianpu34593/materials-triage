@@ -16,7 +16,10 @@ from materials_triage.core.schema import (
     TriageSpec,
 )
 from materials_triage.core.scoring import apply_hard_filters
-from materials_triage.sources.materials_project import MaterialsProjectAdapter
+from materials_triage.sources.materials_project import (
+    MaterialsProjectAdapter,
+    _origin_task_ids,
+)
 
 
 def _spec() -> TriageSpec:
@@ -26,6 +29,23 @@ def _spec() -> TriageSpec:
 def _fixed(envelope: dict) -> MaterialsProjectAdapter:
     """An adapter whose transport always returns ``envelope`` (offline)."""
     return MaterialsProjectAdapter(http_get=lambda url, params, headers: envelope)
+
+
+def test_origin_task_ids_indexes_task_ids_by_origin_name():
+    """MP's origins list (one entry per computed property doc) collapses to a
+    name -> task_id lookup, the first step in tracing each value to its run."""
+    origins = [
+        {"name": "energy", "task_id": "t-energy", "last_updated": "2026-05-30"},
+        {"name": "electronic_structure", "task_id": "t-bands", "last_updated": "2022-06-22"},
+    ]
+
+    assert _origin_task_ids(origins) == {"energy": "t-energy", "electronic_structure": "t-bands"}
+
+
+def test_origin_task_ids_of_absent_origins_is_empty():
+    """A doc with no origins (the field unrequested or null) yields no lookup,
+    so downstream functional resolution simply finds nothing."""
+    assert _origin_task_ids(None) == {}
 
 
 def test_retrieve_maps_a_one_doc_payload_to_a_candidate():
