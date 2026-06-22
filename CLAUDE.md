@@ -138,6 +138,24 @@ as a runtime dependency. It proceeds as single-function
 TDD increments (see the build order in the deep plan), and only on an explicit
 go-ahead.
 
+The **public-web-app hosting layer** has also begun in a sibling `server/`
+package (monorepo layout: the core stays pure under `src/materials_triage` and
+`server/` imports it, never the reverse). Its first increment is the
+model-selection policy in `server/mt_server/policy.py` — the pure, deterministic
+`resolve_model(tier, requested, *, default, allowed)` (no FastAPI, no AWS, so the
+web layer can lean on it and it is offline-testable): an `anon` visitor is pinned
+to `default` (any `requested` model is silently ignored — not an error — because
+the UI greys the selector out, keeping the shared Bedrock account bill
+predictable); a signed-in `user` gets their `requested` model when it is in
+`allowed`, the `default` when none is requested, and a `ValueError` when the
+model is not offered; an unknown `tier` raises `ValueError`. `allowed`/`default`
+are parameters (the server config owns the model list), and `TIERS` is the
+recognized-tier frozenset. `server/` is wired into pytest discovery without a
+separate install — `pyproject.toml` adds `server/tests` to `testpaths` and
+`server` to `pythonpath` while the core stays installed editable from `src`.
+FastAPI routes, auth/tier resolution, rate limiting, and metering are separate
+follow-up increments.
+
 The repo's agent-coding setup (commands, skills, settings) is documented in
 [`.claude/README.md`](.claude/README.md).
 
