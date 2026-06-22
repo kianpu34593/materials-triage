@@ -248,6 +248,12 @@ class TriageSpec(BaseModel):
             raise ValueError(
                 f"elements cannot be both required and excluded: {sorted(contradictory)}"
             )
+        for p in self.element_predicates:
+            if p.quantifier == "any" and p.members <= must_lack:
+                raise ValueError(
+                    "an 'any' predicate cannot be satisfied when all its members are "
+                    f"excluded: {sorted(p.members)}"
+                )
         cap = self.count.max if self.count is not None else None
         if cap is not None and len(must_have) > cap:
             raise ValueError(

@@ -371,6 +371,33 @@ def test_triagespec_rejects_element_required_and_excluded():
         )
 
 
+def test_triagespec_rejects_any_predicate_fully_excluded():
+    """An "any" predicate is satisfiable only if some member can be present, so when
+    every member is also forbidden by a "none" predicate the filter admits nothing
+    and the spec is refused."""
+    with pytest.raises(ValidationError, match="Fe"):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            element_predicates=(
+                ElementPredicate(quantifier="any", members=frozenset({"Fe"})),
+                ElementPredicate(quantifier="none", members=frozenset({"Fe"})),
+            ),
+        )
+
+
+def test_triagespec_allows_any_predicate_partially_excluded():
+    """An "any" predicate stays satisfiable while one member is still permitted, so
+    excluding only some of its members is allowed."""
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        element_predicates=(
+            ElementPredicate(quantifier="any", members=frozenset({"Fe", "Zn"})),
+            ElementPredicate(quantifier="none", members=frozenset({"Fe"})),
+        ),
+    )
+    assert len(spec.element_predicates) == 2
+
+
 def test_triagespec_rejects_duplicate_constraint_property():
     """Two constraints on the same property are an authoring mistake — the
     bound should be one constraint, not two — so the spec refuses the pair."""
