@@ -98,6 +98,70 @@ class Constraint(BaseModel):
         return self
 
 
+class BooleanConstraint(BaseModel):
+    """A hard filter on one boolean property: a candidate whose value does not
+    match ``required`` is dropped.
+
+    The source-neutral analog of :class:`Constraint` for the yes/no facts a source
+    exposes (e.g. ``is_stable``, ``is_metal``) — things a numeric min/max cannot
+    express. Like :class:`Constraint` it does not restrict ``property_name``: which
+    booleans a source can actually answer is the adapter's vocabulary concern.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    property_name: str = Field(min_length=1)
+    required: bool
+
+
+class ElementPredicate(BaseModel):
+    """A hard composition filter: a quantified membership test over element symbols.
+
+    Unifies require/exclude into one source-neutral predicate matching the OPTIMADE
+    element operators — ``all`` (every member present), ``any`` (at least one
+    present, the operator a require/exclude pair could not express), ``none`` (no
+    member present). Members are validated against the canonical element set so a
+    hallucinated symbol is refused before it reaches the spec.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    quantifier: Literal["all", "any", "none"]
+    members: frozenset[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _members_are_real(self) -> Self:
+        unknown = self.members - ELEMENT_SYMBOLS
+        if unknown:
+            raise ValueError(f"composition rule names non-elements: {sorted(unknown)}")
+        return self
+
+
+class CountConstraint(BaseModel):
+    """A hard filter on the number of distinct elements in a composition.
+
+    A bound on composition cardinality ("simple compositions" → few elements),
+    expressed as an inclusive ``min`` and/or ``max``. Modelled as its own typed
+    field rather than a numeric :class:`Constraint` on a magic property name,
+    because it takes part in a cross-field coherence check with the element
+    predicates (you cannot require more distinct elements than the cap allows) — a
+    typed slot keeps that invariant robust instead of string-matching a name.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    min: int | None = Field(default=None, ge=1)
+    max: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _bounds_some_count(self) -> Self:
+        if self.min is None and self.max is None:
+            raise ValueError("a count constraint must set at least one of min or max")
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError("a count constraint's min cannot exceed its max")
+        return self
+
+
 class RankingTarget(BaseModel):
     """A soft scoring preference on one property: the ranker normalises the
     property in the given direction and weights it in the weighted average.
@@ -123,15 +187,20 @@ class TriageSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     constraints: tuple[Constraint, ...] = ()
+    boolean_constraints: tuple[BooleanConstraint, ...] = ()
     ranking_targets: tuple[RankingTarget, ...] = ()
-    required_elements: frozenset[str] = frozenset()
-    excluded_elements: frozenset[str] = frozenset()
-    max_nelements: int | None = Field(default=None, ge=1)
+    element_predicates: tuple[ElementPredicate, ...] = ()
+    count: CountConstraint | None = None
 
     @model_validator(mode="after")
     def _has_a_hard_filter(self) -> Self:
-        if not self.constraints:
-            raise ValueError("a spec must have at least one constraint")
+        if not (
+            self.constraints
+            or self.boolean_constraints
+            or self.element_predicates
+            or self.count is not None
+        ):
+            raise ValueError("a spec must have at least one hard filter")
         seen: set[str] = set()
         for c in self.constraints:
             if c.property_name in seen:
@@ -140,6 +209,14 @@ class TriageSpec(BaseModel):
                     "combine bounds into a single constraint"
                 )
             seen.add(c.property_name)
+        seen_bool: set[str] = set()
+        for b in self.boolean_constraints:
+            if b.property_name in seen_bool:
+                raise ValueError(
+                    f"boolean property {b.property_name!r} is constrained more than once; "
+                    "a boolean property should have a single required value"
+                )
+            seen_bool.add(b.property_name)
         ranked: set[str] = set()
         for t in self.ranking_targets:
             if t.property_name in ranked:
@@ -155,24 +232,33 @@ class TriageSpec(BaseModel):
                     f"ranking weights are proportional shares and must sum to 1, "
                     f"but they sum to {total}"
                 )
-        for name, symbols in (
-            ("required_elements", self.required_elements),
-            ("excluded_elements", self.excluded_elements),
-        ):
-            unknown = symbols - ELEMENT_SYMBOLS
-            if unknown:
-                raise ValueError(
-                    f"{name} contains symbols that are not chemical elements: {sorted(unknown)}"
-                )
-        contradictory = self.required_elements & self.excluded_elements
+        # ElementPredicate validates its own members, so the spec only checks
+        # cross-predicate coherence: elements that must ALL be present (the union of
+        # every "all"-quantified predicate) cannot also be forbidden by a "none"
+        # predicate, nor outnumber the count cap. ("any" members need not all be
+        # present, so they bind neither check.)
+        must_have = frozenset(
+            e for p in self.element_predicates if p.quantifier == "all" for e in p.members
+        )
+        must_lack = frozenset(
+            e for p in self.element_predicates if p.quantifier == "none" for e in p.members
+        )
+        contradictory = must_have & must_lack
         if contradictory:
             raise ValueError(
                 f"elements cannot be both required and excluded: {sorted(contradictory)}"
             )
-        if self.max_nelements is not None and len(self.required_elements) > self.max_nelements:
+        for p in self.element_predicates:
+            if p.quantifier == "any" and p.members <= must_lack:
+                raise ValueError(
+                    "an 'any' predicate cannot be satisfied when all its members are "
+                    f"excluded: {sorted(p.members)}"
+                )
+        cap = self.count.max if self.count is not None else None
+        if cap is not None and len(must_have) > cap:
             raise ValueError(
-                f"required_elements demands {len(self.required_elements)} distinct "
-                f"elements but max_nelements caps it at {self.max_nelements}"
+                f"required elements demand {len(must_have)} distinct "
+                f"elements but the count constraint caps it at {cap}"
             )
         return self
 

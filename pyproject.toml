@@ -46,7 +46,10 @@ line-length = 100
 select = ["E", "F", "W", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "server/tests"]
+# The server/ web layer is a sibling package that imports the core; make it
+# importable in tests without an install (the core is installed editable from src).
+pythonpath = ["server"]
 # Live tests hit the real network; deselected by default. Run with: pytest -m live
 addopts = "-m 'not live'"
 markers = [

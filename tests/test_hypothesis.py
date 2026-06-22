@@ -10,15 +10,23 @@ import pytest
 from pydantic import ValidationError
 
 from materials_triage.core.hypothesis import (
+    BooleanConstraintProposal,
     Citation,
     ConstraintProposal,
-    ElementRule,
-    ElementRuleProposal,
+    CountConstraintProposal,
+    ElementPredicateProposal,
     Hypothesis,
     RankingProposal,
     compile_spec,
 )
-from materials_triage.core.schema import Constraint, RankingTarget, TriageSpec
+from materials_triage.core.schema import (
+    BooleanConstraint,
+    Constraint,
+    CountConstraint,
+    ElementPredicate,
+    RankingTarget,
+    TriageSpec,
+)
 
 
 def test_citation_carries_its_source_record_and_title():
@@ -109,41 +117,24 @@ def test_proposal_rejects_a_payload_foreign_to_its_kind():
         )
 
 
-def test_element_rule_carries_its_mode_and_elements():
-    """An ElementRule is the element_rule payload: one scoping decision — require
-    or exclude a set of element symbols — that compiles to a TriageSpec element
-    set. One mode per rule, so each is independently cited and gated."""
-    rule = ElementRule(mode="require", elements=frozenset({"Zn", "O"}))
-
-    assert rule.mode == "require"
-    assert rule.elements == frozenset({"Zn", "O"})
-
-
-def test_element_rule_rejects_non_element_symbols():
-    """The LLM can hallucinate a symbol; an ElementRule validates against the
-    canonical element set at construction so a bogus 'Xx' never reaches the spec."""
-    with pytest.raises(ValidationError):
-        ElementRule(mode="require", elements=frozenset({"Zn", "Xx"}))
-
-
-def test_proposal_carries_an_element_rule_bridge():
-    """An element_rule-kind proposal embeds an ElementRule — the composition
-    scoping the spec will push to retrieval — alongside its grounding."""
-    prop = ElementRuleProposal(
-        element_rule=ElementRule(mode="exclude", elements=frozenset({"Co"})),
+def test_proposal_carries_an_element_predicate_bridge():
+    """An element_predicate-kind proposal embeds an ElementPredicate — the
+    composition scoping the spec carries — alongside its grounding."""
+    prop = ElementPredicateProposal(
+        element_predicate=ElementPredicate(quantifier="none", members=frozenset({"Co"})),
         rationale="'cheap' rules out cobalt",
         confidence=0.6,
     )
 
-    assert prop.kind == "element_rule"
-    assert prop.element_rule.mode == "exclude"
+    assert prop.kind == "element_predicate"
+    assert prop.element_predicate.quantifier == "none"
 
 
-def test_proposal_element_rule_kind_requires_an_element_rule_payload():
-    """Same discriminator promise as the other kinds: an element_rule proposal
-    with no ElementRule is rejected at construction."""
+def test_proposal_element_predicate_kind_requires_an_element_predicate_payload():
+    """Same discriminator promise as the other kinds: an element_predicate proposal
+    with no ElementPredicate is rejected at construction."""
     with pytest.raises(ValidationError):
-        ElementRuleProposal(rationale="empty", confidence=0.5)
+        ElementPredicateProposal(rationale="empty", confidence=0.5)
 
 
 def test_hypothesis_carries_its_proposals_and_mechanism():
@@ -182,8 +173,9 @@ def test_hypothesis_schema_requires_each_proposal_kind_to_carry_its_payload():
     defs = Hypothesis.model_json_schema()["$defs"]
 
     assert "constraint" in defs["ConstraintProposal"]["required"]
+    assert "boolean_constraint" in defs["BooleanConstraintProposal"]["required"]
     assert "ranking_target" in defs["RankingProposal"]["required"]
-    assert "element_rule" in defs["ElementRuleProposal"]["required"]
+    assert "element_predicate" in defs["ElementPredicateProposal"]["required"]
 
 
 def _constraint_proposal(name="band_gap", **bounds):
@@ -239,28 +231,50 @@ def test_compile_spec_makes_a_lone_ranking_weight_one():
     assert spec.ranking_targets[0].weight == pytest.approx(1.0)
 
 
-def _element_proposal(mode, elements):
-    return ElementRuleProposal(
-        element_rule=ElementRule(mode=mode, elements=frozenset(elements)),
-        rationale=f"{mode} {elements}",
+def _element_predicate_proposal(quantifier, members):
+    return ElementPredicateProposal(
+        element_predicate=ElementPredicate(quantifier=quantifier, members=frozenset(members)),
+        rationale=f"{quantifier} {members}",
         confidence=0.7,
     )
 
 
-def test_compile_spec_maps_element_rules_to_required_and_excluded():
-    """element_rule proposals scope composition: require-mode rules union into
-    required_elements, exclude-mode into excluded_elements, so retrieval and the
-    hard filter see exactly the requested scoping."""
+def test_compile_spec_maps_element_predicates_onto_the_spec():
+    """element_predicate proposals scope composition. The unified predicate carries
+    the 'any' quantifier (HAS ANY — at least one member present) that require/exclude
+    could not express, and compile_spec lands every predicate on the spec verbatim,
+    in proposal order."""
     spec = compile_spec(
         (
             _constraint_proposal(min=1.0),
-            _element_proposal("require", {"Zn", "O"}),
-            _element_proposal("exclude", {"Pb"}),
+            _element_predicate_proposal("any", {"Fe", "Zn", "Ti"}),
+            _element_predicate_proposal("none", {"Pb"}),
         )
     )
 
-    assert spec.required_elements == frozenset({"Zn", "O"})
-    assert spec.excluded_elements == frozenset({"Pb"})
+    assert spec.element_predicates == (
+        ElementPredicate(quantifier="any", members=frozenset({"Fe", "Zn", "Ti"})),
+        ElementPredicate(quantifier="none", members=frozenset({"Pb"})),
+    )
+
+
+def test_compile_spec_maps_a_count_constraint_onto_the_spec():
+    """A count_constraint proposal compiles to a bound on composition cardinality —
+    'simple compositions' means few distinct elements. It is a typed field, not a
+    numeric Constraint on a magic property name, so the spec keeps a robust
+    cross-check against the element predicates."""
+    spec = compile_spec(
+        (
+            _constraint_proposal(min=1.0),
+            CountConstraintProposal(
+                count_constraint=CountConstraint(max=3),
+                rationale="simple compositions",
+                confidence=0.7,
+            ),
+        )
+    )
+
+    assert spec.count == CountConstraint(max=3)
 
 
 def test_compile_spec_propagates_duplicate_constraint_rejection():
@@ -269,3 +283,29 @@ def test_compile_spec_propagates_duplicate_constraint_rejection():
     propagates rather than being papered over."""
     with pytest.raises(ValidationError):
         compile_spec((_constraint_proposal(min=1.0), _constraint_proposal(max=4.0)))
+
+
+def _boolean_proposal(name, required):
+    return BooleanConstraintProposal(
+        boolean_constraint=BooleanConstraint(property_name=name, required=required),
+        rationale=f"{name} must be {required}",
+        confidence=0.7,
+    )
+
+
+def test_compile_spec_maps_boolean_constraints_onto_the_spec():
+    """A boolean_constraint proposal compiles to a hard yes/no filter the spec
+    carries alongside its numeric constraints — the source-neutral way to express
+    facts like is_stable that a min/max bound cannot. Like the numeric Constraint,
+    the property name is unrestricted here: which booleans a source can answer is
+    the adapter's vocabulary concern, not the spec's."""
+    spec = compile_spec(
+        (
+            _constraint_proposal(min=1.0),
+            _boolean_proposal("is_stable", True),
+        )
+    )
+
+    assert spec.boolean_constraints == (
+        BooleanConstraint(property_name="is_stable", required=True),
+    )

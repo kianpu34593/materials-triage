@@ -9,12 +9,18 @@ rejected before it can reach the deterministic core.
 """
 
 import math
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
-from materials_triage.core.elements import ELEMENT_SYMBOLS
-from materials_triage.core.schema import Constraint, RankingTarget, TriageSpec
+from materials_triage.core.schema import (
+    BooleanConstraint,
+    Constraint,
+    CountConstraint,
+    ElementPredicate,
+    RankingTarget,
+    TriageSpec,
+)
 
 
 class Citation(BaseModel):
@@ -30,28 +36,6 @@ class Citation(BaseModel):
     source: str = Field(min_length=1)
     record_id: str = Field(min_length=1)
     title: str = Field(min_length=1)
-
-
-class ElementRule(BaseModel):
-    """The element_rule payload: one composition-scoping decision.
-
-    ``mode`` is whether to require or exclude the named elements; the rule
-    compiles to a ``TriageSpec`` ``required_elements`` / ``excluded_elements``
-    set. Symbols are validated against the canonical element set so a hallucinated
-    symbol is rejected before it can reach the spec.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    mode: Literal["require", "exclude"]
-    elements: frozenset[str] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def _elements_are_real(self) -> Self:
-        unknown = self.elements - ELEMENT_SYMBOLS
-        if unknown:
-            raise ValueError(f"not chemical elements: {sorted(unknown)}")
-        return self
 
 
 class _ProposalBase(BaseModel):
@@ -74,6 +58,20 @@ class ConstraintProposal(_ProposalBase):
     constraint: Constraint
 
 
+class BooleanConstraintProposal(_ProposalBase):
+    """A cited bridge that compiles to a hard ``BooleanConstraint``."""
+
+    kind: Literal["boolean_constraint"] = "boolean_constraint"
+    boolean_constraint: BooleanConstraint
+
+
+class CountConstraintProposal(_ProposalBase):
+    """A cited bridge that compiles to a hard ``CountConstraint``."""
+
+    kind: Literal["count_constraint"] = "count_constraint"
+    count_constraint: CountConstraint
+
+
 class RankingProposal(_ProposalBase):
     """A cited bridge that compiles to a soft ``RankingTarget``."""
 
@@ -81,11 +79,11 @@ class RankingProposal(_ProposalBase):
     ranking_target: RankingTarget
 
 
-class ElementRuleProposal(_ProposalBase):
-    """A cited bridge that compiles to a composition ``ElementRule``."""
+class ElementPredicateProposal(_ProposalBase):
+    """A cited bridge that compiles to a composition ``ElementPredicate``."""
 
-    kind: Literal["element_rule"] = "element_rule"
-    element_rule: ElementRule
+    kind: Literal["element_predicate"] = "element_predicate"
+    element_predicate: ElementPredicate
 
 
 #: One cited bridge from a fuzzy goal to a queryable spec field. A discriminated
@@ -94,7 +92,11 @@ class ElementRuleProposal(_ProposalBase):
 #: structured output reliably emit the right payload. A deterministic compile step
 #: assembles the accepted proposals into a ``TriageSpec``.
 Proposal = Annotated[
-    ConstraintProposal | RankingProposal | ElementRuleProposal,
+    ConstraintProposal
+    | BooleanConstraintProposal
+    | CountConstraintProposal
+    | RankingProposal
+    | ElementPredicateProposal,
     Field(discriminator="kind"),
 ]
 
@@ -121,18 +123,21 @@ def compile_spec(proposals: tuple[Proposal, ...]) -> TriageSpec:
     The deterministic seam between the LLM layer and the pipeline: dispatch each
     proposal on its kind, then construct a TriageSpec — whose own validators
     enforce cross-proposal coherence (>=1 constraint, unique properties, no
-    require/exclude contradiction), so this function never has to.
+    contradictory element predicates), so this function never has to.
     """
     constraints = tuple(p.constraint for p in proposals if p.kind == "constraint")
+    booleans = tuple(p.boolean_constraint for p in proposals if p.kind == "boolean_constraint")
     targets = tuple(p.ranking_target for p in proposals if p.kind == "ranking_target")
-    rules = [p.element_rule for p in proposals if p.kind == "element_rule"]
-    required = frozenset(e for r in rules if r.mode == "require" for e in r.elements)
-    excluded = frozenset(e for r in rules if r.mode == "exclude" for e in r.elements)
+    predicates = tuple(p.element_predicate for p in proposals if p.kind == "element_predicate")
+    # The spec holds a single composition-cardinality bound; take the first count
+    # proposal (the human gate reviews the compiled spec, so a stray second is caught).
+    counts = [p.count_constraint for p in proposals if p.kind == "count_constraint"]
     return TriageSpec(
         constraints=constraints,
+        boolean_constraints=booleans,
         ranking_targets=_normalize_weights(targets),
-        required_elements=required,
-        excluded_elements=excluded,
+        element_predicates=predicates,
+        count=counts[0] if counts else None,
     )
 
 
