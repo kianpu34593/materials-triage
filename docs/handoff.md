@@ -1,4 +1,4 @@
-# Session Handoff - 2026-06-21 18:15
+# Session Handoff - 2026-06-22 13:12
 
 > Single living handoff, git-tracked at `docs/handoff.md` (PR #35). Do NOT recreate dated copies or
 > a `docs/handoffs/` subdir — untracked handoffs get wiped by parallel sessions' `git clean`. Keep
@@ -15,13 +15,18 @@
 
 ## Task
 Build **Materials-Triage** (public-data-only materials-research triage agent) as single-function
-TDD increments, per `Deep-Plan-materials-triage-agent-2026-06-19-1429.md`. Core data models,
-deterministic logic (scoring + ranking), retrieval (MP adapter), the literature RAG (#17), the
-hypothesis layer, the Bedrock provider (#21), **and now the LangGraph orchestrator (#23, incl. the
-hypothesis retry + spec-build HITL gate) are all complete and merged to `main`** (built by a parallel
-session). This session pivoted to the **input-side guardrails** — the input policy gate (#18) and
-trust boundary (#19) — built in a worktree. Remaining: output validator (#20), prompts (#22, folding
-into role system prompt), renderers/CLI/eval/docs.
+TDD increments, per `Deep-Plan-materials-triage-agent-2026-06-19-1429.md`. **Merged to `main`:** core
+data models, deterministic logic (scoring + ranking), retrieval (MP adapter), literature RAG (#17),
+hypothesis layer (#32), Bedrock provider (#21), the LangGraph orchestrator (#23 incl. hypothesis retry
++ spec-build HITL gate, plus #24 crash-recovery resume + #9/#10 audit-export & lab-memory), the
+**input-side guardrails** (input policy gate #18 + trust boundary #19, PR #46), and the **role system
+prompt** (`agent/prompts.py`, PR #46). **Remaining for v1:** wire those primitives into the
+orchestrator nodes (**#34** — gate/hypothesis/synthesis/output_validate are still pass-throughs on
+`main`), output validator (#20), the rest of the prompts (#22), synthesis step (#35), PI/audit
+renderers (#25/#26), CLI (#27), eval harness (#28), design note (#29), README/CLAUDE finalize (#30),
+element-drop reasons (#31), docs follow-up (#36). A throwaway **fast-track branch**
+(`feat/fast-track-wire-guardrails`) already proved the full wiring end-to-end; only its docs were
+merged (#48/#49) — the real build re-implements via TDD.
 
 ## Scope
 - **DONE + merged:** data models (schema.py), logic (scoring.py + ranking.py), retrieval
@@ -33,14 +38,20 @@ into role system prompt), renderers/CLI/eval/docs.
   subsumed (checkpointer ⊇ #9 trace+resume; `BaseStore` ⊇ #10 lab memory; `interrupt()` = spec HITL);
   `runs/<id>.json` is a **derived read-model exported from checkpoint history**, not a second store.
   [memory: langgraph-orchestrator-decision]
-- **THIS SESSION (8): input-side guardrails.** Building the **input policy gate (#18)** + **trust
-  boundary (#19)** in the `feat/input-policy-gate` worktree. Gate is DETERMINISTIC + **allowlist-first
-  scope triage**, right-sized as the **weakest of 5 layers** (NOT the safety guarantee). v1 leans on a
-  thin forbidden-action denylist + a **role system prompt** for scope/role; v2 = hybrid LLM scope
-  check. [memory: input-gate-mechanism-decision] · ADR 0004 (+expansion) records the threat model.
-- **Next up:** finish #18/#19 slices (trust-boundary `wrap_untrusted` + `ROLE_SYSTEM_PROMPT`), then
-  output validator (#20), renderers (#25/#26), CLI (#27), eval (#28), design note (#29-doc),
-  README (#30-doc).
+- **Input-side guardrails (#18/#19) — BUILT + MERGED (PR #46):** deterministic `check_input`
+  (allowlist-first scope triage, weakest of 5 layers — NOT the safety guarantee), `wrap_untrusted`
+  trust-boundary wrapper (XML + per-request nonce + escaping + `_scrub` hygiene), and the
+  `ROLE_SYSTEM_PROMPT` + `build_chat_messages` in `agent/prompts.py` (user text never in the system
+  slot). v2 = hybrid LLM scope check. [memory: input-gate-mechanism-decision] · ADR 0004 (+expansion).
+- **Fast-track demo (throwaway, NOT merged to `main`):** branch `feat/fast-track-wire-guardrails`
+  wired gate→hypothesis (trust-boundary + vocabulary binding)→retrieve→filter→rank→synthesis→
+  output-validate→render end-to-end + a CLI, and ran live against MP + Bedrock to prove the design.
+  Only the **docs** were PR'd (#48 README flowchart, #49 fast-track-learnings + ultimate-design).
+  Learnings in `docs/fast-track-learnings.md`; the branch is the **reference implementation** to port.
+- **Next up (real build, one TDD increment at a time):** output validator (#20) → wire primitives
+  into orchestrator nodes (#34) → finish prompts (#22) → synthesis (#35) → renderers (#25/#26) →
+  CLI (#27) → eval (#28) → design note (#29) → README/CLAUDE finalize (#30) → element-drop reasons
+  (#31) → docs follow-up (#36).
 - **Collaboration rules (CLAUDE.md — follow exactly):** ask before choosing between approaches;
   implement ONE function at a time then stop for approval; TDD via the `tdd` skill (one red→green
   at a time, never batch); discuss behavior before coding; **don't start coding until told**.
@@ -73,14 +84,25 @@ into role system prompt), renderers/CLI/eval/docs.
   `monkeypatch.delenv` (merged #36).
 - `pyproject.toml` — runtime deps `pydantic>=2`, `requests>=2`, `rank-bm25>=0.2`; extras `dev`
   (+`python-dotenv`), `notebook`, **`llm` (`langchain-aws`)**; `live` pytest marker (deselected).
-- `src/materials_triage/agent/orchestrator.py` — **LangGraph orchestrator (#23), MERGED** (#41 skeleton
-  + per-stage exclusion channels; #23 hypothesis retry + spec-build HITL gate). Parallel session's work.
-- `src/materials_triage/policy/guardrails.py` — **input policy gate (#18), WIP on `feat/input-policy-gate`
-  (uncommitted).** `check_input(text) -> GateDecision`; frozen `GateDecision(allowed, reason, category)`;
-  deterministic forbidden-action denylist `_FORBIDDEN_ACTIONS` (categories `wet_lab`/`private_data`/
-  `paywalled`). Still to add: `wrap_untrusted` trust-boundary wrapper (#19), `ROLE_SYSTEM_PROMPT`.
-- `tests/test_guardrails.py` — gate tests (WIP, uncommitted): in-scope allowed + 3 forbidden-action
-  refusals (= persistent deterministic red-team cases). 4 passing.
+- `src/materials_triage/agent/orchestrator.py` — **LangGraph orchestrator, MERGED** (#41 skeleton +
+  per-stage exclusion channels; **#45** hypothesis retry + spec-build HITL gate; **#47** audit export +
+  crash-recovery resume + lab memory = #23/#24/#9/#10). **Note:** the gate / hypothesis / synthesis /
+  output_validate nodes are still **pass-throughs** — wiring the guardrails/prompts/synthesis/validator
+  into them is the pending **#34** (reference impl on `feat/fast-track-wire-guardrails`).
+- `src/materials_triage/agent/prompts.py` — **role prompt (part of #22), MERGED (#46).**
+  `ROLE_SYSTEM_PROMPT` (identity + scope + hard constraints + trust-boundary directive) and pure
+  `build_chat_messages(query, *, nonce) -> [("system", role), ("human", wrap_untrusted(query))]`.
+- `src/materials_triage/core/run_trace.py` (#9) + `src/materials_triage/memory/store.py` (#10) —
+  audit-export read-model + `BaseStore` lab memory, MERGED (#47).
+- **Branch-only (on `feat/fast-track-wire-guardrails`, NOT on `main`):** `core/synthesis.py` (#35),
+  `agent/validator.py` (#20), `render.py` (#25/#26), `cli.py` (#27), `scripts/demo.py`, and the
+  `sources` `property_vocabulary()` + VRH `_scalar` collapse — reference impls for #20/#25/#26/#27/#34/#35.
+- `src/materials_triage/policy/guardrails.py` — **input policy gate (#18) + trust boundary (#19),
+  MERGED (#46).** `check_input(text) -> GateDecision`; frozen `GateDecision(allowed, reason, category)`;
+  deterministic forbidden-action denylist (categories `wet_lab`/`private_data`/`paywalled`);
+  `wrap_untrusted(text, *, label, nonce)` (XML + nonce + escaping) and `_scrub` input hygiene.
+- `tests/test_guardrails.py` — gate + wrapper tests (MERGED #46): in-scope allowed + forbidden-action
+  refusals + wrapper breakout-neutralization (persistent deterministic red-team cases).
 - `docs/design/0003-orchestrator-on-langgraph.md` (ADR, #40) · `0004-guardrail-architecture-threat-model.md`
   (ADR, #42; **expanded** with wrapper construction + attack-surface table, #43).
 - `docs/design/0001-retrieval-rest-adapters.md` (#29) · `0002-literature-abstracts-only.md` (#31).
@@ -183,6 +205,35 @@ into role system prompt), renderers/CLI/eval/docs.
 - **Granular forbidden categories** (`wet_lab`/`private_data`/`paywalled`) beat one `forbidden_action`
   bucket — needed to log *why* it refused. Watch denylist false-positives: dropped `"run a"`
   (would refuse "run a screening"); avoided `"internal"` alone (vs "internal energy").
+- **— Session 9 (2026-06-22): fast-track end-to-end demo + task reconciliation —**
+- **Vocabulary drift → silently-empty results.** The hypothesis LLM free-named properties
+  (`band_gap_eV`) the MP adapter doesn't query (`band_gap`), so every candidate came back `missing`
+  and 0 ranked. Fix = **vocabulary binding**: a `SourceAdapter.property_vocabulary()` publishing the
+  retrievable names+units, fed into the hypothesis prompt ("use ONLY these names"). The adapter — not
+  the LLM — owns the queryable surface.
+- **Only the live end-to-end run caught the integration bugs** unit tests missed: the vocab drift
+  above; a **PI/audit view mismatch** (rendering called the pipeline twice → two different LLM runs;
+  fix = render BOTH views from ONE `TriageRun`); and a **VRH-modulus dict crash** (MP returns
+  `{voigt,reuss,vrh}`, not a float → collapse to `vrh` via a `_scalar()` helper before the `PropertyValue`).
+- **Spec-expressiveness gap is the real "H₂O ranked top" root cause** — not a missing hardcoded ban.
+  The spec can't say "require a metal cation", so an over-broad window admits ice. Filters are
+  request-derived, never hardcoded bans; a query that *wants* water still gets water. (Detail in
+  `docs/fast-track-learnings.md`; design fix in `docs/ultimate-design.md`.)
+- **`python-dotenv` is an optional import** — if uninstalled, the CLI's `load_dotenv` silently no-ops,
+  so `X_API_KEY` never loads → a confusing 401. A real CLI needs a **preflight credential check** that
+  names the missing var, not a silent skip.
+- **Reconcile the task tracker against `main`, not against branches.** Only **#34** was mis-marked
+  (completed, but the orchestrator nodes are still pass-throughs — it was fast-track-only, never merged)
+  → flipped to pending. #22's role-prompt half is merged (#46) but the task stays pending.
+- **Leverage order for candidate quality (fast-track §2):** *spec-schema expressiveness > server-side
+  filters > prompt wording.* Prompt tweaks nudge spec quality but cannot create expressiveness the
+  schema lacks — that's why H₂O survived three prompt revisions. → new tasks **#37** (expand spec),
+  **#38** (push filters server-side), **#39** (derive vocabulary from schema), **#40** (RAG into synthesis).
+- **Vocabulary and spec schema must co-evolve.** The MP API publishes ~50 queryable filters; deriving
+  all of them is pointless if the spec can express only ~6 (numeric min/max). Grow them together (#37+#39).
+- **Synthesis ordering-fidelity is NOT enforced.** Observed: the prose called a candidate "first" that
+  the deterministic ranker placed fourth — grounding passed (ids resolve) but ordering wasn't checked.
+  The narrative must agree with the numeric rank (folded into #40).
 
 ## Work Done (all merged to `main` unless noted)
 *(Append-only history.)*
@@ -240,61 +291,89 @@ into role system prompt), renderers/CLI/eval/docs.
     table). Drafted a reader-facing exploit/social-engineering guide but **deleted it at Kian's request**
     (shipped only the ADR in #43).
   - Saved [memory: input-gate-mechanism-decision] (+ reframe); indexed in MEMORY.md.
+- **Session 9 (2026-06-22) — orchestrator completion (parallel) + fast-track demo + docs + cleanup:**
+  - Parallel session **completed the orchestrator**: merged **#45** (hypothesis retry + spec-build HITL
+    gate) and **#47** (audit export + crash-recovery resume + lab memory) → #23/#24/#9/#10 done; and
+    **#46** (input-side guardrails #18/#19 + role prompt `agent/prompts.py`).
+  - **Fast-track demo build** (throwaway branch `feat/fast-track-wire-guardrails`, pushed, **no PR to
+    `main`**): wired the whole pipeline end-to-end — gate (`check_input`), hypothesis (trust-boundary
+    `build_chat_messages` + vocabulary binding), retrieve/filter/rank, synthesis (`core/synthesis.py`,
+    grounded+cited), output validator (`agent/validator.py`), PI/audit renderers (`render.py`), and a
+    `cli.py` + `scripts/demo.py`. Verified live (MP + Bedrock) across 5 parallel subagent runs;
+    diagnosed + fixed vocab drift (added `property_vocabulary()`), the VRH-dict crash, and the PI/audit
+    view mismatch. **196 tests** passed on the branch.
+  - Shipped **docs-only** PRs: **#48** (kid-friendly 9-step README flowchart) and **#49**
+    (`docs/fast-track-learnings.md` + `docs/ultimate-design.md` + handoff pointer); used `/lavish` to
+    visualize the ultimate design.
+  - **Cleanup:** deleted the stale merged remote branch `docs/literature-rag-demo` (superseded by
+    #32/#33; notebook already on `main`); removed the fast-track + policy-gate worktrees; `stash@{0}`
+    holds the parallel readme-kid-flowchart notebook WIP; kept untracked `.mcp.json`.
+  - **Reconciled the harness task tracker vs merged `main`** (this session): flipped **#34 → pending**
+    (fast-track-only; nodes still pass-throughs), confirmed #22 stays pending, verified all other
+    statuses correct. Refreshed this handoff (`/handoff update`).
+  - **Added 4 v1 build tasks from the fast-track learnings** (Kian's call — full v1, not doc-only):
+    **#37** expand spec expressiveness (booleans/counts/element-class — fixes H₂O), **#38** server-side
+    filter pushdown, **#39** schema-derived vocabulary, **#40** wire literature RAG into synthesis
+    (citations + caveats + ordering-fidelity). Deps wired: #38/#39 ← #37; #40 ← #35 + #20.
 
 ## Status
-- **Working / merged:** `main` @ **`5b8321a`**. Full deterministic slice + RAG + hypothesis layer +
-  Bedrock provider (#21) + **LangGraph orchestrator (#23 incl. retry + HITL gate, #41/#23)** + ADRs
-  0001–0004 all live. No open PRs.
-- **WIP (this session, uncommitted):** input policy gate (#18) on `feat/input-policy-gate` worktree —
-  `policy/guardrails.py` + `tests/test_guardrails.py`, **4 passing** (in-scope allowed + wet_lab/
-  private_data/paywalled refusals). Run with `PYTHONPATH="$PWD/src" pytest tests/test_guardrails.py`.
-- **Partial / next in #18/#19:** `wrap_untrusted` trust-boundary wrapper (nonce + XML + escaping +
-  hygiene) and `ROLE_SYSTEM_PROMPT` + `build_chat_messages` not yet written.
-- **Known issues:** the gate WIP is **untracked** — commit it before any parallel-session `git clean`
-  wipes it. Live Bedrock smoke test still ~15% flaky by design (now mitigated by the merged #23 retry).
-- **Open threads:** v2 hybrid LLM scope check (deferred); v2 debts (tokenizer, DFT/XC); #31
-  ExcludedCandidate reasons; output validator #20 still to build.
+- **Working / merged:** `main` @ **`5f5dc2c`** == `origin/main`. Full deterministic slice + RAG (#17)
+  + hypothesis layer (#32) + Bedrock provider (#21) + **complete LangGraph orchestrator** (#23 retry/
+  HITL #45; #24/#9/#10 audit-export/resume/lab-memory #47) + **input-side guardrails** (#18/#19 + role
+  prompt #46) + ADRs 0001–0004 all live. **178 tests** (175 pass, 3 `live` deselected). No open PRs.
+- **Saved (NOT on `main`):** the fast-track reference implementation on `feat/fast-track-wire-guardrails`
+  (local + `origin`) — full end-to-end wiring + CLI, 196 tests. Port from it during the real build.
+- **Not yet started on `main`:** #34 (wire primitives into orchestrator nodes — still pass-throughs),
+  #20 (output validator), rest of #22 (prompts), #35 (synthesis), #25/#26 (renderers), #27 (CLI),
+  #28 (eval), #29 (design note), #30 (README/CLAUDE finalize), #31 (element-drop reasons), #36 (docs),
+  and the fast-track quality fixes **#37** (spec expressiveness — fixes H₂O), **#38** (server-side
+  pushdown), **#39** (schema-derived vocabulary), **#40** (RAG into synthesis).
+- **Known issues:** Live Bedrock smoke test ~15% flaky by design (mitigated by the merged #45 retry).
+  `stash@{0}` (readme-kid-flowchart WIP) is unmerged — drop it if not wanted.
+- **Open threads:** v2 hybrid LLM scope check; v2 debts (RAG tokenizer, DFT/XC comparability);
+  cross-source merge (doc-only ladder in `docs/ultimate-design.md`).
 
 ## Next Steps
-1. **Merge latest `main` into `feat/input-policy-gate`** (worktree is stale at `c5664e0`; brings ADRs
-   0003/0004 + the merged orchestrator). Then **commit the gate WIP** so it survives.
-2. **Finish the gate slices (#18) — one red→green at a time, stop after each:** (the next slice, per
-   Kian's call, is the trust-boundary wrapper):
-   - **E** `wrap_untrusted(text, *, label, nonce)` — XML + unguessable nonce + escaping (anti-breakout);
-     optional E4 unicode/zero-width/bidi hygiene + E5 max-length cap. **Open Qs for Kian:** E1–E3 only
-     vs include E4/E5 now; **inject** the nonce vs generate inside (lean inject, for testability).
-   - **F** `ROLE_SYSTEM_PROMPT` + pure `build_chat_messages(query) -> [("system",…),("human", wrapped)]`
-     (user text NEVER in the system slot).
-   - **G** wire `build_chat_messages` into `_bedrock_complete` — **coordinate with the parallel session**
-     (they own `agent/llm.py`; keep the edit minimal/additive).
-   - **RT** red-team tests: deterministic (denylist + wrapper breakout-neutralization) in CI; behavioral
-     (poem→declined, "ignore instructions"→stays in role, prompt-leak→refused) `live`-marked.
-3. **When shipping:** ship via no-mistakes (bootstrap from the **main repo**: push to `no-mistakes`
-   remote → abort → `axi run --intent`); squash-merge in the GitHub UI; then `/sync-main`. Keep this
-   handoff committed.
-4. **After #18/#19:** output validator (#20); prompts (#22, mostly = the role system prompt);
-   ExcludedCandidate reasons (#31); v2 items (hybrid scope check, tokenizer, DFT/XC); renderers
-   (#25/#26), CLI (#27), eval (#28), design note (#29-doc), README (#30-doc).
+*(Real build, resuming TDD — one function at a time, stop for approval after each; see CLAUDE.md.)*
+1. **Pick the next increment.** Natural order from the deep plan's build order: **#20 output validator**
+   (a pure `validate_output(result, synthesis, retrieved_ids)` rejecting ungrounded IDs/citations) →
+   **#35 synthesis step** (grounded, cited `Synthesis`) → **#34 wire** gate/hypothesis/synthesis/
+   validator into the orchestrator nodes. The fast-track branch has a working version of each to port.
+   **Note: #37 (expand spec expressiveness)** is foundational — it changes the `Constraint`/spec model
+   that synthesis, the validator, and the wiring all build against, and it's the highest-leverage fix
+   for the H₂O quality bug — so consider sequencing it early; confirm the order with Kian.
+2. **Confirm the slice with Kian before coding** (ask-before-approaches; don't start until told). For
+   #20: confirm the `Synthesis`/`GroundedClaim` model shape and where it lives (`core/synthesis.py`).
+3. **Build via the `tdd` skill** in a worktree (run pytest with `PYTHONPATH="$PWD/src"`); ship via
+   no-mistakes (bootstrap from the **main repo**, not a worktree: push to `no-mistakes` remote → abort
+   → `axi run --intent`); squash-merge in the GitHub UI; then `/sync-main`. Keep this handoff committed.
+4. **Then:** renderers (#25/#26), CLI (#27), eval harness (#28), design note (#29), README/CLAUDE
+   finalize (#30), element-drop reasons (#31), docs follow-up (#36). **Fast-track quality fixes:**
+   #37 (spec expressiveness) → #38 (server-side pushdown) / #39 (schema-derived vocab) → #40 (RAG into
+   synthesis) — the design note (#29) must articulate this leverage order regardless of build sequence.
 
 ## Context for Next Session
-- **Branch:** `main` @ `5b8321a` == `origin/main`. Active worktree `feat/input-policy-gate`
-  (`../materials-triage-policy-gate`, stale at `c5664e0`) holds the **uncommitted** gate WIP. A parallel
-  session works the orchestrator in the main checkout — coordinate; don't disturb its WIP.
-- **How to verify merged state:** `python -m pytest -q` (138 passed, 3 deselected), `ruff check .`.
+- **Branch:** `main` @ `5f5dc2c` == `origin/main`; clean except untracked `.mcp.json` (kept). No
+  worktrees. Saved fast-build branch `feat/fast-track-wire-guardrails` (local + origin, no PR) is the
+  reference implementation to port from.
+- **How to verify merged state:** `python -m pytest -q` (175 passed, 3 deselected), `ruff check .`.
   Live (needs creds): `pytest -m live` (Bedrock via `~/.aws/credentials`, OpenAlex, MP). RAG quick
   check: `OPENALEX_MAILTO=… python -c "from materials_triage.retrieval.rag import LiteratureRAG,
   OpenAlexFetcher; print(len(LiteratureRAG(OpenAlexFetcher()).search('perovskite oxygen evolution', k=5)))"`.
 - **Credentials:** `X_API_KEY` (MP sandbox); `OPENALEX_MAILTO` optional (polite pool); AWS creds for
-  Bedrock (#21+) — prefer `~/.aws/credentials` (botocore auto-detects; `load_dotenv` won't load it).
-  conftest loads `.env` for live tests; AWS keys in `.env` must be UPPERCASE.
+  Bedrock — prefer `~/.aws/credentials` (botocore auto-detects; `load_dotenv` won't load it). conftest
+  loads `.env` for live tests; AWS keys in `.env` must be UPPERCASE. **Never read/print the AWS creds
+  or `X_API_KEY` — those are the secrets.**
 - **Git workflow:** `main` protected, signed commits (`git commit -S`, SSH), squash-merge via GitHub
   UI, then `/sync-main`. pre-commit `ruff format` can abort a commit → re-add + re-commit.
-- **Auto-memory (persists):** see `MEMORY.md` — incl. **input-gate-mechanism-decision** (new),
+- **Auto-memory (persists):** see `MEMORY.md` — incl. input-gate-mechanism-decision,
   langgraph-orchestrator-decision, hypothesis-layer (RESOLVED→MEDIUM), ranking-weight-normalization,
   orchestrator-23-carryforward, llm-structured-output-flakiness, langgraph-msgpack-unregistered-types,
-  orchestrator-exclusions-two-sources, dft-xc-functional-comparability-v2, rag-tokenizer-v2-todo,
-  adapter-testing-seam, materials-project-api, handoff-doc-location, worktree-pythonpath,
-  no-mistakes-run-bootstrap.
-- **Task list (reconciled):** #1–#17, #21, #32 (hypothesis layer), #33 (demos), **#23 orchestrator
-  (LangGraph, #41/#23)** completed; #9/#10 subsumed by #23; **#18/#19 in progress (this session)**;
-  #20, #22, #24–#30 remain (#22 ≈ the role system prompt); #31 deferred.
+  orchestrator-exclusions-two-sources, resume-is-crash-recovery-not-knob-edit,
+  dft-xc-functional-comparability-v2, rag-tokenizer-v2-todo, adapter-testing-seam,
+  materials-project-api, handoff-doc-location, worktree-pythonpath, no-mistakes-run-bootstrap.
+- **Task tracker (reconciled 2026-06-22 vs merged `main`):** #1–#19, #21, #23, #24, #32, #33 completed
+  (#9/#10 subsumed by the orchestrator); **pending:** #20, #22 (role-prompt half merged), #25–#31,
+  #34 (fast-track-only — nodes still pass-throughs), #35, #36; **+ new fast-track-learning tasks**
+  #37 (spec expressiveness), #38 (server-side pushdown), #39 (schema-derived vocab), #40 (RAG→synthesis;
+  deps #38/#39←#37, #40←#35+#20).
