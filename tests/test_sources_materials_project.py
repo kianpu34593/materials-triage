@@ -18,6 +18,7 @@ from materials_triage.core.schema import (
 from materials_triage.core.scoring import apply_hard_filters
 from materials_triage.sources.materials_project import (
     MaterialsProjectAdapter,
+    _field_task_id,
     _origin_task_ids,
 )
 
@@ -46,6 +47,27 @@ def test_origin_task_ids_of_absent_origins_is_empty():
     """A doc with no origins (the field unrequested or null) yields no lookup,
     so downstream functional resolution simply finds nothing."""
     assert _origin_task_ids(None) == {}
+
+
+def test_field_task_id_resolves_a_field_through_its_origin():
+    """A summary field maps (via _FIELD_ORIGIN) to an origin name, then to that
+    origin's task_id — the task whose run we'll read the functional from."""
+    index = {"electronic_structure": "t-bands", "energy": "t-energy"}
+
+    assert _field_task_id("band_gap", index) == "t-bands"
+    assert _field_task_id("formation_energy_per_atom", index) == "t-energy"
+
+
+def test_field_task_id_is_none_when_the_origin_is_absent():
+    """A field whose origin doc wasn't computed for this material (e.g. no
+    elasticity run) has no traceable task — its functional stays unknown."""
+    assert _field_task_id("bulk_modulus", {"energy": "t-energy"}) is None
+
+
+def test_field_task_id_is_none_for_a_field_with_no_origin_mapping():
+    """A field outside _FIELD_ORIGIN (not task-derived, e.g. a structural count)
+    has no functional to trace."""
+    assert _field_task_id("nsites", {"structure": "t-struct"}) is None
 
 
 def test_retrieve_maps_a_one_doc_payload_to_a_candidate():

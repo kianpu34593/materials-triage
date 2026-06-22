@@ -119,6 +119,19 @@ def _origin_task_ids(origins: list[dict] | None) -> dict[str, str]:
     return {o["name"]: o["task_id"] for o in (origins or [])}
 
 
+def _field_task_id(field: str, origin_index: Mapping[str, str]) -> str | None:
+    """Resolve a summary field to the task_id that produced it, or ``None``.
+
+    Bridges field → origin name (via ``_FIELD_ORIGIN``) → task_id (via the doc's
+    origin index). A field that isn't task-derived, or whose origin doc wasn't
+    computed for this material, has no task — so its functional stays unknown.
+    """
+    origin_name = _FIELD_ORIGIN.get(field)
+    if origin_name is None:
+        return None
+    return origin_index.get(origin_name)
+
+
 def _doc_to_candidate(doc: dict) -> Candidate:
     """Turn one SummaryDoc into a provenance-tagged Candidate."""
     material_id = doc["material_id"]
