@@ -10,7 +10,8 @@ live runtime fetch) keeps every triage run replayable.
 import json
 from pathlib import Path
 
-from gen_mp_vocab import parse_summary_fields, vocabulary_fields
+import pytest
+from gen_mp_vocab import build_table, parse_summary_fields, vocabulary_fields
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mp_openapi_summary.json"
 
@@ -50,3 +51,32 @@ def test_vocabulary_fields_keeps_vrh_moduli_but_not_composition_objects():
     assert "shear_modulus" in surface
     assert "composition" not in surface
     assert "composition_reduced" not in surface
+
+
+def test_build_table_merges_unit_and_origin_per_field():
+    """The committed table pairs each vocabulary field with its hand-pinned unit and
+    XC-functional origin (neither is in the schema). A dimensionless count carries an
+    explicit unit=None / origin=None — a field with no DFT functional, decided on
+    purpose, not forgotten."""
+    surface = {"band_gap": "number", "nelements": "integer"}
+    meta = {
+        "band_gap": {"unit": "eV", "origin": "electronic_structure"},
+        "nelements": {"unit": None, "origin": None},
+    }
+
+    table = build_table(surface, meta)
+
+    assert table["band_gap"] == {"unit": "eV", "origin": "electronic_structure"}
+    assert table["nelements"] == {"unit": None, "origin": None}
+
+
+def test_build_table_rejects_a_vocabulary_field_missing_from_metadata():
+    """The lockstep guard: a field the schema put in the vocabulary but the hand
+    metadata never pinned is a unit/origin gap (its retrieved values would silently
+    lose their unit and XC functional). build_table fails loudly, naming the field,
+    instead of emitting an incomplete table."""
+    surface = {"band_gap": "number", "efermi": "number"}
+    meta = {"band_gap": {"unit": "eV", "origin": "electronic_structure"}}  # efermi forgotten
+
+    with pytest.raises(ValueError, match="efermi"):
+        build_table(surface, meta)

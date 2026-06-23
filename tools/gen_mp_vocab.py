@@ -54,6 +54,25 @@ def vocabulary_fields(fields: dict[str, str]) -> dict[str, str]:
     }
 
 
+def build_table(surface: dict[str, str], meta: dict[str, dict]) -> dict[str, dict]:
+    """Merge the schema-derived vocabulary ``surface`` with hand-pinned ``meta`` into
+    the committed ``{field: {unit, origin}}`` table.
+
+    Units and XC-functional origins are not in the schema, so they're supplied by
+    hand per field. ``origin`` may be ``None`` (a field with no DFT functional, e.g.
+    a count), but that must be an explicit decision: a field *absent* from ``meta``
+    is a lockstep gap (its values would silently lose their unit and XC functional),
+    so the table fails loudly rather than ship incomplete."""
+    missing = sorted(name for name in surface if name not in meta)
+    if missing:
+        raise ValueError(
+            f"vocabulary fields missing hand-pinned unit/origin metadata: {', '.join(missing)}. "
+            "Add an entry (unit/origin may be None, but the decision must be explicit) "
+            "to keep the FIELD_UNITS/_FIELD_ORIGIN lockstep."
+        )
+    return {name: dict(meta[name]) for name in surface}
+
+
 def parse_summary_fields(openapi: dict) -> dict[str, str]:
     """Map each ``SummaryDoc`` property name to its scalar type category.
 
