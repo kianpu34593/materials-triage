@@ -104,6 +104,23 @@ def test_property_value_reports_number_and_source():
     assert pv.provenance.source == "Materials Project"
 
 
+def test_property_value_accepts_a_dimensionless_unit():
+    """Some real, retrieved values are genuinely dimensionless (refractive index,
+    dielectric constant, Poisson ratio). PropertyValue is a deterministic-layer
+    model — the adapter fills it from trusted API data, the LLM never builds it —
+    so unit=None honestly means 'no unit', not a relaxed LLM contract."""
+    pv = PropertyValue(
+        value=2.05,
+        unit=None,
+        provenance=Provenance(
+            source="Materials Project", record_id="mp-2657", method="computational"
+        ),
+    )
+
+    assert pv.value == 2.05
+    assert pv.unit is None
+
+
 def test_missing_property_value_cannot_carry_a_number():
     """A value the database lacks is missing — it must not also report a number."""
     with pytest.raises(ValidationError):

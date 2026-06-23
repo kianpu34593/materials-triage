@@ -33,6 +33,39 @@ def _fixed(envelope: dict) -> MaterialsProjectAdapter:
     return MaterialsProjectAdapter(http_get=lambda url, params, headers: envelope)
 
 
+def test_vocabulary_names_only_properties_retrieve_can_populate():
+    """The contract #39 protects: every name the adapter publishes is one retrieve
+    actually fills -- so a hypothesis built from the vocabulary never asks for a
+    property that silently comes back empty. And the vocabulary needs no network."""
+    adapter = MaterialsProjectAdapter(
+        http_get=lambda url, params, headers: pytest.fail("vocabulary must not hit the network")
+    )
+
+    vocab = adapter.property_vocabulary()
+
+    # a SummaryDoc carrying a value for every published field
+    doc = {"material_id": "mp-1", "formula_pretty": "Si", **{name: 1.0 for name in vocab}}
+    candidate = _two_endpoint({"data": [doc]}, {"data": []}).retrieve(_spec())[0]
+
+    assert vocab  # non-empty: the source declares a surface
+    assert set(vocab) <= set(candidate.properties)  # every published name got populated
+
+
+def test_property_vocabulary_exposes_the_full_generated_surface():
+    """The adapter publishes the whole schema-derived surface (the generated table),
+    not just the original hand-pinned six -- efermi, total_magnetization, the
+    refractive index. A genuinely dimensionless field carries unit=None."""
+    adapter = MaterialsProjectAdapter(
+        http_get=lambda url, params, headers: pytest.fail("vocabulary must not hit the network")
+    )
+
+    vocab = adapter.property_vocabulary()
+
+    assert {"efermi", "total_magnetization", "n"} <= set(vocab)  # fields the old 6 lacked
+    assert vocab["band_gap"] == "eV"  # a pinned unit still resolves
+    assert vocab["n"] is None  # refractive index: dimensionless
+
+
 def test_origin_task_ids_indexes_task_ids_by_origin_name():
     """MP's origins list (one entry per computed property doc) collapses to a
     name -> task_id lookup, the first step in tracing each value to its run."""
@@ -60,15 +93,15 @@ def test_field_task_id_resolves_a_field_through_its_origin():
 
 
 def test_field_task_id_is_none_when_the_origin_is_absent():
-    """A field whose origin doc wasn't computed for this material (e.g. no
-    elasticity run) has no traceable task — its functional stays unknown."""
-    assert _field_task_id("bulk_modulus", {"energy": "t-energy"}) is None
+    """A field whose origin doc wasn't computed for this material (band_gap needs an
+    electronic_structure run, absent here) has no traceable task — functional unknown."""
+    assert _field_task_id("band_gap", {"energy": "t-energy"}) is None
 
 
 def test_field_task_id_is_none_for_a_field_with_no_origin_mapping():
-    """A field outside _FIELD_ORIGIN (not task-derived, e.g. a structural count)
-    has no functional to trace."""
-    assert _field_task_id("nsites", {"structure": "t-struct"}) is None
+    """A field outside _FIELD_ORIGIN (functional-independent, e.g. the element count
+    nelements) has no origin and so no functional to trace."""
+    assert _field_task_id("nelements", {"structure": "t-struct"}) is None
 
 
 def test_fetch_run_types_batches_task_ids_into_one_call():
@@ -274,6 +307,26 @@ def test_retrieve_maps_all_pinned_fields_with_their_units():
     assert props["bulk_modulus"].unit == "GPa"
     assert props["shear_modulus"].unit == "GPa"
     assert props["formation_energy_per_atom"].value == -3.4644
+
+
+def test_retrieve_collapses_the_vrh_modulus_dict_to_its_vrh_average():
+    """MP serves the elastic moduli as a Voigt-Reuss-Hill dict, not a bare number.
+    The adapter collapses ``{voigt, reuss, vrh}`` to the VRH average so the value the
+    pipeline filters and ranks on is the scalar the vocabulary promises — not a dict
+    that would fail PropertyValue validation."""
+    doc = {
+        "material_id": "mp-x",
+        "formula_pretty": "TiO2",
+        "bulk_modulus": {"voigt": 205.0, "reuss": 190.0, "vrh": 197.5},
+        "shear_modulus": {"voigt": 120.0, "reuss": 104.0, "vrh": 112.0},
+    }
+
+    props = _fixed({"data": [doc], "meta": {}}).retrieve(_spec())[0].properties
+
+    assert props["bulk_modulus"].value == 197.5
+    assert props["bulk_modulus"].unit == "GPa"
+    assert props["bulk_modulus"].missing is False
+    assert props["shear_modulus"].value == 112.0
 
 
 def test_retrieve_unwraps_multiple_docs_and_ignores_meta():
