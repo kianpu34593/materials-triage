@@ -59,3 +59,13 @@ unwraps the transport envelope, pins units the payload omits, attaches provenanc
   it onto provenance. This enrichment is best-effort: a failed/empty tasks call degrades the
   functional to unknown rather than aborting an otherwise-complete retrieval.
 - This note seeds the retrieval section of the full design note (#29).
+- **Vocabulary surface (#39, later refinement).** The interface gained a second,
+  default-empty method — `property_vocabulary() -> Mapping[str, str | None]` — so the
+  spec-building stages can discover, from the adapter that will retrieve, exactly which
+  property names are fetchable (`None` unit = dimensionless); retrieval itself stays the
+  single `retrieve` method. The MP adapter's field→unit table referenced above is no
+  longer hand-typed: it is generated from the vendored MP OpenAPI snapshot by
+  `tools/gen_mp_vocab.py` into a committed `sources/_mp_fields.py` (units + XC-functional
+  origins), and `FIELD_UNITS`/`_FIELD_ORIGIN` derive from it — keeping the surface in
+  lockstep with the schema while the "localizes the blast radius" property above still
+  holds.
