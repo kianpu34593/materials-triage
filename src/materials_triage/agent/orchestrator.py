@@ -141,12 +141,18 @@ def _make_hypothesis_node(
     provider: HypothesisProvider | None,
     max_attempts: int = DEFAULT_MAX_HYPOTHESIS_ATTEMPTS,
 ):
-    """The hypothesis step: the LLM proposes the cited spec-bridges. Structured
-    output is only conformed in *shape* by the schema, and ~15% of calls emit
-    output it rejects — so this retries on a pydantic ValidationError (feeding
-    the rejection back into the prompt) up to ``max_attempts``, then raises a
-    wrapped HypothesisConformanceError rather than leaking a raw ValidationError.
-    Non-validation failures (transport, throttling) are not retried here."""
+    """The hypothesis step: the LLM proposes the cited spec-bridges. The output is
+    conformed in two ways, both retry-on-failure: structured output is only *shape*-
+    checked by the schema (~15% of calls emit output it rejects), and a shape-valid
+    hypothesis may still not *compile* into a coherent spec — e.g. a ranking target
+    missing the ramp bounds the default geometric ranker requires, a duplicate
+    constraint, or a contradiction. Both surface as a pydantic ValidationError, so
+    this trial-compiles each candidate and retries either failure (feeding the reason
+    back into the prompt) up to ``max_attempts``, then raises a wrapped
+    HypothesisConformanceError. Catching the compile failure HERE — where the LLM can
+    be re-prompted — is what stops it becoming a terminal, feedback-less
+    SpecCompilationError later in spec_build. Non-validation failures (transport,
+    throttling) are not retried here."""
 
     def hypothesis(state: OrchestratorState) -> dict:
         if provider is None:
@@ -155,11 +161,16 @@ def _make_hypothesis_node(
         for _ in range(max_attempts):
             prompt = _hypothesis_prompt(state["goal"], None if last_exc is None else str(last_exc))
             try:
-                return {"hypothesis": provider.propose(prompt)}
+                proposed = provider.propose(prompt)
+                # Trial-compile: a shape-valid hypothesis whose proposals don't form a
+                # coherent spec is retry-worthy too, so the LLM gets the reason back.
+                compile_spec(proposed.proposals)
             except ValidationError as exc:
                 last_exc = exc
+                continue
+            return {"hypothesis": proposed}
         raise HypothesisConformanceError(
-            f"LLM did not produce a schema-valid Hypothesis in {max_attempts} attempts"
+            f"LLM did not produce a schema-valid, compilable Hypothesis in {max_attempts} attempts"
         ) from last_exc
 
     return hypothesis
