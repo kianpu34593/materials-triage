@@ -10,10 +10,11 @@ import sys
 
 import pytest
 
-from materials_triage.agent.llm import HypothesisProvider, _role_messages
+from materials_triage.agent.llm import HypothesisProvider, SynthesisProvider, _role_messages
 from materials_triage.agent.prompts import ROLE_SYSTEM_PROMPT
 from materials_triage.core.hypothesis import ConstraintProposal, Hypothesis
 from materials_triage.core.schema import Constraint
+from materials_triage.core.synthesis import Synthesis
 
 
 def test_role_messages_prepends_system_role_to_human_prompt():
@@ -66,12 +67,49 @@ def test_propose_forwards_the_prompt_to_the_seam_unchanged():
     assert seen == ["RENDERED PROMPT with untrusted DATA blocks"]
 
 
+def test_extract_keywords_returns_the_seam_output_and_forwards_the_goal():
+    """The provider's keyword extraction (for the RAG step) delegates to its injected
+    keyword seam and hands back what it produced, forwarding the goal verbatim — the
+    provider invents no keywords itself."""
+    seen = []
+    provider = HypothesisProvider(
+        complete=lambda prompt: _canned_hypothesis(),
+        extract=lambda goal: (seen.append(goal), "wide band gap oxide photocatalyst")[1],
+    )
+
+    keywords = provider.extract_keywords("a stable wide-gap oxide for photocatalysis")
+
+    assert keywords == "wide band gap oxide photocatalyst"
+    assert seen == ["a stable wide-gap oxide for photocatalysis"]
+
+
 def test_default_provider_constructs_offline_without_importing_bedrock():
     """Constructed with no injected seam, the provider builds its real Bedrock
     transport lazily: construction must not import langchain_aws or need AWS
     credentials, so the package imports and offline tests run on a box without
     langchain installed (mirrors the adapter's lazy `requests` transport)."""
     HypothesisProvider()
+
+    assert "langchain_aws" not in sys.modules
+
+
+def test_synthesis_provider_returns_the_synthesis_the_seam_produced():
+    """The synthesis provider delegates to its injected seam and hands back the
+    Synthesis it produced, forwarding the prompt verbatim — it invents nothing itself."""
+    canned = Synthesis(summary="ZnO leads for a wide-gap photocatalyst.")
+    seen = []
+    provider = SynthesisProvider(synthesize=lambda prompt: (seen.append(prompt), canned)[1])
+
+    result = provider.synthesize("RENDERED synthesis prompt")
+
+    assert result is canned
+    assert seen == ["RENDERED synthesis prompt"]
+
+
+def test_synthesis_provider_constructs_offline_without_importing_bedrock():
+    """Like the hypothesis provider, the synthesis provider builds its Bedrock seam
+    lazily — construction needs no langchain_aws or AWS credentials."""
+    SynthesisProvider()
 
     assert "langchain_aws" not in sys.modules
 

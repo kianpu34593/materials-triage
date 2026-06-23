@@ -3,13 +3,16 @@
 Per ADR 0003 the workflow is a deterministic, linear, *traced* state machine —
 not an autonomous tool-calling loop. The steps are graph nodes wired in a fixed
 linear edge order and compiled with a checkpointer (the substrate for the #9
-trace export and `resume --from`). Wired so far: the ``hypothesis`` step (LLM,
-with retry-on-malformed-output) and the ``retrieve`` -> ``filter`` -> ``rank``
-deterministic core. The remaining steps (gate, spec_build, synthesis,
-output_validate, render) are pass-throughs their own slices/tasks replace.
+trace export and `resume --from`). Wired so far: the ``gate`` (deterministic
+input policy), ``hypothesis`` (LLM + RAG, with retry-on-malformed-output),
+``spec_build``, ``synthesis`` (LLM + RAG, with grounding retry) and
+``output_validate`` (the final grounding gate) steps, plus the ``retrieve`` ->
+``filter`` -> ``rank`` deterministic core. Only ``render`` remains a pass-through
+its own task replaces.
 """
 
 import math
+import secrets
 from typing import Protocol, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -18,7 +21,8 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
-from materials_triage.agent.prompts import RANKING_TARGET_GUIDANCE
+from materials_triage.agent.prompts import build_hypothesis_prompt, build_synthesis_prompt
+from materials_triage.agent.validator import validate_output
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
 from materials_triage.core.ranking import rank_arithmetic_mean, rank_geometric_mean
 from materials_triage.core.schema import (
@@ -29,6 +33,9 @@ from materials_triage.core.schema import (
     TriageSpec,
 )
 from materials_triage.core.scoring import apply_hard_filters, apply_local_filters
+from materials_triage.core.synthesis import Synthesis, ungrounded_record_ids
+from materials_triage.policy.guardrails import check_input
+from materials_triage.retrieval.rag import LiteraturePassage
 from materials_triage.sources.base import SourceAdapter
 
 #: Default cap on how many times the hypothesis node re-invokes the LLM provider
@@ -37,10 +44,29 @@ DEFAULT_MAX_HYPOTHESIS_ATTEMPTS = 3
 
 
 class HypothesisProvider(Protocol):
-    """The LLM seam the hypothesis node calls: a rendered prompt in, a validated
-    Hypothesis out (or a pydantic ValidationError if the output is malformed)."""
+    """The LLM seam the hypothesis node calls. ``propose`` takes a rendered prompt
+    and returns a validated Hypothesis (or raises a pydantic ValidationError if the
+    output is malformed). ``extract_keywords`` distills a free-text goal into a
+    literature search query for the RAG step; it is only invoked when a ``rag`` seam
+    is injected, so a provider used without RAG need not implement it."""
 
     def propose(self, prompt: str) -> Hypothesis: ...
+
+    def extract_keywords(self, goal: str) -> str: ...
+
+
+class LiteratureRetriever(Protocol):
+    """The RAG seam the hypothesis (and, later, synthesis) node calls: a query in,
+    the top relevant literature passages out. Matches ``LiteratureRAG.search``."""
+
+    def search(self, query: str, k: int = ...) -> list[LiteraturePassage]: ...
+
+
+class SynthesisProvider(Protocol):
+    """The LLM seam the synthesis node calls: a rendered prompt in, a validated
+    Synthesis out (or a pydantic ValidationError if the output is malformed)."""
+
+    def synthesize(self, prompt: str) -> Synthesis: ...
 
 
 class HypothesisConformanceError(RuntimeError):
@@ -49,6 +75,27 @@ class HypothesisConformanceError(RuntimeError):
     Carries the last pydantic ValidationError as its cause so the orchestrator
     (or a human) sees why every attempt was rejected, rather than a raw
     ValidationError leaking out of the node."""
+
+
+class InputRefused(RuntimeError):
+    """The input gate (workflow step 1) refused the goal: it named a forbidden
+    capability (wet-lab action, private data, paywalled scraping) the agent does
+    not have. Raised out of the gate node so the run halts *before* any LLM call
+    and — per CLAUDE.md — is logged and refused, never recorded as a ``TriageRun``.
+    Carries the gate's ``reason`` and ``category`` so the caller can log/surface
+    the verdict without re-deriving it."""
+
+    def __init__(self, reason: str, category: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.category = category
+
+
+class SynthesisConformanceError(RuntimeError):
+    """The synthesis step could not produce a fully-grounded, schema-valid Synthesis
+    within the retry cap: every attempt either failed the Synthesis schema or cited a
+    material not in retrieved provenance. The output validator (step 8) is the final
+    backstop, but synthesis raises here so an ungrounded narrative never reaches it."""
 
 
 class SpecCompilationError(RuntimeError):
@@ -96,6 +143,10 @@ class OrchestratorState(TypedDict, total=False):
     run_id: str
     spec: TriageSpec | None
     hypothesis: Hypothesis | None
+    # The literature passages retrieved once at the hypothesis step, persisted so the
+    # synthesis step grounds its narrative in the SAME papers (no second search) and
+    # the audit trace records what the run was grounded in.
+    literature: tuple[LiteraturePassage, ...]
     candidates: tuple[Candidate, ...]
     survivors: tuple[Candidate, ...]
     # Exclusions are split by stage so each channel has a single writer (no
@@ -111,55 +162,79 @@ class OrchestratorState(TypedDict, total=False):
     retrieval_caveats: tuple[str, ...]
     caveats: tuple[str, ...]
     result: TriageResult | None
+    synthesis: Synthesis | None
 
 
 def _passthrough(state: OrchestratorState) -> dict:
-    """A skeleton node that contributes no state update yet. Backs the steps not
-    wired so far — gate, synthesis, output_validate, render — which their own
-    slices / tasks fill in (hypothesis and spec_build are now real nodes)."""
+    """A skeleton node that contributes no state update yet. Backs the one step not
+    wired so far — render — which its own task fills in (gate, hypothesis, spec_build,
+    synthesis and output_validate are now real nodes)."""
     return {}
 
 
-def _hypothesis_prompt(goal: str, prior_error: str | None) -> str:
-    """Render the prompt for the hypothesis step. Appends RANKING_TARGET_GUIDANCE so
-    the LLM proposes ranking targets the agent's default geometric-mean ranker can
-    score (each with explicit desirability ramp bounds) — the prose half of surfacing
-    the schema, paired with the RankingTarget field descriptions. On a retry, the prior
-    schema rejection is fed back so the model can correct the specific malformation."""
-    prompt = (
-        f"Propose a materials triage hypothesis for this goal: {goal}\n\n{RANKING_TARGET_GUIDANCE}"
-    )
-    if prior_error is not None:
-        prompt += (
-            "\n\nYour previous response was rejected because it did not conform "
-            f"to the required schema:\n{prior_error}\nReturn a corrected response."
-        )
-    return prompt
+def _gate_node(state: OrchestratorState) -> dict:
+    """Workflow step 1: the deterministic input policy gate. Runs ``check_input``
+    on the goal and, on a forbidden verdict, raises ``InputRefused`` so the run
+    halts here — before any LLM call — and is never recorded as a ``TriageRun``.
+    An in-scope goal passes through unchanged (the gate adds no state). The gate
+    is allowlist-first and injection-resistant by construction (ADR 0004); it is
+    the weakest of the five safety layers, not the guarantee."""
+    decision = check_input(state["goal"])
+    if not decision.allowed:
+        raise InputRefused(decision.reason, decision.category)
+    return {}
 
 
 def _make_hypothesis_node(
     provider: HypothesisProvider | None,
+    adapter: SourceAdapter | None = None,
+    rag: LiteratureRetriever | None = None,
     max_attempts: int = DEFAULT_MAX_HYPOTHESIS_ATTEMPTS,
 ):
-    """The hypothesis step: the LLM proposes the cited spec-bridges. The output is
-    conformed in two ways, both retry-on-failure: structured output is only *shape*-
-    checked by the schema (~15% of calls emit output it rejects), and a shape-valid
-    hypothesis may still not *compile* into a coherent spec — e.g. a ranking target
-    missing the ramp bounds the default geometric ranker requires, a duplicate
-    constraint, or a contradiction. Both surface as a pydantic ValidationError, so
-    this trial-compiles each candidate and retries either failure (feeding the reason
-    back into the prompt) up to ``max_attempts``, then raises a wrapped
-    HypothesisConformanceError. Catching the compile failure HERE — where the LLM can
-    be re-prompted — is what stops it becoming a terminal, feedback-less
+    """The hypothesis step (workflow step 3: LLM + RAG). When a ``rag`` seam is
+    injected, the node first asks the provider to distill the goal into search
+    keywords, retrieves the top literature passages for *those* keywords, and grounds
+    the prompt in them (fenced as untrusted DATA via ``build_hypothesis_prompt``) — so
+    the LLM proposes candidates anchored in the literature, not its own memory. Without
+    a ``rag`` it degrades to a literature-free prompt.
+
+    The output is conformed in two ways, both retry-on-failure: structured output is
+    only *shape*-checked by the schema (~15% of calls emit output it rejects), and a
+    shape-valid hypothesis may still not *compile* into a coherent spec — e.g. a
+    ranking target missing the ramp bounds the default geometric ranker requires, a
+    duplicate constraint, or a contradiction. Both surface as a pydantic
+    ValidationError, so this trial-compiles each candidate and retries either failure
+    (feeding the reason back into the prompt) up to ``max_attempts``, then raises a
+    wrapped HypothesisConformanceError. Catching the compile failure HERE — where the
+    LLM can be re-prompted — is what stops it becoming a terminal, feedback-less
     SpecCompilationError later in spec_build. Non-validation failures (transport,
-    throttling) are not retried here."""
+    throttling) are not retried here. Keyword extraction and retrieval happen once,
+    before the retry loop (only the schema feedback changes across attempts)."""
+
+    # Snapshot the source's retrievable vocabulary once at build time: it is a static,
+    # prebuilt table (no live fetch — that would break replayability), so binding it
+    # per call would be wasted work.
+    vocabulary = adapter.property_vocabulary() if adapter is not None else {}
 
     def hypothesis(state: OrchestratorState) -> dict:
         if provider is None:
             return {}
+        goal = state["goal"]
+        # LLM + RAG: distill the goal to keywords, then ground in the retrieved
+        # (untrusted) abstracts. Fresh per-request nonce fences the untrusted text.
+        snippets: list[LiteraturePassage] = []
+        if rag is not None:
+            snippets = rag.search(provider.extract_keywords(goal))
+        nonce = secrets.token_hex(8)
         last_exc: ValidationError | None = None
         for _ in range(max_attempts):
-            prompt = _hypothesis_prompt(state["goal"], None if last_exc is None else str(last_exc))
+            prompt = build_hypothesis_prompt(
+                goal,
+                vocabulary,
+                snippets,
+                nonce=nonce,
+                prior_error=None if last_exc is None else str(last_exc),
+            )
             try:
                 proposed = provider.propose(prompt)
                 # Trial-compile: a shape-valid hypothesis whose proposals don't form a
@@ -168,7 +243,7 @@ def _make_hypothesis_node(
             except ValidationError as exc:
                 last_exc = exc
                 continue
-            return {"hypothesis": proposed}
+            return {"hypothesis": proposed, "literature": tuple(snippets)}
         raise HypothesisConformanceError(
             f"LLM did not produce a schema-valid, compilable Hypothesis in {max_attempts} attempts"
         ) from last_exc
@@ -304,9 +379,78 @@ def _rank_node(state: OrchestratorState) -> dict:
     }
 
 
+#: Default cap on synthesis re-invocations when the LLM emits a malformed Synthesis
+#: or cites a material not in retrieved provenance (analogous to the hypothesis cap).
+DEFAULT_MAX_SYNTHESIS_ATTEMPTS = 3
+
+
+def _make_synthesis_node(
+    provider: SynthesisProvider | None,
+    max_attempts: int = DEFAULT_MAX_SYNTHESIS_ATTEMPTS,
+):
+    """The synthesis step (workflow step 7: LLM + RAG). Turns the ranked result into a
+    grounded, cited narrative, reusing the SAME literature the hypothesis step retrieved
+    (persisted in state — no second search). The LLM writes the prose, but every claim
+    must cite a record_id deterministic retrieval returned; this checks each emission
+    with ``ungrounded_record_ids`` and, on a miss, feeds the offending ids back and
+    retries (up to ``max_attempts``) before raising SynthesisConformanceError — so an
+    ungrounded narrative never reaches the output validator. With no provider injected
+    the step is a pass-through (its slice not yet active)."""
+
+    def synthesis(state: OrchestratorState) -> dict:
+        if provider is None:
+            return {}
+        goal = state["goal"]
+        result = state["result"]
+        literature = state.get("literature", ())
+        retrieved_ids = {c.identifier for c in state.get("candidates", ())}
+        nonce = secrets.token_hex(8)
+        prior_error: str | None = None
+        for _ in range(max_attempts):
+            prompt = build_synthesis_prompt(
+                goal, result, literature, nonce=nonce, prior_error=prior_error
+            )
+            # Two retry-worthy failures, both fed back: the LLM emits a malformed
+            # Synthesis (~15% schema-rejection rate), or it cites a material that was
+            # not retrieved. Non-validation failures (transport/throttle) propagate.
+            try:
+                produced = provider.synthesize(prompt)
+            except ValidationError as exc:
+                prior_error = str(exc)
+                continue
+            ungrounded = ungrounded_record_ids(produced, retrieved_ids)
+            if not ungrounded:
+                return {"synthesis": produced}
+            prior_error = (
+                f"these cited materials were not in retrieved provenance: {', '.join(ungrounded)}"
+            )
+        raise SynthesisConformanceError(
+            f"no grounded, schema-valid Synthesis in {max_attempts} attempts: {prior_error}"
+        )
+
+    return synthesis
+
+
+def _output_validate_node(state: OrchestratorState) -> dict:
+    """Workflow step 8: the final grounding gate before render. Delegates to
+    ``validate_output``, which raises ``UngroundedOutputError`` unless every presented
+    candidate (ranked + excluded) and every narrative citation resolves to a retrieved
+    record id. The synthesis step already retries on a grounding miss, so a violation
+    here is a real contract breach: the validator refuses rather than render it (no
+    retry). On clean output it contributes no state change."""
+    validate_output(
+        state["result"],
+        state.get("synthesis"),
+        {c.identifier for c in state.get("candidates", ())},
+    )
+    return {}
+
+
 def build_orchestrator(
     adapter: SourceAdapter | None = None,
     provider: HypothesisProvider | None = None,
+    rag: LiteratureRetriever | None = None,
+    synthesis_provider: SynthesisProvider | None = None,
     checkpointer: MemorySaver | None = None,
 ) -> CompiledStateGraph:
     """Build and compile the triage orchestrator graph.
@@ -314,17 +458,27 @@ def build_orchestrator(
     The nine ``WORKFLOW_STEPS`` become nodes wired START -> gate -> ... ->
     render -> END, compiled with a checkpointer (v1 default: an in-process
     ``MemorySaver``) so execution state is captured for trace export and resume.
-    The ``hypothesis`` step (LLM, retry-on-malformed) and the ``retrieve`` ->
-    ``filter`` -> ``rank`` deterministic core are wired; the rest are
-    pass-throughs until their slices land. ``adapter`` and ``provider`` are the
-    injected retrieval and LLM seams (fakes make the whole graph offline-testable).
+    The ``gate`` (deterministic input policy), ``hypothesis`` (LLM + RAG,
+    retry-on-malformed), ``spec_build`` and ``synthesis`` (LLM + RAG, grounding
+    retry) and ``output_validate`` (final grounding gate) steps and the ``retrieve``
+    -> ``filter`` -> ``rank`` deterministic core are wired; only ``render`` remains a
+    pass-through until its slice lands. ``adapter``,
+    ``provider``, ``rag`` and ``synthesis_provider`` are the injected retrieval, LLM,
+    literature and synthesis-LLM seams (fakes make the whole graph offline-testable);
+    the adapter's ``property_vocabulary`` is bound into the hypothesis prompt so the
+    LLM proposes only properties the source returns, ``rag`` (when supplied) grounds
+    the hypothesis prompt in retrieved abstracts that are persisted for synthesis to
+    reuse, and ``synthesis_provider`` writes the grounded narrative.
     """
     nodes = {
-        "hypothesis": _make_hypothesis_node(provider),
+        "gate": _gate_node,
+        "hypothesis": _make_hypothesis_node(provider, adapter, rag),
         "spec_build": _spec_build_node,
         "retrieve": _make_retrieve_node(adapter),
         "filter": _make_filter_node(adapter),
         "rank": _rank_node,
+        "synthesis": _make_synthesis_node(synthesis_provider),
+        "output_validate": _output_validate_node,
     }
     builder = StateGraph(OrchestratorState)
     for step in WORKFLOW_STEPS:

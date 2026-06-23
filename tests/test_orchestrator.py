@@ -15,12 +15,14 @@ from materials_triage.agent.orchestrator import (
     DEFAULT_MAX_HYPOTHESIS_ATTEMPTS,
     WORKFLOW_STEPS,
     HypothesisConformanceError,
+    InputRefused,
     SpecCompilationError,
-    _hypothesis_prompt,
+    SynthesisConformanceError,
+    _output_validate_node,
     build_orchestrator,
     resume_run,
 )
-from materials_triage.agent.prompts import RANKING_TARGET_GUIDANCE
+from materials_triage.agent.validator import UngroundedOutputError
 from materials_triage.core.hypothesis import (
     Citation,
     ConstraintProposal,
@@ -41,19 +43,26 @@ from materials_triage.core.schema import (
     TriageResult,
     TriageSpec,
 )
+from materials_triage.core.synthesis import GroundedClaim, Synthesis
+from materials_triage.retrieval.rag import LiteraturePassage
 from materials_triage.sources.base import SourceAdapter
 
 
-def test_hypothesis_prompt_surfaces_the_ranking_target_guidance():
-    """The hypothesis prompt carries the ranking-target guidance so the LLM proposes
-    ramp-bounded targets the default geometric-mean ranker can score — both on the
-    first attempt and on a retry (the guidance must not be dropped on the retry path)."""
-    first = _hypothesis_prompt("wide-gap oxide", None)
-    retry = _hypothesis_prompt("wide-gap oxide", "prior schema error")
+def test_hypothesis_node_binds_the_adapters_vocabulary_into_the_prompt():
+    """End to end through ``build_orchestrator``: the adapter's ``property_vocabulary``
+    reaches the prompt the LLM actually receives, so spec-building is constrained to
+    the source's real surface (the load-bearing lever for shortlist quality)."""
+    provider = _CompileFlakyProvider(fail_times=0)  # records every prompt; returns a compiling one
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)], vocabulary={"band_gap": "eV"})
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
 
-    assert RANKING_TARGET_GUIDANCE in first
-    assert RANKING_TARGET_GUIDANCE in retry
-    assert "wide-gap oxide" in first
+    orchestrator = build_orchestrator(adapter=adapter, provider=provider)
+    config = {"configurable": {"thread_id": "vocab-bind"}}
+    orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert provider.prompts  # the node called the provider
+    assert "band_gap" in provider.prompts[0]
+    assert "Retrievable properties" in provider.prompts[0]
 
 
 def test_orchestrator_compiles_with_a_checkpointer_and_wires_the_steps_linearly():
@@ -84,6 +93,24 @@ def test_orchestrator_compiles_with_a_checkpointer_and_wires_the_steps_linearly(
     )
     for edge in expected_chain:
         assert edge in actual_edges, f"missing linear edge {edge}"
+
+
+def test_gate_refuses_a_forbidden_goal_and_records_no_run():
+    """Workflow step 1: the input gate. A goal naming a forbidden capability
+    (here scraping a paywalled source) is stopped at the gate — the run raises
+    ``InputRefused`` carrying the gate's reason/category and never reaches the
+    later steps, so no ``TriageResult`` is produced. (CLAUDE.md: a forbidden
+    request is logged and refused, *not* recorded as a TriageRun.)"""
+    orchestrator = build_orchestrator()
+    config = {"configurable": {"thread_id": "gate-refuse"}}
+
+    with pytest.raises(InputRefused) as excinfo:
+        orchestrator.invoke({"goal": "scrape a paywalled database for wide-gap oxides"}, config)
+
+    assert excinfo.value.category == "paywalled"
+    assert excinfo.value.reason  # a human-readable reason travels with the refusal
+    # The run never produced a result — it stopped at the gate.
+    assert orchestrator.get_state(config).values.get("result") is None
 
 
 def test_state_channels_round_trip_domain_objects_through_the_checkpointer():
@@ -169,16 +196,20 @@ class _FakeAdapter(SourceAdapter):
     """An offline retrieval seam: returns a fixed candidate list, ignoring the
     spec, so the deterministic core can be exercised without any network."""
 
-    def __init__(self, candidates, routing=None, caveats=()):
+    def __init__(self, candidates, routing=None, caveats=(), vocabulary=None):
         self._candidates = candidates
         self._routing = routing or PredicateRouting()
         self._caveats = tuple(caveats)
+        self._vocabulary = vocabulary or {}
 
     def retrieve(self, spec):
         return RetrievalResult(candidates=tuple(self._candidates), caveats=self._caveats)
 
     def classify_predicates(self, spec):
         return self._routing
+
+    def property_vocabulary(self):
+        return self._vocabulary
 
 
 def _candidate(identifier, band_gap):
@@ -514,6 +545,248 @@ def test_hypothesis_node_raises_when_proposals_never_compile():
 
     assert isinstance(excinfo.value.__cause__, ValidationError)
     assert len(provider.prompts) == DEFAULT_MAX_HYPOTHESIS_ATTEMPTS
+
+
+class _RagProvider:
+    """A provider that records every propose() prompt, extracts a fixed keyword
+    string from the goal (recording the goal it saw), and returns a compiling
+    hypothesis — so the node's RAG-grounding path can be observed offline."""
+
+    def __init__(self, keywords):
+        self._keywords = keywords
+        self.prompts = []
+        self.extracted_goals = []
+
+    def extract_keywords(self, goal):
+        self.extracted_goals.append(goal)
+        return self._keywords
+
+    def propose(self, prompt):
+        self.prompts.append(prompt)
+        return _ranking_hypothesis(bounded=True)
+
+
+class _FakeRag:
+    """An offline LiteratureRAG seam: records the query it was handed and returns a
+    fixed passage list, so the node's literature grounding is testable without OpenAlex."""
+
+    def __init__(self, passages):
+        self._passages = passages
+        self.queries = []
+
+    def search(self, query, k=10):
+        self.queries.append(query)
+        return list(self._passages)
+
+
+class _StubSynthesisProvider:
+    """An offline synthesis LLM seam: records every prompt and returns a fixed
+    Synthesis (or one per call, to drive the grounding-retry path)."""
+
+    def __init__(self, *syntheses):
+        self._syntheses = list(syntheses)
+        self.prompts = []
+
+    def synthesize(self, prompt):
+        self.prompts.append(prompt)
+        return self._syntheses[min(len(self.prompts) - 1, len(self._syntheses) - 1)]
+
+
+def test_output_validate_rejects_a_presented_candidate_without_provenance():
+    """Workflow step 8 is the final grounding gate: if the output presents a material
+    not in retrieved provenance, the validator refuses rather than render it. This path
+    is unreachable through the happy graph (survivors are always a subset of retrieved),
+    so it is the defensive backstop — exercised here directly with inconsistent state."""
+    ghost = ScoredCandidate(candidate=_candidate("mp-ghost", 3.0), score=1.0)
+    state = {
+        "goal": "wide-gap oxide",
+        "result": TriageResult(ranked=(ghost,)),
+        "candidates": (_candidate("mp-1", 3.0),),  # mp-ghost was never retrieved
+        "synthesis": None,
+    }
+
+    with pytest.raises(UngroundedOutputError):
+        _output_validate_node(state)
+
+
+def test_output_validate_accepts_a_fully_grounded_output():
+    """The gate passes silently (no state change) when every presented candidate and
+    citation resolves to a retrieved record id — it must not reject valid output."""
+    grounded = ScoredCandidate(candidate=_candidate("mp-1", 3.0), score=1.0)
+    state = {
+        "goal": "wide-gap oxide",
+        "result": TriageResult(ranked=(grounded,)),
+        "candidates": (_candidate("mp-1", 3.0),),
+        "synthesis": Synthesis(
+            summary="ZnO leads.",
+            claims=(GroundedClaim(text="ZnO ~3 eV.", record_id="mp-1"),),
+        ),
+    }
+
+    assert _output_validate_node(state) == {}
+
+
+def test_synthesis_node_lands_a_grounded_synthesis_in_state():
+    """Workflow step 7: with a synthesis provider injected, the node turns the ranked
+    result into a grounded Synthesis and lands it in state — every claim cites a
+    retrieved candidate (here mp-1), so the narrative is non-fabricated by construction."""
+    synthesis = Synthesis(
+        summary="ZnO leads for a wide-gap photocatalyst.",
+        claims=(GroundedClaim(text="ZnO has a ~3 eV gap.", record_id="mp-1"),),
+    )
+    syn_provider = _StubSynthesisProvider(synthesis)
+    provider = _StubProvider(_valid_hypothesis())
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)])
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(
+        adapter=adapter, provider=provider, synthesis_provider=syn_provider
+    )
+    config = {"configurable": {"thread_id": "synth-ok"}}
+    final = orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert final["synthesis"] is synthesis
+    assert syn_provider.prompts  # the node called the synthesis provider
+
+
+class _FlakySynthesisProvider:
+    """Raises a pydantic ValidationError (malformed Synthesis) for the first
+    ``fail_times`` calls, then returns a grounded Synthesis. Records every prompt."""
+
+    def __init__(self, fail_times, good):
+        self.fail_times = fail_times
+        self._good = good
+        self.prompts = []
+
+    def synthesize(self, prompt):
+        self.prompts.append(prompt)
+        if len(self.prompts) <= self.fail_times:
+            Synthesis(summary="   ", claims=())  # raises ValidationError (blank summary)
+        return self._good
+
+
+def test_synthesis_node_retries_malformed_llm_output_then_succeeds():
+    """Like the hypothesis step, synthesis conforms the LLM to its schema by RETRYING
+    on a pydantic ValidationError (the measured ~15% malformed-output rate), not by
+    crashing the run. After one malformed attempt and one good one, the Synthesis lands."""
+    good = Synthesis(
+        summary="ZnO leads.",
+        claims=(GroundedClaim(text="ZnO has a ~3 eV gap.", record_id="mp-1"),),
+    )
+    syn_provider = _FlakySynthesisProvider(fail_times=1, good=good)
+    provider = _StubProvider(_valid_hypothesis())
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)])
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(
+        adapter=adapter, provider=provider, synthesis_provider=syn_provider
+    )
+    config = {"configurable": {"thread_id": "synth-malformed"}}
+    final = orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert final["synthesis"] is good
+    assert len(syn_provider.prompts) == 2  # one malformed attempt + one good
+
+
+def test_synthesis_node_retries_when_a_claim_is_ungrounded_then_succeeds():
+    """The synthesis LLM may cite a material that was not retrieved. The node catches
+    that with the grounding check, feeds the offending record_id back, and retries —
+    so a transient hallucinated citation self-corrects instead of reaching the output
+    validator. After one ungrounded attempt and one good one, the grounded Synthesis
+    lands and the bad id appears in the retry prompt."""
+    bad = Synthesis(
+        summary="An invented lead.",
+        claims=(GroundedClaim(text="MgX has a huge gap.", record_id="mp-999"),),
+    )
+    good = Synthesis(
+        summary="ZnO leads.",
+        claims=(GroundedClaim(text="ZnO has a ~3 eV gap.", record_id="mp-1"),),
+    )
+    syn_provider = _StubSynthesisProvider(bad, good)
+    provider = _StubProvider(_valid_hypothesis())
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)])
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(
+        adapter=adapter, provider=provider, synthesis_provider=syn_provider
+    )
+    config = {"configurable": {"thread_id": "synth-retry"}}
+    final = orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert final["synthesis"] is good
+    assert len(syn_provider.prompts) == 2  # one ungrounded attempt + one corrected
+    assert "mp-999" in syn_provider.prompts[1]  # the ungrounded id was fed back
+
+
+def test_synthesis_node_raises_when_it_cannot_ground_within_the_cap():
+    """If every attempt cites an unretrieved material, the node exhausts its retries
+    and raises SynthesisConformanceError — an ungrounded narrative never silently
+    reaches the output validator or the rendered result."""
+    ungrounded = Synthesis(
+        summary="Always invented.",
+        claims=(GroundedClaim(text="bogus", record_id="mp-404"),),
+    )
+    syn_provider = _StubSynthesisProvider(ungrounded)
+    provider = _StubProvider(_valid_hypothesis())
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)])
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(
+        adapter=adapter, provider=provider, synthesis_provider=syn_provider
+    )
+    config = {"configurable": {"thread_id": "synth-fail"}}
+
+    with pytest.raises(SynthesisConformanceError):
+        orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+
+def test_hypothesis_node_grounds_the_prompt_in_rag_literature_via_extracted_keywords():
+    """Workflow step 3 is LLM + RAG: when a ``rag`` seam is injected, the node first
+    asks the provider to distill the goal into search keywords, searches the literature
+    with *those* keywords (not the raw goal), and grounds the hypothesis prompt in the
+    returned (untrusted) abstracts — so the LLM proposes candidates anchored in the
+    literature it was handed, not from its own memory."""
+    passage = LiteraturePassage(
+        provenance=Provenance(source="OpenAlex", record_id="W1", method="literature"),
+        title="Wide-gap oxides",
+        text="TiO2 shows a wide band gap suited to photocatalysis.",
+    )
+    rag = _FakeRag([passage])
+    provider = _RagProvider(keywords="wide band gap oxide photocatalyst")
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)], vocabulary={"band_gap": "eV"})
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(adapter=adapter, provider=provider, rag=rag)
+    config = {"configurable": {"thread_id": "rag-ground"}}
+    orchestrator.invoke({"goal": "wide-gap oxide for photocatalysis", "spec": spec}, config)
+
+    assert provider.extracted_goals == ["wide-gap oxide for photocatalysis"]
+    # The literature was searched with the EXTRACTED keywords, not the raw goal.
+    assert rag.queries == ["wide band gap oxide photocatalyst"]
+    # The returned abstract was grounded into the prompt the LLM actually received.
+    assert "TiO2 shows a wide band gap suited to photocatalysis." in provider.prompts[0]
+
+
+def test_hypothesis_node_persists_retrieved_literature_for_reuse_downstream():
+    """The passages the hypothesis step retrieves are persisted in run state so the
+    synthesis step can ground its narrative in the SAME papers — retrieved once, never
+    re-searched. (Without this they would be used in the prompt and discarded.)"""
+    passage = LiteraturePassage(
+        provenance=Provenance(source="OpenAlex", record_id="W1", method="literature"),
+        title="Wide-gap oxides",
+        text="TiO2 shows a wide band gap.",
+    )
+    rag = _FakeRag([passage])
+    provider = _RagProvider(keywords="wide band gap oxide")
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)], vocabulary={"band_gap": "eV"})
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(adapter=adapter, provider=provider, rag=rag)
+    config = {"configurable": {"thread_id": "lit-persist"}}
+    final = orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert final["literature"] == (passage,)
+    assert len(rag.queries) == 1  # searched once for the whole run, not per stage
 
 
 class _BrokenProvider:

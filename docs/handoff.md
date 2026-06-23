@@ -32,8 +32,9 @@ adapter's `_scalar` VRH-collapse was added (no-mistakes review caught that it wa
 `retrieve()` crashed on elastic materials). Live-smoked.
 - [x] `property_vocabulary()` on the MP adapter — derive queryable name surface from the published API schema
 - [x] grow `FIELD_UNITS` + `_FIELD_ORIGIN` in lockstep with the new surface
-- [ ] bind the vocabulary into the hypothesis prompt ("use ONLY these names") — **moved to #34** (hypothesis
-  node is a pass-through on `main`; fast-track's `_vocabulary_clause`/`_hypothesis_prompt` port lands there)
+- [x] bind the vocabulary into the hypothesis prompt ("use ONLY these names") — **done in #34 on
+  `feat/wire-input-gate`** (not yet merged): `build_property_vocabulary_guidance` renders the adapter's
+  retrievable property→unit surface, snapshotted once at build time (no live fetch, preserves replay)
 
   Findings: elasticity has no `origins[]` entry (moduli `origin=None`, retiring the dead `"elasticity"` map);
   MP WAFs the `Python-urllib` UA (use `requests`/a UA). [memory: vocab-prebuilt-not-runtime,
@@ -118,8 +119,19 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
 - [ ] **#35** synthesis — grounded narrative + mechanistic "why," each claim cited, no invented numbers
 - [ ] **#22** prompt templates — hypothesis + synthesis
 
-**4 · #34 — Wire the orchestrator** *(replace the four PASS-THROUGH nodes)*
-- [ ] gate node · [ ] hypothesis node · [ ] synthesis node · [ ] output_validate node
+**4 · #34 — Wire the orchestrator** *(replace the four PASS-THROUGH nodes)* — **built on
+`feat/wire-input-gate`, not yet merged** (strict TDD). `render` is the only remaining pass-through (phase 5).
+- [x] gate node — `_gate_node` calls the deterministic `check_input` and raises `InputRefused`
+  (reason+category) on a forbidden-capability verdict; a fast logged refusal, not a topic/jailbreak filter
+- [x] hypothesis node — binds the source vocabulary (`build_property_vocabulary_guidance`) and grounds in RAG
+  via LLM-extracted keywords (`HypothesisProvider.extract_keywords` → `rag.search` → `build_hypothesis_prompt`,
+  goal+abstracts fenced as untrusted DATA); only when a `rag` seam is injected (degrades gracefully without it);
+  persists the retrieved passages into a new `literature` state channel
+- [x] synthesis node — reuses the hypothesis-step `literature` (no second search); retries on a malformed
+  `Synthesis` (pydantic) **or** an ungrounded citation (bad `record_id`s fed back via `prior_error` on
+  `build_synthesis_prompt`), raising `SynthesisConformanceError` after the cap
+- [x] output_validate node — `_output_validate_node` delegates to `validate_output` as a defensive final
+  grounding gate, **no retry** (synthesis already retried; a violation here is a real contract breach)
 
 **5 · Renderers → CLI** *(render BOTH views from ONE `TriageRun`)*
 - [ ] **#25** PI renderer (`view=pi`) · [ ] **#26** audit renderer (`view=audit`)
@@ -186,8 +198,10 @@ per-target **Derringer–Suich desirability curves** (`maximize`/`minimize`/`tar
 - **Agent:** `agent/llm.py` Bedrock `HypothesisProvider` (injected `complete` seam; `us.*` inference-profile
   model id). `agent/prompts.py` `ROLE_SYSTEM_PROMPT` + `build_chat_messages`. `agent/orchestrator.py`
   LangGraph graph with per-stage exclusion channels + retry + spec-build HITL gate; `core/run_trace.py`
-  audit export + `memory/store.py` `BaseStore`. **⚠️ gate / hypothesis / synthesis / output_validate nodes
-  are still PASS-THROUGHS** — wiring them is #34.
+  audit export + `memory/store.py` `BaseStore`. **⚠️ on `main`, the gate / hypothesis / synthesis /
+  output_validate nodes are still PASS-THROUGHS — #34 wires all four (built on `feat/wire-input-gate`, not
+  yet merged); the new lazy Bedrock `SynthesisProvider` + `HypothesisProvider.extract_keywords` seams and the
+  `literature` state channel land with it, leaving `render` as the only pass-through.**
 - **Guardrails:** `policy/guardrails.py` `check_input` + `wrap_untrusted` + `_scrub`.
 - **Server (net-new, outside v1 deep-plan):** `server/mt_server/policy.py` `resolve_model` (#52); `server/`
   wired into pytest. See the hosting task list below.
@@ -338,10 +352,11 @@ property/material class *before* retrieval:
   creds): `pytest -m live`.
 - **Next up (pick one):** (a) **pagination** (2b — page `_skip`/`_limit` to exhaust the filtered set; the
   natural sibling now that #38 makes the page filterable; reuses the `caveats` channel for the "capped at N"
-  notice); (b) **#34** wire the pass-through nodes (gate/hypothesis/synthesis/output_validate) + bind the
-  vocabulary into the hypothesis prompt; (c) **views / render** (#25–#27) — also unblocks 2c's caveat
-  rendering. The deterministic filtering core is now complete, so the remaining v1 gaps are I/O (pagination),
-  the LLM nodes (#34), and presentation (views).
+  notice); (b) **#34** — **in flight on `feat/wire-input-gate`** (gate/hypothesis/synthesis/output_validate
+  wired + vocabulary binding done; not yet merged); after it lands, `render` is the only pass-through left;
+  (c) **views / render** (#25–#27) — also unblocks 2c's caveat rendering. The deterministic filtering core is
+  now complete, so the remaining v1 gaps are I/O (pagination), the LLM nodes (#34, in flight), and presentation
+  (views).
 - **Credentials:** `X_API_KEY` (MP), `OPENALEX_MAILTO` (optional polite pool), AWS creds for Bedrock
   (prefer `~/.aws/credentials`; conftest `load_dotenv`s `.env`; AWS keys in `.env` must be UPPERCASE).
   **Never read/print the AWS creds or `X_API_KEY`.**
@@ -351,7 +366,8 @@ property/material class *before* retrieval:
 - **Collaboration rules (CLAUDE.md):** ask before choosing between approaches; one function at a time then
   stop for approval; TDD via the `tdd` skill (never batch tests); **don't start coding until told.**
 - **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~, ~~ranking #66~~ → **pagination (2b, in flight on
-  `feat/retrieve-pagination`)**, #34, #20, #35, #22, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21,
+  `feat/retrieve-pagination`)**, **#34 (in flight on `feat/wire-input-gate` — wires the four LLM-path nodes)**,
+  #20, #35, #22, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21,
   #23, #24, #32, #33, #37, **#39 (supply side; binding → #34)**, **#38 server-side push (#63)**, **2c
   exclusive-set local filter (#64)**, **selectable rankers (#66)**. Open within 2c: render caveats in views
   (blocked on the view layer #25–#27). **#34/#22 now also owns:** bind the source vocabulary into the

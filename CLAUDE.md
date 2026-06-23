@@ -79,10 +79,11 @@ Package layout (monorepo):
   `is_magnetic`, element `any`) go to local buckets that `core/scoring.py`'s
   `apply_local_filters` enforces, and predicates the source can neither push nor return
   go to loud run-level `caveats`. `retrieval/rag.py` — BM25 literature RAG.
-- `src/materials_triage/agent/` — Bedrock `HypothesisProvider` (`llm.py`), prompts
-  (`prompts.py`: `ROLE_SYSTEM_PROMPT`, `build_chat_messages`, and `build_synthesis_prompt`
-  — trusted citable shortlist as instruction text, user goal + RAG snippets fenced as
-  untrusted DATA), the output validator (`validator.py`: `validate_output` raises
+- `src/materials_triage/agent/` — Bedrock `HypothesisProvider`/`SynthesisProvider`
+  (`llm.py`; the former also exposes `extract_keywords` for the RAG step), prompts
+  (`prompts.py`: `ROLE_SYSTEM_PROMPT`, `build_chat_messages`, `build_hypothesis_prompt`
+  and `build_synthesis_prompt` — trusted shortlist/vocabulary as instruction text, user
+  goal + RAG snippets fenced as untrusted DATA), the output validator (`validator.py`: `validate_output` raises
   `UngroundedOutputError` unless every presented candidate and narrative citation
   resolves to retrieved provenance), LangGraph `orchestrator.py` (9-step linear graph +
   checkpointer). `policy/guardrails.py` — input gate + trust-boundary wrapper.
