@@ -409,6 +409,28 @@ def test_retrieve_omits_elements_when_spec_has_no_required_elements():
     assert "elements" not in captured["params"]
 
 
+def test_retrieve_requests_back_the_local_bucket_fields():
+    """retrieve asks for the fields it must enforce locally (the exclusive set), so the
+    candidate carries the data: the unqueryable boolean's own field, and `elements`
+    when there's a local `any` predicate. 'Request back what you filter on.'"""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(
+        boolean_constraints=(BooleanConstraint(property_name="is_magnetic", required=True),),
+        element_predicates=(ElementPredicate(quantifier="any", members=frozenset({"Fe", "Co"})),),
+    )
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    fields = set(captured["params"]["_fields"].split(","))
+    assert "is_magnetic" in fields
+    assert "elements" in fields
+
+
 def test_retrieve_carries_composition_for_local_element_filtering():
     """retrieve parses the `elements` list onto the candidate, so the deterministic
     filter has the composition it needs to enforce an element predicate locally (the

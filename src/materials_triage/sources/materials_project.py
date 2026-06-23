@@ -68,7 +68,8 @@ class MaterialsProjectAdapter(SourceAdapter):
 
     def retrieve(self, spec: TriageSpec) -> list[Candidate]:
         headers = {"X-API-KEY": self._api_key}
-        docs = self._http_get("/materials/summary/", _query_params(spec), headers)["data"]
+        params = _request_local_fields(_query_params(spec), self.classify_predicates(spec))
+        docs = self._http_get("/materials/summary/", params, headers)["data"]
         # The functional isn't in the summary; resolve every retrieved value's task
         # and read its run_type in one batched call, then stamp each provenance.
         run_types = _fetch_run_types(self._http_get, headers, _page_task_ids(docs))
@@ -188,6 +189,21 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
             params["nelements_min"] = str(spec.count.min)
         if spec.count.max is not None and "nelements_max" in PUSHABLE_PARAMS:
             params["nelements_max"] = str(spec.count.max)
+    return params
+
+
+def _request_local_fields(params: dict[str, str], routing: PredicateRouting) -> dict[str, str]:
+    """Add to ``_fields`` the columns the deterministic filter needs to enforce the
+    routing's local bucket — the exclusive set that couldn't be pushed. The local
+    boolean's own field, plus ``elements`` when a local element predicate is present.
+    Without this the candidate wouldn't carry the data to check (request what you
+    filter on)."""
+    extra = [b.property_name for b in routing.local_booleans]
+    if routing.local_element_predicates:
+        extra.append("elements")
+    if extra:
+        present = params["_fields"].split(",")
+        params["_fields"] = ",".join(present + [f for f in extra if f not in present])
     return params
 
 
