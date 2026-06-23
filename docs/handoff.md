@@ -1,4 +1,4 @@
-# Session Handoff - 2026-06-22 17:30
+# Session Handoff - 2026-06-22 20:28
 
 > Single living handoff, git-tracked at `docs/handoff.md` (PR #35). Do NOT recreate dated copies or
 > a `docs/handoffs/` subdir — untracked handoffs get wiped by parallel sessions' `git clean`. Keep
@@ -57,7 +57,9 @@ merged (#48/#49) — the real build re-implements via TDD.
   at a time, never batch); discuss behavior before coding; **don't start coding until told**.
 
 ## Files
-- `src/materials_triage/core/schema.py` — all frozen data models (merged).
+- `src/materials_triage/core/schema.py` — all frozen data models (merged). `Provenance` now carries
+  `method` (required Literal incl. `literature`) + `xc_functional` (optional) — trust metadata, #37 area
+  D (#55).
 - `src/materials_triage/core/elements.py` — 118 IUPAC element symbols (merged).
 - `src/materials_triage/core/scoring.py` — `normalize` + `apply_hard_filters` + `on_missing` (merged).
 - `src/materials_triage/core/ranking.py` — weighted-average ranker (merged).
@@ -66,6 +68,9 @@ merged (#48/#49) — the real build re-implements via TDD.
   behind `Field(discriminator="kind")`, `extra="forbid"`; merged #34). `Proposal` is a type alias —
   construct the concrete subclass. `compile_spec` unchanged (dispatches on `.kind`).
 - `src/materials_triage/sources/base.py` / `stubs.py` / `materials_project.py` — retrieval (merged).
+  `materials_project.py` now does a **two-call** retrieve (summary→batched tasks) to stamp each value's
+  `xc_functional` from its task `run_type`; helpers `_FIELD_ORIGIN` / `_origin_task_ids` /
+  `_field_task_id` / `_fetch_run_types` / `_page_task_ids` (#37 area D, #55).
 - `src/materials_triage/retrieval/rag.py` — **literature RAG (#17), MERGED (#31)**. Surface:
   `LiteraturePassage`, `LiteratureRAG.search(query, k=10)`, `AbstractFetcher` (Protocol),
   `OpenAlexFetcher` (live transport). Internals: `_reconstruct_abstract`, `_parse_work`,
@@ -293,6 +298,35 @@ merged (#48/#49) — the real build re-implements via TDD.
 - **Two-PR split shipped:** #52 (server policy, via the no-mistakes gate) and #53 (docs: ADR 0005 +
   `.gitignore` + handoff, pushed + PR'd directly since it's docs-only and a gate run was monitoring #52).
   Merge docs-first/alongside so the ADR reference resolves on `main`.
+- **— Session 12 (2026-06-22): #37 area D shipped (value-level trust metadata, PR #55) —**
+- **Cut a field nothing fills.** Planned D1 `PropertyValue.uncertainty` was DROPPED — MP's DFT values
+  carry no error bar, so it'd be a present-but-always-`None` slot. Same test killed it and KEPT
+  `method`/`xc_functional`: *does any v1 producer fill this?* [memory: no-uncertainty-field-on-propertyvalue]
+- **`Provenance.method` is REQUIRED** (`experimental`/`computational`/`ml_predicted`/**`literature`**).
+  The 4th value was added because `Provenance` is reused for OpenAlex literature passages (not just MP
+  values), so a required method needed a value that fits a document. Producers stamp it
+  (MP=`computational`, OpenAlex=`literature`); it's **producer-knowable, not value-inferable**.
+- **`xc_functional` is OPTIONAL** — honestly unknown for untraceable values, N/A for literature. Unlike
+  `method`, it can't always be known.
+- **The functional isn't in the MP summary endpoint — and varies PER PROPERTY.** Live-probed: `origins[]`
+  is keyed by MP-internal doc names (`energy`/`structure`/`electronic_structure`/`elasticity`…), NOT our
+  field names, and carries only `task_id`; the functional (`run_type`: GGA / GGA+U / r2SCAN) lives in the
+  **task doc**. So the adapter now makes **two calls**: summary (requesting `origins`) → one **batched
+  `/materials/tasks/?task_ids=…&_fields=task_id,run_type`** → per-property `Provenance`. Bridge =
+  hardcoded `_FIELD_ORIGIN` (our field → origin name; vendor knowledge in the adapter). Absent origin
+  (e.g. no elasticity run) → `xc_functional=None`. Within one material band_gap can be GGA while the
+  energy is r2SCAN — confirmed live.
+- **MP summary exposes ~69 fields (22 numeric + 6 boolean); the adapter supports only 6.** `_FIELD_ORIGIN`
+  is correctly scoped to those 6 — expanding is **#39**, and `FIELD_UNITS`+`_FIELD_ORIGIN` must grow in
+  **lockstep** (a lockstep invariant test was proposed + deferred to #39). Not every field is
+  functional-bearing (counts/booleans aren't). [memory: mp-summary-field-surface-and-field-origin-scope]
+- **Only the live run is the real test** (again): unit tests pass offline, but the per-material run_type
+  variation + absent-origin → `None` behaviour was confirmed only by hitting the real MP API.
+- **D rebased onto post-area-A `main` with ZERO conflicts.** Area A (#51) never touched
+  `Provenance`/`PropertyValue`, and the one shared file (`_query_params`) merged cleanly — the result
+  carries BOTH area A's `element_predicates` block and D's `origins` field. The two handoff-doc commits
+  on D's branch were dropped from the rebase (`git rebase --onto main 227de49 <D3d>`) to avoid noisy
+  doc conflicts; their content lives in this update + the `backup-D-20260622` tag.
 
 ## Work Done (all merged to `main` unless noted)
 *(Append-only history.)*
@@ -407,23 +441,41 @@ merged (#48/#49) — the real build re-implements via TDD.
   - Ran **`/sync-main`**: `main` → `129cb0a`; removed the `mt-hosting-docs` worktree; force-deleted the
     two merged branches (`feat/hosting-server`, `docs/hosting-adr-0005`); restored the main repo to `main`.
   - Refreshed this handoff (`/handoff update`, **this PR**).
+- **Session 12 (2026-06-22) — #37 area D (value-level trust metadata) built, shipped, merged:**
+  - In the `mt-value-trust` worktree, TDD one model/function at a time (6 signed commits): D1
+    `Provenance.method` **required** + `literature` (every existing `Provenance` fixture across 7 test
+    files updated) → D2 `Provenance.xc_functional` optional → D3a `_origin_task_ids`+`_FIELD_ORIGIN` →
+    D3b `_field_task_id` → D3c `_fetch_run_types` (batched tasks call) → D3d wired into `retrieve`
+    (per-property provenance + functional). Scope changed mid-build per Kian: **`uncertainty` cut**;
+    **adapter population pulled in** (originally deferred). Live-probed the real MP API to design against
+    actual `origins`/`run_type` shapes.
+  - **Rebased onto post-area-A `main`** (#51/#52/#53) with **zero conflicts**; 206 tests pass, ruff clean,
+    live-verified. Pushed to origin; Kian ran no-mistakes from the main checkout → **PR #55 merged**.
+  - Saved memories: `no-uncertainty-field-on-propertyvalue`, `mp-summary-field-surface-and-field-origin-scope`.
+  - Ran **`/sync-main`**: `main` already at `06e4eae`; force-deleted merged `feat/value-trust-metadata`
+    (local + remote auto-deleted); refreshed this handoff (`/handoff update`, **this PR**).
 
 ## Status
-- **`main` @ `129cb0a`** (this update is on branch `docs/handoff-server-build`, pending PR). Newly
+- **`main` @ `06e4eae`** (this update is on branch `docs/handoff-d-merged`, pending PR). Recently
   merged: **#51** (#37 spec expressiveness — boolean/element/count predicates), **#52** (server model
-  policy), **#53** (ADR 0005 + `.gitignore` + handoff). Main repo restored to `main`, clean.
-- **Server build STARTED (ADR 0005, harness tasks #1–#10):** `server/mt_server/policy.py`
+  policy), **#53** (ADR 0005 + `.gitignore` + handoff), **#54** (Session-11 handoff), **#55** (#37 **area
+  D** — trust metadata). Main repo on `main`, clean.
+- **#37 area D — DONE + MERGED (#55):** `Provenance.method` (required, +`literature`) and
+  `Provenance.xc_functional` (optional, populated **per-property** by the MP adapter via a batched
+  `origins → tasks run_type` second call). **Still open in #37:** area B (element-class constants
+  `METALS`/`TOXIC` + the "what counts as a metal" decision — needs Kian); area C (ranking beyond
+  weighted-sum) was deferred from the start.
+- **Server build STARTED (ADR 0005, harness tasks HB1–HB10):** `server/mt_server/policy.py`
   `resolve_model` shipped (#52). `server/` is wired into pytest. **Done:** the model-policy slice of
-  task #4 + the test-discovery half of #1. **Still pending:** #1 `[server]` FastAPI extra, #2 run
-  API/SSE, #3 HITL-over-HTTP, rest of #4 (tier resolution, rate limiter, metering), #5 durable
-  checkpointer, #6 `source_version`, #7 step cache, #8 force-fresh/idempotency, #9 thread/attempt+diff,
-  #10 `web/` frontend. Net-new, **outside the v1 deep-plan** — sequence vs. v1 per Kian.
-- **Parallel sessions:** `feat/value-trust-metadata` (own worktree `mt-value-trust`, in flight — leave
-  alone). `feat/fast-track-wire-guardrails` retained as the reference impl (no PR).
+  HB4 + the test-discovery half of HB1. **Pending:** see the Hosting build task list below. Net-new,
+  **outside the v1 deep-plan** — sequence vs. v1 per Kian.
+- **Parallel sessions:** none in flight. `feat/value-trust-metadata` merged (#55) + pruned.
+  `feat/fast-track-wire-guardrails` retained as the reference impl (no PR).
 - **v1 still not started on `main`:** #34 (orchestrator nodes still pass-throughs), #20 (output
   validator), rest of #22 (prompts), #35 (synthesis), #25/#26 (renderers), #27 (CLI), #28 (eval),
   #29 (design note), #30 (README/CLAUDE finalize), #31 (element-drop reasons), #36 (docs); fast-track
-  quality fixes #38/#39 (← #37, now merged) → #40.
+  quality fixes **#38/#39** (← #37, merged; **#39 also owns the `FIELD_UNITS`/`_FIELD_ORIGIN` lockstep
+  invariant + expanding past the adapter's current 6 of MP's ~22 numeric fields**) → #40.
 - **Known issues:** Live Bedrock smoke test ~15% flaky by design (mitigated by #45 retry). The stale
   local `.git/info/exclude` line 9 (ADR-0005 path) is now obsolete — **delete it** (file is tracked).
   `stash@{0}` (readme-kid-flowchart WIP) still unmerged.
@@ -452,8 +504,9 @@ remaining `[server]` extra. Net-new, **outside the v1 deep-plan** — sequence v
 
 ## Next Steps
 *(One function at a time, stop for approval after each; see CLAUDE.md. Don't start coding until told.)*
-1. **Land this handoff PR** (`docs/handoff-server-build`) → squash-merge → `/sync-main`. Then delete
-   the obsolete `.git/info/exclude` line 9.
+1. **Land this handoff PR** (`docs/handoff-d-merged`) → squash-merge → `/sync-main`. Then delete
+   the obsolete `.git/info/exclude` line 9 and remove the now-done `mt-value-trust` worktree
+   (`git worktree remove`). The `backup-D-20260622` tag (pre-rebase D tip) can be deleted too.
 2. **Continue the server build (task #4) — next pure server-side increments:** tier resolution
    (`resolve_tier(session) -> "anon"|"user"`, feeds `resolve_model`), then the **rate limiter**
    (token-bucket `allow(key)` with an injected clock — per-IP anon / per-user signed-in), then
@@ -468,11 +521,11 @@ remaining `[server]` extra. Net-new, **outside the v1 deep-plan** — sequence v
    reasons (#31), docs (#36).
 
 ## Context for Next Session
-- **Branch:** this handoff update is on **`docs/handoff-server-build`** in the main repo (off `main`
-  `129cb0a`); PR pending → squash-merge → `/sync-main`. A **parallel `feat/value-trust-metadata`**
-  worktree (`mt-value-trust`) is in flight — don't touch it. `feat/fast-track-wire-guardrails`
-  (local + origin, no PR) is the reference impl to port from. No other worktrees.
-- **How to verify merged state:** `python -m pytest -q` (175 passed, 3 deselected), `ruff check .`.
+- **Branch:** this handoff update is on **`docs/handoff-d-merged`** (in the `mt-value-trust` worktree,
+  repurposed now that D is merged; off `main` `06e4eae`); PR pending → squash-merge → `/sync-main` →
+  remove the `mt-value-trust` worktree. `feat/fast-track-wire-guardrails` (local + origin, no PR) is the
+  reference impl to port from. Worktrees: `materials-triage` (main) + `mt-value-trust` (this branch).
+- **How to verify merged state:** `python -m pytest -q` (207 passed, 3 deselected), `ruff check .`.
   Live (needs creds): `pytest -m live` (Bedrock via `~/.aws/credentials`, OpenAlex, MP). RAG quick
   check: `OPENALEX_MAILTO=… python -c "from materials_triage.retrieval.rag import LiteratureRAG,
   OpenAlexFetcher; print(len(LiteratureRAG(OpenAlexFetcher()).search('perovskite oxygen evolution', k=5)))"`.
@@ -487,9 +540,12 @@ remaining `[server]` extra. Net-new, **outside the v1 deep-plan** — sequence v
   orchestrator-23-carryforward, llm-structured-output-flakiness, langgraph-msgpack-unregistered-types,
   orchestrator-exclusions-two-sources, resume-is-crash-recovery-not-knob-edit,
   dft-xc-functional-comparability-v2, rag-tokenizer-v2-todo, adapter-testing-seam,
-  materials-project-api, handoff-doc-location, worktree-pythonpath, no-mistakes-run-bootstrap.
+  materials-project-api, handoff-doc-location, worktree-pythonpath, no-mistakes-run-bootstrap,
+  spec-predicate-vocabulary-design, no-uncertainty-field-on-propertyvalue,
+  mp-summary-field-surface-and-field-origin-scope.
 - **Task tracker (reconciled 2026-06-22 vs merged `main`):** #1–#19, #21, #23, #24, #32, #33 completed
-  (#9/#10 subsumed by the orchestrator); **pending:** #20, #22 (role-prompt half merged), #25–#31,
-  #34 (fast-track-only — nodes still pass-throughs), #35, #36; **+ new fast-track-learning tasks**
-  #37 (spec expressiveness), #38 (server-side pushdown), #39 (schema-derived vocab), #40 (RAG→synthesis;
-  deps #38/#39←#37, #40←#35+#20).
+  (#9/#10 subsumed by the orchestrator); **#37 spec expressiveness** = area A (#51) + area D (#55)
+  DONE, area B (element-class) + area C (ranking) still open. **Pending:** #20, #22 (role-prompt half
+  merged), #25–#31, #34 (fast-track-only — nodes still pass-throughs), #35, #36; **fast-track-learning
+  tasks** #38 (server-side pushdown), #39 (schema-derived vocab **+ FIELD_UNITS/_FIELD_ORIGIN lockstep**),
+  #40 (RAG→synthesis; deps #38/#39←#37, #40←#35+#20).
