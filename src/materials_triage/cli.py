@@ -26,6 +26,7 @@ def triage(
     adapter,
     provider,
     synthesis_provider,
+    rag=None,
     runs_dir=None,
     thread_id="cli",
 ):
@@ -38,7 +39,7 @@ def triage(
     can never disagree. Raises :class:`InputRefused` if the goal is refused.
     """
     orchestrator = build_orchestrator(
-        adapter=adapter, provider=provider, synthesis_provider=synthesis_provider
+        adapter=adapter, provider=provider, synthesis_provider=synthesis_provider, rag=rag
     )
     config = {"configurable": {"thread_id": thread_id}}
     state = orchestrator.invoke({"goal": goal, "run_id": thread_id}, config)
@@ -91,6 +92,7 @@ def main(argv=None) -> int:
 
     # Lazy: importing these builds nothing that needs credentials until invoked.
     from materials_triage.agent.llm import HypothesisProvider, SynthesisProvider
+    from materials_triage.retrieval.rag import LiteratureRAG, OpenAlexFetcher
     from materials_triage.sources.materials_project import MaterialsProjectAdapter
 
     try:
@@ -99,6 +101,7 @@ def main(argv=None) -> int:
             adapter=MaterialsProjectAdapter(),
             provider=HypothesisProvider(),
             synthesis_provider=SynthesisProvider(),
+            rag=LiteratureRAG(OpenAlexFetcher()),
             view=args.view,
             runs_dir=args.runs_dir,
         )

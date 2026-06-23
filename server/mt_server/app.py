@@ -72,12 +72,14 @@ def build_seams():
     ``cli.main()`` does. Imports are lazy so merely importing this module — or
     serving ``GET /`` — never needs credentials or the heavy ``llm`` extra."""
     from materials_triage.agent.llm import HypothesisProvider, SynthesisProvider
+    from materials_triage.retrieval.rag import LiteratureRAG, OpenAlexFetcher
     from materials_triage.sources.materials_project import MaterialsProjectAdapter
 
     return {
         "adapter": MaterialsProjectAdapter(),
         "provider": HypothesisProvider(),
         "synthesis_provider": SynthesisProvider(),
+        "rag": LiteratureRAG(OpenAlexFetcher()),
     }
 
 
