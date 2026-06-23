@@ -104,6 +104,68 @@ docker run --rm --env-file .env -v "$PWD/runs:/data/runs" \
 > Running without Docker? Install the package (`pip install -e ".[llm]"`) and use
 > the `materials-triage` command directly — e.g. `materials-triage doctor`.
 
+## Using the CLI
+
+The `materials-triage` command has three modes:
+
+```bash
+materials-triage doctor                       # environment self-check (✓/✗ checklist)
+materials-triage "<goal>" [--view pi|audit]   # one-shot: run a single goal, print the result
+materials-triage chat   [--view pi|audit]     # interactive REPL session (below)
+```
+
+Common flags on the one-shot and `chat` modes:
+
+- `--view pi` (default) — concise PI summary; `--view audit` — full technical trace.
+- `--top-k N` — size of the presented/citable shortlist (the full ranking is still saved).
+- `--runs-dir DIR` *(one-shot only)* — persist the run as `DIR/<run_id>.json` for later replay.
+
+### Interactive session (`chat`)
+
+`materials-triage chat` starts a read-eval loop: type a research goal, watch each
+workflow step stream by, then approve/edit/regenerate the spec before retrieval runs.
+
+```text
+$ materials-triage chat
+materials-triage — interactive session
+Type a research goal to triage; 'exit' or Ctrl-D to quit.
+
+triage> find stable oxide dielectrics with a wide band gap for thin films
+  ✓ gate
+  ✓ hypothesis → 4 proposals
+Ranking weights were rescaled to sum to 1. Confirm the recommended spec …
+{ … recommended TriageSpec as JSON … }
+[a]pprove / [e]dit / [r]egenerate / [q]uit: a
+  ✓ spec_build → spec confirmed
+  ✓ retrieve → 1964 candidates retrieved
+  ✓ filter → 1585 survivors, 379 excluded
+  ✓ rank → 37 ranked, 1927 excluded
+  ✓ synthesis → narrative grounded
+  ✓ output_validate
+  ✓ render
+Goal: find stable oxide dielectrics …
+
+Ranked shortlist:
+  1. …
+Show full audit trace? [y/N]: n
+triage>
+```
+
+At the spec gate:
+
+- **`a` approve** — run the workflow to completion with the shown spec.
+- **`e` edit** — open the spec as JSON in `$EDITOR`; on save it's re-validated (a bad
+  edit is reported and the previous spec kept), then you're back at the menu.
+- **`r` regenerate** — re-run the hypothesis step for a fresh proposal, then return to the gate.
+- **`q` quit** — abandon this goal and return to the prompt.
+
+After each result you can render the full `audit` trace on request (or start the session
+with `--view audit`). An out-of-scope goal is refused with a capabilities note and the
+session keeps running; `exit`, `quit`, or Ctrl-D ends it.
+
+> With Docker, add `-it` so the session is interactive:
+> `docker compose run --rm -it triage chat`.
+
 ## Agent-coding setup
 
 This repo was built with Claude Code, and the `.claude/` directory is configured to showcase that workflow — custom slash commands, skills, a status line, and permission settings.

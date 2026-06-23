@@ -106,17 +106,68 @@ def _load_env() -> None:
     load_dotenv()
 
 
+def _parse_chat_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="materials-triage chat",
+        description="Start an interactive triage session: enter goals, watch the "
+        "workflow steps stream, and approve/edit/regenerate the spec at the gate.",
+    )
+    parser.add_argument(
+        "--view",
+        choices=["pi", "audit"],
+        default="pi",
+        help="default render view per result (pi = concise; audit = full trace)",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=DEFAULT_TOP_K,
+        help=f"size of the presented/citable shortlist (default {DEFAULT_TOP_K})",
+    )
+    return parser.parse_args(argv)
+
+
+def _run_chat_session(argv: list[str]) -> int:
+    """Wire the real Bedrock / Materials Project / OpenAlex seams into one compiled
+    orchestrator and hand it to the interactive REPL. Returns a process exit code."""
+    args = _parse_chat_args(argv)
+    _load_env()
+    # Concrete seams imported lazily, as in ``main`` — importing this module stays
+    # free of langchain/requests.
+    from materials_triage.agent.llm import HypothesisProvider as BedrockHypothesisProvider
+    from materials_triage.agent.llm import RankingCritic as BedrockRankingCritic
+    from materials_triage.agent.llm import SynthesisProvider as BedrockSynthesisProvider
+    from materials_triage.chat import run_chat
+    from materials_triage.retrieval.rag import LiteratureRAG, OpenAlexFetcher
+    from materials_triage.sources.materials_project import MaterialsProjectAdapter
+
+    orchestrator = build_orchestrator(
+        adapter=MaterialsProjectAdapter(),
+        provider=BedrockHypothesisProvider(),
+        synthesis_provider=BedrockSynthesisProvider(),
+        rag=LiteratureRAG(OpenAlexFetcher()),
+        critic=BedrockRankingCritic(),
+        top_k=args.top_k,
+    )
+    run_chat(orchestrator, view=args.view, top_k=args.top_k)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. ``materials-triage doctor`` runs the environment self-check
-    (and returns its exit code); otherwise the argument is a triage goal — wire the
-    real Bedrock / Materials Project / OpenAlex seams, run the triage, and print the
-    requested view to stdout. Returns a process exit code."""
+    and ``materials-triage chat`` starts the interactive REPL (each returns its own
+    exit code); otherwise the argument is a triage goal — wire the real Bedrock /
+    Materials Project / OpenAlex seams, run the triage, and print the requested view
+    to stdout. Returns a process exit code."""
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "doctor":
         from materials_triage.doctor import run_doctor
 
         _load_env()
         return run_doctor(os.environ)
+
+    if argv and argv[0] == "chat":
+        return _run_chat_session(argv[1:])
 
     args = _parse_args(argv)
     _load_env()
