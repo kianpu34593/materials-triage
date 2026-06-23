@@ -466,6 +466,25 @@ def test_retrieve_pushes_a_boolean_constraint_in_the_vocabulary():
     assert captured["params"]["is_stable"] == "true"
 
 
+def test_retrieve_does_not_push_a_boolean_constraint_outside_the_vocabulary():
+    """A BooleanConstraint on a field the adapter does not publish must not be sent
+    as a query param — MP would silently ignore an unknown name, so pushing it would
+    falsely imply server-side scoping. The deterministic filter still enforces it."""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(
+        boolean_constraints=(BooleanConstraint(property_name="is_superconductor", required=True),),
+    )
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    assert "is_superconductor" not in captured["params"]
+
+
 def test_retrieve_sends_the_api_key_header():
     """The summary API authenticates by an X-API-KEY header; retrieve sends the
     configured key so the live request is authorized."""
