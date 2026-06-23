@@ -10,11 +10,15 @@ import pytest
 from materials_triage.core.hypothesis import ConstraintProposal, Hypothesis
 from materials_triage.core.run_trace import Step, TriageRun
 from materials_triage.core.schema import (
+    BooleanConstraint,
     Candidate,
     Constraint,
+    CountConstraint,
+    ElementPredicate,
     ExcludedCandidate,
     PropertyValue,
     Provenance,
+    RankingTarget,
     ScoredCandidate,
     TriageResult,
     TriageSpec,
@@ -140,6 +144,98 @@ def test_render_audit_shows_the_full_trace_with_reasons_and_citations():
     assert "ZnO has a ~3.3 eV gap." in out and "mp-1" in out
     # Per-step execution trace.
     assert "retrieve" in out and "rank" in out
+
+
+def test_render_audit_spec_shows_every_hard_filter_kind_and_ranking_method():
+    """The audit view is the traceability record: a spec whose hard filters are
+    boolean / element / count (no numeric Constraint) must still be fully shown, and
+    the ranking_method that decided how scores were computed must be visible."""
+    run = TriageRun(
+        run_id="run-spec",
+        goal="nontoxic simple oxide",
+        spec=TriageSpec(
+            boolean_constraints=(BooleanConstraint(property_name="is_stable", required=True),),
+            element_predicates=(
+                ElementPredicate(quantifier="all", members=frozenset({"O"})),
+                ElementPredicate(quantifier="any", members=frozenset({"Ti", "Zn"})),
+                ElementPredicate(quantifier="none", members=frozenset({"Pb"})),
+            ),
+            count=CountConstraint(max=3),
+            ranking_method="geometric_mean",
+            ranking_targets=(
+                RankingTarget(
+                    property_name="band_gap",
+                    direction="maximize",
+                    weight=1.0,
+                    lower=1.0,
+                    target=3.0,
+                ),
+            ),
+        ),
+    )
+
+    out = render_audit(run)
+
+    assert "is_stable" in out  # boolean constraint
+    assert "all" in out and "any" in out and "none" in out  # element predicate quantifiers
+    assert "Ti" in out and "Zn" in out and "Pb" in out and "O" in out  # members
+    assert "3" in out  # count cap
+    assert "geometric_mean" in out  # ranking method
+
+
+def test_render_audit_flags_missing_data_per_candidate():
+    """A ranked survivor that was missing/imputed a property must be visibly marked in
+    the audit view, not presented identically to a candidate with complete data."""
+    run = TriageRun(
+        run_id="run-flag",
+        goal="wide-gap oxide",
+        result=TriageResult(
+            ranked=(
+                ScoredCandidate(
+                    candidate=_candidate("mp-1", "ZnO", 3.3),
+                    score=0.9,
+                    flagged_missing=frozenset({"formation_energy"}),
+                ),
+            )
+        ),
+    )
+
+    out = render_audit(run)
+
+    assert "formation_energy" in out
+    assert "missing" in out.lower()
+
+
+def test_render_pi_notes_a_candidate_with_flagged_missing_data():
+    """The PI view at minimum notes that a ranked candidate has flagged-missing data,
+    keeping the honesty signal from being dropped at the presentation boundary."""
+    run = TriageRun(
+        run_id="run-flag-pi",
+        goal="wide-gap oxide",
+        result=TriageResult(
+            ranked=(
+                ScoredCandidate(
+                    candidate=_candidate("mp-1", "ZnO", 3.3),
+                    score=0.9,
+                    flagged_missing=frozenset({"formation_energy"}),
+                ),
+            )
+        ),
+    )
+
+    out = render_pi(run)
+
+    assert "missing" in out.lower()
+
+
+def test_render_audit_states_plainly_when_no_candidates_matched():
+    """An empty ranked section must read as an explicit 'nothing matched', mirroring the
+    PI view, never a blank section a reader could mistake for an unfinished run."""
+    run = TriageRun(run_id="run-empty", goal="impossible spec", result=TriageResult())
+
+    out = render_audit(run)
+
+    assert "no candidates" in out.lower()
 
 
 def test_render_run_dispatches_on_view():

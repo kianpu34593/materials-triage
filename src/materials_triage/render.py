@@ -34,7 +34,10 @@ def render_pi(run: TriageRun) -> str:
         lines.append("  (no candidates matched the spec)")
     for position, scored in enumerate(ranked, start=1):
         cand = scored.candidate
-        lines.append(f"  {position}. {cand.formula} ({cand.identifier}) — score {scored.score:.2f}")
+        line = f"  {position}. {cand.formula} ({cand.identifier}) — score {scored.score:.2f}"
+        if scored.flagged_missing:
+            line += f" ⚠ missing data: {', '.join(sorted(scored.flagged_missing))}"
+        lines.append(line)
     if run.caveats:
         lines += ["", "Caveats:"]
         lines += [f"  ⚠ {caveat}" for caveat in run.caveats]
@@ -56,10 +59,23 @@ def render_audit(run: TriageRun) -> str:
             if constraint.max is not None:
                 bounds.append(f"max={constraint.max}")
             lines.append(f"  - {constraint.property_name} ({', '.join(bounds)})")
+        for boolean in run.spec.boolean_constraints:
+            lines.append(f"  - {boolean.property_name} required={boolean.required}")
+        for predicate in run.spec.element_predicates:
+            members = ", ".join(sorted(predicate.members))
+            lines.append(f"  - elements {predicate.quantifier} of: {members}")
+        if run.spec.count is not None:
+            bounds = []
+            if run.spec.count.min is not None:
+                bounds.append(f"min={run.spec.count.min}")
+            if run.spec.count.max is not None:
+                bounds.append(f"max={run.spec.count.max}")
+            lines.append(f"  - distinct element count ({', '.join(bounds)})")
         for target in run.spec.ranking_targets:
             lines.append(
                 f"  - rank {target.property_name} {target.direction} (weight {target.weight})"
             )
+        lines.append(f"  ranking method: {run.spec.ranking_method}")
         lines.append("")
 
     if run.hypothesis is not None:
@@ -72,11 +88,16 @@ def render_audit(run: TriageRun) -> str:
 
     ranked = run.result.ranked if run.result is not None else ()
     lines.append("Ranked candidates:")
+    if not ranked:
+        lines.append("  (no candidates matched the spec)")
     for position, scored in enumerate(ranked, start=1):
         cand = scored.candidate
         lines.append(f"  {position}. {cand.formula} ({cand.identifier}) — score {scored.score:.3f}")
         for name, prop in cand.properties.items():
             lines.append(f"       {name} = {prop.value} {prop.unit or ''}".rstrip())
+        if scored.flagged_missing:
+            missing = ", ".join(sorted(scored.flagged_missing))
+            lines.append(f"       ⚠ missing/imputed: {missing}")
 
     excluded = run.result.excluded if run.result is not None else ()
     if excluded:
