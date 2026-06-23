@@ -21,8 +21,10 @@ from materials_triage.core.schema import (
     Provenance,
     RankingTarget,
     RetrievalResult,
+    ScoredCandidate,
     TriageResult,
 )
+from materials_triage.core.synthesis import GroundedClaim, Synthesis
 from materials_triage.sources.base import SourceAdapter
 
 
@@ -134,6 +136,65 @@ def test_main_parses_args_and_prints_the_requested_view(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert seen["goal"] == "wide-gap oxide"
     assert "Run: r1" in out  # the audit view was rendered to stdout
+
+
+class _RecordingSynthesisProvider:
+    def __init__(self, synthesis):
+        self._synthesis = synthesis
+        self.prompts = []
+
+    def synthesize(self, prompt):
+        self.prompts.append(prompt)
+        return self._synthesis
+
+
+def test_triage_caps_the_synthesis_citable_list_to_top_k():
+    """triage forwards top_k to the synthesis step, so even when many candidates
+    survive, the LLM is handed only the top_k as citable (the hallucination fix)."""
+    rec = _RecordingSynthesisProvider(
+        Synthesis(summary="s", claims=(GroundedClaim(text="t", record_id="mp-0"),))
+    )
+    adapter = _FakeAdapter([_candidate(f"mp-{i}", 3.0) for i in range(6)])
+    provider = _StubProvider(_compilable_hypothesis())
+
+    triage(
+        "wide-gap oxide",
+        adapter=adapter,
+        provider=provider,
+        synthesis_provider=rec,
+        top_k=3,
+        thread_id="t-topk",
+    )
+
+    assert rec.prompts[0].count("score=") == 3  # only top 3 offered as citable
+
+
+def test_main_forwards_top_k_to_triage_and_render(monkeypatch, capsys):
+    """--top-k controls BOTH the synthesis citable cap (via triage) and the displayed
+    shortlist (via render): the flag value reaches triage and the view is capped."""
+    big = TriageRun(
+        run_id="r",
+        goal="g",
+        result=TriageResult(
+            ranked=tuple(
+                ScoredCandidate(candidate=_candidate(f"mp-{i:02d}", 3.0), score=1.0 - i / 100)
+                for i in range(25)
+            )
+        ),
+    )
+    seen = {}
+
+    def fake_triage(goal, **kwargs):
+        seen["top_k"] = kwargs.get("top_k")
+        return big
+
+    monkeypatch.setattr("materials_triage.cli.triage", fake_triage)
+
+    main(["g", "--top-k", "5"])
+
+    out = capsys.readouterr().out
+    assert seen["top_k"] == 5  # forwarded to triage (synthesis cap)
+    assert "5 of 25" in out  # forwarded to render (display cap)
 
 
 def test_main_defaults_to_the_pi_view(monkeypatch, capsys):

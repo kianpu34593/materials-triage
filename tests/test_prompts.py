@@ -140,6 +140,23 @@ def test_build_synthesis_prompt_forbids_inventing_ids():
     assert "omit" in prompt  # drop anything you cannot ground
 
 
+def test_build_synthesis_prompt_caps_the_citable_shortlist_to_top_k():
+    """A huge citable list drives the synthesis LLM to hallucinate (and is unreadable).
+    The prompt lists only the top_k ranked materials as citable and discloses the cap
+    ('top K of M'), so the model focuses on the best few and the total is still honest."""
+    ranked = tuple(
+        ScoredCandidate(candidate=_candidate(f"mp-{i:02d}", "ZnO"), score=1.0 - i / 100)
+        for i in range(25)
+    )
+    result = TriageResult(ranked=ranked)
+
+    prompt = build_synthesis_prompt("g", result, [], nonce="n", top_k=5)
+
+    assert prompt.count("score=") == 5  # only 5 materials listed as citable
+    assert "mp-04" in prompt and "mp-05" not in prompt  # the top 5, not the 6th
+    assert "5 of 25" in prompt  # the cap is disclosed with the true total
+
+
 def test_build_synthesis_prompt_fences_untrusted_goal_and_literature():
     """The user goal and document snippets are untrusted DATA: they are wrapped in
     the trust-boundary tags (with the call's nonce) so the LLM treats them as content,

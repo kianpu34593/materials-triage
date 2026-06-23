@@ -238,6 +238,32 @@ def test_render_audit_states_plainly_when_no_candidates_matched():
     assert "no candidates" in out.lower()
 
 
+def _big_run(n: int) -> TriageRun:
+    ranked = tuple(
+        ScoredCandidate(candidate=_candidate(f"mp-{i:02d}", "ZnO", 3.0), score=1.0 - i / 100)
+        for i in range(n)
+    )
+    return TriageRun(run_id="big", goal="g", result=TriageResult(ranked=ranked))
+
+
+def test_render_pi_caps_the_shortlist_and_discloses_the_total():
+    """The PI view shows only the top_k materials and discloses how many were ranked in
+    total — a 2900-row 'shortlist' is unreadable and not a shortlist."""
+    out = render_pi(_big_run(25), top_k=5)
+
+    assert "mp-04" in out and "mp-05" not in out  # only the top 5
+    assert "5 of 25" in out  # the cap and true total are disclosed
+
+
+def test_render_audit_caps_the_shortlist_and_discloses_the_total():
+    """The audit view also caps the ranked list to top_k with the total disclosed — full
+    traceability lives in the spec/exclusions/caveats, not in dumping thousands of ties."""
+    out = render_audit(_big_run(25), top_k=5)
+
+    assert "mp-04" in out and "mp-05" not in out
+    assert "5 of 25" in out
+
+
 def test_render_run_dispatches_on_view():
     """The CLI calls one entry point with a view name; it dispatches to the matching
     renderer and rejects an unknown view rather than silently picking one."""

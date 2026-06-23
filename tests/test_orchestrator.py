@@ -648,6 +648,27 @@ def test_synthesis_node_lands_a_grounded_synthesis_in_state():
     assert syn_provider.prompts  # the node called the synthesis provider
 
 
+def test_synthesis_node_caps_the_citable_shortlist_to_top_k():
+    """build_orchestrator's top_k flows into the synthesis prompt, so even when many
+    candidates survive, the LLM is only handed the top_k as citable — the live fix for
+    the huge-citable-set hallucination."""
+    synthesis = Synthesis(
+        summary="ZnO leads.",
+        claims=(GroundedClaim(text="ZnO ~3 eV.", record_id="mp-0"),),
+    )
+    syn_provider = _StubSynthesisProvider(synthesis)
+    adapter = _FakeAdapter([_candidate(f"mp-{i}", 3.0) for i in range(6)])
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(adapter=adapter, synthesis_provider=syn_provider, top_k=3)
+    config = {"configurable": {"thread_id": "synth-topk"}}
+    orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    # 6 survived, but only 3 were listed as citable in the prompt the LLM received.
+    assert syn_provider.prompts[0].count("score=") == 3
+    assert "3 of 6" in syn_provider.prompts[0]
+
+
 class _FlakySynthesisProvider:
     """Raises a pydantic ValidationError (malformed Synthesis) for the first
     ``fail_times`` calls, then returns a grounded Synthesis. Records every prompt."""
