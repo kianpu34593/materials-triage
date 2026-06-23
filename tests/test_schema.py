@@ -285,6 +285,53 @@ def test_ranking_target_defaults_on_missing_to_impute_medium():
     assert target.on_missing == "impute_medium"
 
 
+def test_ranking_target_carries_a_target_window_and_curvature():
+    """A 'target' direction scores a moderate sweet spot, not an extreme: it
+    carries the window anchors (lower/target/upper, where desirability peaks at
+    target and falls to zero at the bounds) and a curvature that bends the
+    desirability curve between them."""
+    target = RankingTarget(
+        property_name="band_gap",
+        direction="target",
+        weight=0.5,
+        lower=2.0,
+        target=5.0,
+        upper=8.0,
+        curvature=2.0,
+    )
+
+    assert target.direction == "target"
+    assert target.lower == 2.0
+    assert target.target == 5.0
+    assert target.upper == 8.0
+    assert target.curvature == 2.0
+
+
+def test_ranking_target_direction_requires_a_target_value():
+    """A 'target' direction scores distance from a sweet spot, and there is no
+    sensible way to infer that sweet spot from the candidate pool's extremes, so
+    the target value is mandatory for this direction."""
+    with pytest.raises(ValidationError):
+        RankingTarget(
+            property_name="band_gap", direction="target", weight=0.5, lower=2.0, upper=8.0
+        )
+
+
+def test_ranking_target_rejects_anchors_out_of_order():
+    """The window anchors must ascend — desirability rises from ``lower`` to the
+    ``target`` peak and falls to ``upper`` — so a target below its lower bound is
+    an incoherent window."""
+    with pytest.raises(ValidationError):
+        RankingTarget(
+            property_name="band_gap",
+            direction="target",
+            weight=0.5,
+            lower=6.0,
+            target=5.0,
+            upper=8.0,
+        )
+
+
 def test_element_predicate_carries_its_quantifier_and_members():
     """An ElementPredicate is one quantified composition filter: a quantifier over
     a set of element symbols. 'any' means HAS-ANY — at least one member present —
@@ -371,6 +418,26 @@ def test_triagespec_assembles_a_fully_populated_request():
         ElementPredicate(quantifier="none", members=frozenset({"Pb"})),
     )
     assert spec.count == CountConstraint(max=4)
+
+
+def test_triagespec_defaults_ranking_method_to_arithmetic_mean():
+    """The ranking method is part of the recorded spec so a run is replayable;
+    absent a choice it is the established weighted arithmetic mean so existing
+    behavior is unchanged."""
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=1.0),))
+
+    assert spec.ranking_method == "arithmetic_mean"
+
+
+def test_triagespec_accepts_geometric_mean_ranking_method():
+    """A run may opt into the non-compensatory geometric-mean (desirability)
+    ranker by recording it on the spec."""
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        ranking_method="geometric_mean",
+    )
+
+    assert spec.ranking_method == "geometric_mean"
 
 
 def test_triagespec_allows_same_property_as_constraint_and_ranking_target():

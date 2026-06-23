@@ -177,8 +177,19 @@ class CountConstraint(BaseModel):
 
 
 class RankingTarget(BaseModel):
-    """A soft scoring preference on one property: the ranker normalises the
-    property in the given direction and weights it in the weighted average.
+    """A soft scoring preference on one property: the ranker maps the property to
+    a desirability in [0, 1] in the given direction and weights it in the
+    weighted geometric mean.
+
+    ``direction`` is the shape of that desirability curve: ``maximize`` /
+    ``minimize`` are monotonic (bigger / smaller is always better), while
+    ``target`` is the non-monotonic "moderate is best" case — desirability peaks
+    at ``target`` and falls to zero away from it. The window anchors
+    (``lower`` / ``target`` / ``upper``) are absolute and optional; an omitted
+    outer bound falls back to the candidate pool's extreme, but ``target`` itself
+    has no sensible pool fallback so a ``target``-direction needs it explicitly.
+    ``curvature`` (an exponent ``> 0``) bends the curve between the anchors:
+    ``1`` linear, ``> 1`` strict (credit only near the ideal), ``< 1`` lenient.
 
     ``weight`` is a proportional share in ``(0, 1]``; across the targets of a
     single ``TriageSpec`` the weights must sum to 1.
@@ -187,15 +198,38 @@ class RankingTarget(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     property_name: str = Field(min_length=1)
-    direction: Literal["maximize", "minimize"]
+    direction: Literal["maximize", "minimize", "target"]
     weight: float = Field(gt=0, le=1)
     on_missing: Literal["exclude", "impute_medium"] = "impute_medium"
+    lower: float | None = None
+    target: float | None = None
+    upper: float | None = None
+    curvature: float = Field(default=1.0, gt=0)
+
+    @model_validator(mode="after")
+    def _target_direction_needs_a_sweet_spot(self) -> Self:
+        if self.direction == "target" and self.target is None:
+            raise ValueError("a 'target' direction must set the target value it scores toward")
+        # Desirability rises from lower to the target peak and falls to upper, so
+        # whichever anchors are supplied must ascend in that order.
+        anchors = (("lower", self.lower), ("target", self.target), ("upper", self.upper))
+        present = [(name, v) for name, v in anchors if v is not None]
+        for (lo_name, lo), (hi_name, hi) in zip(present, present[1:], strict=False):
+            if lo > hi:
+                raise ValueError(
+                    f"window anchors must ascend, but {lo_name}={lo} exceeds {hi_name}={hi}"
+                )
+        return self
 
 
 class TriageSpec(BaseModel):
     """The fully-resolved request the deterministic pipeline consumes:
-    the hard filters it gates on, the soft targets it ranks by, and the
-    composition rules that scope retrieval.
+    the hard filters it gates on, the soft targets it ranks by, the
+    composition rules that scope retrieval, and the ranking method that
+    combines the soft targets (``arithmetic_mean`` — the compensatory weighted
+    average, the default — or ``geometric_mean`` — the non-compensatory
+    geometric mean of desirability curves). The method is on the spec so a run
+    records and replays it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -205,6 +239,7 @@ class TriageSpec(BaseModel):
     ranking_targets: tuple[RankingTarget, ...] = ()
     element_predicates: tuple[ElementPredicate, ...] = ()
     count: CountConstraint | None = None
+    ranking_method: Literal["arithmetic_mean", "geometric_mean"] = "arithmetic_mean"
 
     @model_validator(mode="after")
     def _has_a_hard_filter(self) -> Self:
