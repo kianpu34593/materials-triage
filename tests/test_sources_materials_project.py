@@ -429,10 +429,10 @@ def test_retrieve_excludes_forbidden_elements_server_side():
 
 
 def test_retrieve_does_not_push_an_any_element_predicate():
-    """MP has no OR-membership query param, so an "any"-quantifier predicate is
-    honoured only by the deterministic filter — the adapter must not leak its
-    members into `elements`/`exclude_elements`, which would wrongly over-restrict
-    (AND) or exclude the pool server-side."""
+    """MP has no OR-membership query param, so an "any"-quantifier predicate cannot be
+    pushed — the adapter must not leak its members into `elements`/`exclude_elements`,
+    which would wrongly over-restrict (AND) or exclude the pool server-side. It is not
+    enforced locally either — that refocus is task 2c in docs/handoff.md."""
     captured: dict = {}
 
     def spy(url, params, headers):
@@ -471,7 +471,8 @@ def test_retrieve_pushes_a_boolean_constraint_in_the_vocabulary():
 def test_retrieve_does_not_push_a_retrievable_but_unqueryable_boolean():
     """`is_magnetic` is a retrievable field but NOT a /summary query param — pushing
     it returns HTTP 400. Gating on the pushable-param surface (not the retrievable
-    vocabulary) keeps it out of the query; the deterministic filter still enforces it."""
+    vocabulary) keeps it out of the query. Nothing enforces it locally either —
+    refocusing the local filter to cover such predicates is task 2c in docs/handoff.md."""
     captured: dict = {}
 
     def spy(url, params, headers):
@@ -490,7 +491,8 @@ def test_retrieve_does_not_push_a_retrievable_but_unqueryable_boolean():
 def test_retrieve_does_not_push_a_boolean_constraint_outside_the_vocabulary():
     """A BooleanConstraint on a field the adapter does not publish must not be sent
     as a query param — MP would silently ignore an unknown name, so pushing it would
-    falsely imply server-side scoping. The deterministic filter still enforces it."""
+    falsely imply server-side scoping. It is not enforced locally either — refocusing
+    the local filter to cover such predicates is task 2c in docs/handoff.md."""
     captured: dict = {}
 
     def spy(url, params, headers):
@@ -504,6 +506,27 @@ def test_retrieve_does_not_push_a_boolean_constraint_outside_the_vocabulary():
     MaterialsProjectAdapter(http_get=spy).retrieve(spec)
 
     assert "is_superconductor" not in captured["params"]
+
+
+def test_retrieve_does_not_push_a_boolean_named_for_a_control_param():
+    """`deprecated` is a real /summary query param (in PUSHABLE_PARAMS) but NOT a
+    retrievable boolean property (absent from FIELD_UNITS). A BooleanConstraint that
+    names it — property names pass through from LLM proposals verbatim — must not
+    collide with the control param; the double-gate on FIELD_UNITS keeps it off the
+    wire so `deprecated=true` is never emitted."""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(
+        boolean_constraints=(BooleanConstraint(property_name="deprecated", required=True),),
+    )
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    assert "deprecated" not in captured["params"]
 
 
 def test_retrieve_pushes_a_count_constraint_as_nelements_bounds():

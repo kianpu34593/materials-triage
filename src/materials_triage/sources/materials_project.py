@@ -92,7 +92,9 @@ _FILTER_PARAM_BASE = {"bulk_modulus": "k_vrh", "shear_modulus": "g_vrh"}
 def _query_params(spec: TriageSpec) -> dict[str, str]:
     """Derive the API query from the spec: request exactly the columns the filter
     and ranker will read (the union of constrained and ranked property names) plus
-    the identity fields. Hard filtering itself stays the job of apply_hard_filters.
+    the identity fields, and push every hard filter MP can express server-side
+    (numeric bounds, booleans, exclude_elements/elements, nelements range), each
+    gated on PUSHABLE_PARAMS — the schema-derived set of real query-param names.
     """
     properties = {c.property_name for c in spec.constraints}
     properties |= {t.property_name for t in spec.ranking_targets}
@@ -102,10 +104,12 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
     # Push every hard filter MP can express, each gated on PUSHABLE_PARAMS — the
     # schema-derived set of real /summary query-param names. Server-side is the single
     # authority for what it pushes (the live contract suite verifies MP honours each
-    # name); a predicate whose param isn't in the set is never sent — it stays a purely
-    # local filter, never a silently-ignored or 400-ing query param. apply_hard_filters
-    # owns what can't be pushed (element "any" has no MP OR-param; is_magnetic and the
-    # like aren't query params at all).
+    # name); a predicate whose param isn't in the set is never sent, so it never 400s
+    # the query. Such a predicate (element "any" has no MP OR-param; is_magnetic and
+    # the like aren't query params at all) is currently enforced NOWHERE —
+    # apply_hard_filters only handles numeric spec.constraints, and these are read only
+    # here. Refocusing the local filter to enforce the DB-inexpressible predicates is
+    # task 2c in docs/handoff.md; before this work "any" was already enforced nowhere.
     #
     # Composition: "all" → AND-membership `elements`, "none" → `exclude_elements`.
     must_have = sorted(
@@ -125,9 +129,13 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
             params[f"{base}_min"] = str(c.min)
         if c.max is not None and f"{base}_max" in PUSHABLE_PARAMS:
             params[f"{base}_max"] = str(c.max)
-    # Booleans → same-named exact-match param.
+    # Booleans → same-named exact-match param. Double-gate on PUSHABLE_PARAMS *and*
+    # FIELD_UNITS: BooleanConstraint.property_name is unrestricted (LLM proposals pass
+    # through verbatim), so requiring it also be a real retrievable property field stops
+    # a constraint named e.g. "deprecated"/"formula"/"_all_fields" — query params that
+    # aren't boolean properties — from colliding with a non-boolean param.
     for b in spec.boolean_constraints:
-        if b.property_name in PUSHABLE_PARAMS:
+        if b.property_name in PUSHABLE_PARAMS and b.property_name in FIELD_UNITS:
             params[b.property_name] = "true" if b.required else "false"
     # Element-count cap → inclusive nelements range.
     if spec.count is not None:
