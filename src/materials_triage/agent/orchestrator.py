@@ -325,15 +325,18 @@ def _spec_build_node(state: OrchestratorState) -> dict:
 
     try:
         recommended = compile_spec(hypothesis.proposals)
+        # Fidelity gate: deterministically seed any hard facet the goal states
+        # plainly but the LLM dropped ("oxide" -> require O, "non-toxic" ->
+        # exclude toxic, "simple" -> count cap). The human still approves the
+        # seeded spec at the gate. reconcile_spec re-validates the seeded spec,
+        # so a seeded coherence violation surfaces as the same ValidationError
+        # class as compile_spec — caught here for an attributable error.
+        recommended, findings = reconcile_spec(state["goal"], recommended)
     except ValidationError as exc:
         raise SpecCompilationError(
             "the hypothesis proposals did not compile to a coherent TriageSpec"
         ) from exc
 
-    # Fidelity gate: deterministically seed any hard facet the goal states plainly
-    # but the LLM dropped ("oxide" -> require O, "non-toxic" -> exclude toxic,
-    # "simple" -> count cap). The human still approves the seeded spec at the gate.
-    recommended, findings = reconcile_spec(state["goal"], recommended)
     spec_caveats = tuple(f.caveat for f in findings if f.caveat)
 
     proposed_weights = [

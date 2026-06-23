@@ -25,6 +25,7 @@ from materials_triage.agent.validator import UngroundedOutputError
 from materials_triage.core.hypothesis import (
     Citation,
     ConstraintProposal,
+    ElementPredicateProposal,
     Hypothesis,
     RankingProposal,
 )
@@ -33,6 +34,7 @@ from materials_triage.core.schema import (
     BooleanConstraint,
     Candidate,
     Constraint,
+    ElementPredicate,
     ExcludedCandidate,
     PredicateRouting,
     PropertyValue,
@@ -1114,6 +1116,42 @@ def test_spec_build_wraps_an_incoherent_compile_spec_error():
 
     with pytest.raises(SpecCompilationError) as excinfo:
         orchestrator.invoke({"goal": "wide-gap oxide", "hypothesis": incoherent}, config)
+
+    assert isinstance(excinfo.value.__cause__, ValidationError)
+
+
+def test_spec_build_wraps_a_reconcile_coherence_violation():
+    """A compilable hypothesis can still become incoherent AFTER the fidelity gate
+    seeds a hard facet: 'non-toxic' plus an explicit any:{Pb,Hg} makes that 'any'
+    predicate fully covered by the seeded toxic exclusion. reconcile_spec re-validates
+    through TriageSpec, so the seeded ValidationError must surface as an attributable
+    SpecCompilationError (the same class as a compile_spec failure), not a raw pydantic
+    dump that crashes the run."""
+    hypothesis = Hypothesis(
+        proposals=(
+            ConstraintProposal(
+                constraint=Constraint(property_name="band_gap", min=1.0),
+                rationale="a real constraint so the spec compiles",
+                confidence=0.8,
+            ),
+            ElementPredicateProposal(
+                element_predicate=ElementPredicate(
+                    quantifier="any", members=frozenset({"Pb", "Hg"})
+                ),
+                rationale="must contain a heavy metal",
+                confidence=0.8,
+            ),
+        ),
+        mechanism="m",
+    )
+    orchestrator = build_orchestrator()  # no provider → hypothesis node passes the seed through
+    config = {"configurable": {"thread_id": "reconcile-incoherent"}}
+
+    with pytest.raises(SpecCompilationError) as excinfo:
+        orchestrator.invoke(
+            {"goal": "a non-toxic material containing Pb or Hg", "hypothesis": hypothesis},
+            config,
+        )
 
     assert isinstance(excinfo.value.__cause__, ValidationError)
 
