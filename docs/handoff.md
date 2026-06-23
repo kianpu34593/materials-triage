@@ -170,6 +170,48 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
 - **no-mistakes:** bootstrap from the **main repo** (not a worktree); `git push no-mistakes <branch>` → `axi
   abort` → `axi run --intent`; verify locally with `PYTHONPATH="$PWD/src" pytest`. [memory: no-mistakes-run-bootstrap]
 
+## Design direction (v2+): XC-functional-FIRST retrieval, not canonical-value acceptance
+*Raised by Kian 2026-06-23 while tracing #38's per-property functional handling. Important; likely **not v1**.*
+
+**The problem.** DFT property values vary *a lot* by XC functional, and they are not cross-comparable.
+Today the MP adapter accepts MP's **canonical** summary value per property and merely *tags* its
+functional on provenance (`xc_functional`) — it never chooses the functional or guards comparability. So a
+`band_gap` ranking can silently mix a GGA value (material A) with an r2SCAN value (material B), which is
+physically wrong. **We should not blindly accept the canonical value.** A scientist who knows the tasks
+fixes the functional *first*, then fetches the value.
+
+**Domain rule (which functional, and why).** The right functional is largely determined by the
+property/material class *before* retrieval:
+- **GGA** — fine for many **energies** / relative stability; the broadest data coverage.
+- **GGA+U** — needed for **strongly-correlated** materials (transition-metal oxides, localized d/f electrons).
+- **r2SCAN** — **most accurate** (better gaps, energetics), but also the **sparsest** data → choosing it
+  trades accuracy for coverage. This coverage/accuracy tension is the crux of the iterate loop below.
+
+**Proposed agent behavior (v2):**
+1. **Decide the XC functional at the *hypothesis* phase** — make it an explicit, cited part of the spec
+   (a new spec field, e.g. `xc_functional` preference/requirement), reasoned from property + material class,
+   not left to MP's canonicalization.
+2. **Retrieve values computed with that functional** — query/filter by `run_type` (push it as a retrieval
+   constraint and/or filter the per-property provenance to the chosen functional) instead of accepting the
+   canonical value. The value the pipeline ranks on must be the chosen-functional value.
+3. **Iterate on coverage** — if too few materials have a value at the chosen functional (e.g. r2SCAN is
+   sparse), **fall back to a different functional on a second turn** and record the swap as a caveat. This is
+   a natural fit for the existing traced state machine + `resume`/iterate design (the run already supports
+   re-running a step) and the multi-turn hypothesis loop.
+
+**Implications / open questions for whoever picks this up:**
+- Spec schema grows an XC-functional dimension (LLM-output model → keep it strict; see
+  [memory: two-model-categories-strictness]). This is another instance of "quality ceiling = spec
+  expressiveness" [memory: spec-expressiveness-quality-ceiling].
+- Retrieval changes from "one canonical value + tag" to "value *selected by* functional." Needs the
+  per-property functional **before** ranking, and a defined precedence/fallback order (r2SCAN → GGA+U → GGA?).
+- The single-canonical assumption in `_origin_task_ids` (one task per origin group; dict last-wins on a
+  duplicate origin name) must be revisited — multiple same-property tasks at different functionals become
+  *first-class*, not collapsed by MP. The values for non-chosen functionals are in the raw `/tasks/` store,
+  not the summary — so this likely needs task-level retrieval, not just summary.
+- Supersedes the "tag only" stance of [memory: dft-xc-functional-comparability-v2] (PR #55 added the tag;
+  this is the *consumption* — choose + fetch + flag/restrict ranking by functional).
+
 ## Context for Next Session
 - **Branch:** `main` @ `9266956`, clean. Build the next increment in a worktree (run pytest with
   `PYTHONPATH="$PWD/src" pytest`). Port from `feat/fast-track-wire-guardrails`.

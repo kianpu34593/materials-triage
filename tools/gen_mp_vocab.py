@@ -149,6 +149,20 @@ def build_table(surface: dict[str, str], meta: dict[str, dict]) -> dict[str, dic
     return {name: dict(meta[name]) for name in surface}
 
 
+def parse_query_params(openapi: dict) -> set[str]:
+    """The set of query-parameter names the ``/materials/summary/`` GET endpoint
+    declares — the *pushable* surface.
+
+    This is a DISTINCT, larger surface than the retrievable ``SummaryDoc`` fields:
+    a field can be returned but not filtered on (``is_magnetic`` is retrievable yet
+    not a query param — pushing it 400s), and a field's filter param can be renamed
+    (the elastic moduli filter via ``k_vrh_min``/``g_vrh_min``, not
+    ``bulk_modulus_min``). The adapter gates what it pushes on membership in this
+    set, so a param MP would reject or silently ignore never reaches the wire."""
+    operation = openapi["paths"]["/materials/summary/"]["get"]
+    return {param["name"] for param in operation.get("parameters", [])}
+
+
 def parse_summary_fields(openapi: dict) -> dict[str, str]:
     """Map each ``SummaryDoc`` property name to its scalar type category.
 
@@ -171,16 +185,19 @@ def generate_table(openapi: dict) -> dict[str, dict]:
     return build_table(vocabulary_fields(parse_summary_fields(openapi)), _FIELD_META)
 
 
-def render_module(table: dict[str, dict], *, source: str) -> str:
-    """Render the committed ``_mp_fields.py`` source for ``table`` (sorted for a
-    stable diff). The module is the single artifact the adapter imports."""
+def render_module(table: dict[str, dict], params: set[str], *, source: str) -> str:
+    """Render the committed ``_mp_fields.py`` source (sorted for a stable diff): the
+    retrievable ``MP_FIELDS`` table plus the ``PUSHABLE_PARAMS`` filter surface. The
+    module is the single artifact the adapter imports."""
     lines = [
         '"""Materials Project field table — GENERATED, do not edit by hand.',
         "",
         f"Regenerate with: python tools/gen_mp_vocab.py  (source: {source})",
         "",
-        "Maps each retrievable SummaryDoc property to its pinned unit (None =",
+        "MP_FIELDS maps each retrievable SummaryDoc property to its pinned unit (None =",
         "dimensionless/count) and XC-functional origin (None = no traceable functional).",
+        "PUSHABLE_PARAMS is the /summary GET query-param surface — the names the adapter",
+        "is allowed to push server-side (distinct from, and larger than, MP_FIELDS).",
         '"""',
         "",
         "MP_FIELDS: dict[str, dict] = {",
@@ -190,6 +207,13 @@ def render_module(table: dict[str, dict], *, source: str) -> str:
         unit, origin = _pylit(entry["unit"]), _pylit(entry["origin"])
         lines.append(f'    "{name}": {{"unit": {unit}, "origin": {origin}}},')
     lines.append("}")
+    lines.append("")
+    lines.append("PUSHABLE_PARAMS: frozenset[str] = frozenset(")
+    lines.append("    {")
+    for name in sorted(params):
+        lines.append(f'        "{name}",')
+    lines.append("    }")
+    lines.append(")")
     return "\n".join(lines) + "\n"
 
 
@@ -203,9 +227,10 @@ def main() -> None:
     """Regenerate the committed field table from the vendored schema."""
     openapi = json.loads(_VENDORED_SCHEMA.read_text())
     table = generate_table(openapi)
+    params = parse_query_params(openapi)
     source = openapi.get("_api_version") or openapi.get("_source") or "vendored schema"
-    _OUTPUT.write_text(render_module(table, source=source))
-    print(f"wrote {_OUTPUT} ({len(table)} fields)")
+    _OUTPUT.write_text(render_module(table, params, source=source))
+    print(f"wrote {_OUTPUT} ({len(table)} fields, {len(params)} pushable params)")
 
 
 if __name__ == "__main__":
