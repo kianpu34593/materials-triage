@@ -238,3 +238,22 @@ def test_main_defaults_to_the_pi_view(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Ranked shortlist:" in out
     assert "Run: r2" not in out  # not the audit view
+
+
+def test_main_chat_dispatches_to_run_chat(monkeypatch):
+    """`materials-triage chat` builds the real seams (lazily, no creds needed at
+    construction) and hands a compiled orchestrator to run_chat with the requested
+    view. run_chat is stubbed so the dispatch is asserted without a real session."""
+    seen = {}
+
+    def fake_run_chat(orchestrator, **kwargs):
+        seen["orchestrator"] = orchestrator
+        seen["view"] = kwargs.get("view")
+
+    monkeypatch.setattr("materials_triage.chat.run_chat", fake_run_chat)
+
+    rc = main(["chat", "--view", "audit"])
+
+    assert rc == 0
+    assert seen["orchestrator"] is not None
+    assert seen["view"] == "audit"
