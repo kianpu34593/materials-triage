@@ -48,6 +48,9 @@ class TriageRun(BaseModel):
     candidates: tuple[Candidate, ...] = ()
     filter_excluded: tuple[ExcludedCandidate, ...] = ()
     rank_excluded: tuple[ExcludedCandidate, ...] = ()
+    #: Loud, run-level notices that a hard predicate went unenforced — the source
+    #: could neither push nor return data for it — so both views can surface it.
+    caveats: tuple[str, ...] = ()
     result: TriageResult | None = None
     steps: tuple[Step, ...] = ()
 
@@ -88,6 +91,7 @@ def export_run(orchestrator, config: dict) -> TriageRun:
         candidates=tuple(final.get("candidates", ())),
         filter_excluded=tuple(final.get("filter_excluded", ())),
         rank_excluded=tuple(final.get("rank_excluded", ())),
+        caveats=tuple(final.get("caveats", ())),
         result=final.get("result"),
         steps=tuple(steps),
     )

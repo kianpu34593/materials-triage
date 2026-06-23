@@ -208,6 +208,24 @@ def test_deterministic_core_runs_retrieve_filter_rank_end_to_end():
     assert drops == {"mp-drop": "below_min"}
 
 
+def test_filter_node_records_routing_caveats_in_state():
+    """Make it loud: the filter node surfaces the routing's caveats — predicates the
+    source could neither push nor enforce locally (¬R∩¬Q) — into a `caveats` channel,
+    so the run records that a constraint went unapplied instead of silently dropping
+    everything or ignoring it."""
+    routing = PredicateRouting(
+        caveats=("constraint on 'toxicity' was not applied: Materials Project provides no data",)
+    )
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)], routing=routing)
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=1.0),))
+
+    final = build_orchestrator(adapter=adapter).invoke(
+        {"goal": "nontoxic oxide", "spec": spec}, {"configurable": {"thread_id": "caveats"}}
+    )
+
+    assert any("toxicity" in c for c in final["caveats"])
+
+
 def test_filter_node_enforces_the_adapters_local_bucket():
     """The filter node enforces the source's exclusive set (predicates it couldn't
     push), not just numeric constraints: a candidate failing a routed-local boolean

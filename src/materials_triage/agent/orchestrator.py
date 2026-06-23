@@ -102,6 +102,9 @@ class OrchestratorState(TypedDict, total=False):
     # filter writes `filter_excluded`, the ranker writes `rank_excluded`.
     filter_excluded: tuple[ExcludedCandidate, ...]
     rank_excluded: tuple[ExcludedCandidate, ...]
+    # Loud, run-level notices that a hard predicate went unenforced — the source
+    # could neither push nor return data for it (¬R∩¬Q). Written by the filter node.
+    caveats: tuple[str, ...]
     result: TriageResult | None
 
 
@@ -244,6 +247,7 @@ def _make_filter_node(adapter: SourceAdapter | None):
         return {
             "survivors": tuple(survivors),
             "filter_excluded": tuple(excluded) + tuple(local_excluded),
+            "caveats": routing.caveats,
         }
 
     return filter_node

@@ -14,6 +14,7 @@ from materials_triage.core.run_trace import Step, TriageRun, export_run, write_r
 from materials_triage.core.schema import (
     Candidate,
     Constraint,
+    PredicateRouting,
     PropertyValue,
     Provenance,
     RankingTarget,
@@ -24,11 +25,15 @@ from materials_triage.sources.base import SourceAdapter
 
 
 class _FakeAdapter(SourceAdapter):
-    def __init__(self, candidates):
+    def __init__(self, candidates, routing=None):
         self._candidates = candidates
+        self._routing = routing or PredicateRouting()
 
     def retrieve(self, spec):
         return list(self._candidates)
+
+    def classify_predicates(self, spec):
+        return self._routing
 
 
 def _candidate(identifier, band_gap):
@@ -40,6 +45,24 @@ def _candidate(identifier, band_gap):
         formula="ZnO",
         properties={"band_gap": PropertyValue(value=band_gap, unit="eV", provenance=provenance)},
     )
+
+
+def test_export_run_carries_caveats_into_the_trace():
+    """The audit TriageRun carries the run's caveats, so both views can surface a hard
+    predicate that went unenforced (the source could neither push nor return data for
+    it) — the honesty signal, not a silent drop."""
+    routing = PredicateRouting(
+        caveats=("constraint on 'toxicity' was not applied: Materials Project provides no data",)
+    )
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=1.0),))
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)], routing=routing)
+    orchestrator = build_orchestrator(adapter=adapter)
+    config = {"configurable": {"thread_id": "caveat-export"}}
+    orchestrator.invoke({"goal": "nontoxic oxide", "spec": spec}, config)
+
+    run = export_run(orchestrator, config)
+
+    assert any("toxicity" in c for c in run.caveats)
 
 
 def test_export_run_builds_a_triagerun_with_final_artifacts_and_per_step_writes():
