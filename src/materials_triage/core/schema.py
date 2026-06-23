@@ -347,17 +347,49 @@ class TriageSpec(BaseModel):
                 f"required elements demand {len(must_have)} distinct "
                 f"elements but the count constraint caps it at {cap}"
             )
-        # The 'target' window is a desirability concept only the geometric_mean
-        # ranker scores; the arithmetic_mean ranker normalises via normalize(),
-        # which handles only 'maximize'/'minimize'. Reject the combination here so
-        # it fails fast at spec construction rather than crashing at the rank step.
-        if self.ranking_method != "geometric_mean":
+        # Desirability anchors and curvature are a geometric_mean-only feature, so
+        # neither ranker can silently ignore or mis-handle them. The geometric_mean
+        # ranker zeros a candidate at an acceptability floor, so it requires every
+        # target to announce its ramp bounds (no pool fallback) — then a desirability
+        # of 0 means a genuine floor failure, not merely pool-worst. The
+        # arithmetic_mean ranker normalises via normalize() (pool extremes only), so
+        # it cannot honour anchors or curvature; reject them rather than drop them.
+        if self.ranking_method == "geometric_mean":
+            for t in self.ranking_targets:
+                required = {
+                    "maximize": (("lower", t.lower), ("target", t.target)),
+                    "minimize": (("target", t.target), ("upper", t.upper)),
+                    "target": (("lower", t.lower), ("target", t.target), ("upper", t.upper)),
+                }[t.direction]
+                missing = [name for name, value in required if value is None]
+                if missing:
+                    raise ValueError(
+                        f"ranking_method='geometric_mean' requires {t.property_name!r} to "
+                        f"announce its ramp bounds, but {missing} are unset"
+                    )
+        else:
+            # A 'target' direction is itself a desirability window — name the method
+            # to fix rather than the anchors, since dropping anchors won't help it.
             targeted = [t.property_name for t in self.ranking_targets if t.direction == "target"]
             if targeted:
                 raise ValueError(
                     f"a 'target' direction (here on {targeted}) is a desirability window "
                     "only the geometric_mean ranker scores, but ranking_method is "
                     f"{self.ranking_method!r}; set ranking_method='geometric_mean'"
+                )
+            configured = [
+                t.property_name
+                for t in self.ranking_targets
+                if t.lower is not None
+                or t.target is not None
+                or t.upper is not None
+                or t.curvature != 1.0
+            ]
+            if configured:
+                raise ValueError(
+                    f"anchors and curvature configure desirability curves (here on "
+                    f"{configured}) and are only valid with ranking_method='geometric_mean', "
+                    f"but ranking_method is {self.ranking_method!r}"
                 )
         return self
 

@@ -612,6 +612,75 @@ def test_triagespec_accepts_target_direction_under_geometric_mean():
     assert spec.ranking_method == "geometric_mean"
 
 
+@pytest.mark.parametrize(
+    "direction,extra",
+    [
+        ("maximize", {"lower": 2.0, "target": 8.0}),
+        ("minimize", {"target": 2.0, "upper": 8.0}),
+        ("maximize", {"curvature": 2.0}),
+    ],
+)
+def test_triagespec_rejects_desirability_curves_under_arithmetic_mean(direction, extra):
+    """The default arithmetic_mean ranker normalises via normalize() (pool extremes
+    only), so it cannot honour anchors or curvature; configuring them is rejected at
+    construction rather than silently dropped — no silent wrong answers."""
+    with pytest.raises(ValidationError, match="geometric_mean"):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            ranking_targets=(
+                RankingTarget(property_name="band_gap", direction=direction, weight=1.0, **extra),
+            ),
+        )
+
+
+def test_triagespec_accepts_bare_target_under_arithmetic_mean():
+    """A maximize target with no anchors and default curvature is the ordinary
+    weighted-sum case and constructs cleanly under the default ranker."""
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        ranking_targets=(
+            RankingTarget(property_name="band_gap", direction="maximize", weight=1.0),
+        ),
+    )
+
+    assert spec.ranking_method == "arithmetic_mean"
+
+
+@pytest.mark.parametrize("direction", ["maximize", "minimize"])
+def test_triagespec_geometric_mean_requires_announced_ramp_bounds(direction):
+    """The geometric_mean ranker zeros a candidate at an acceptability floor, so
+    every target must announce its ramp bounds (no pool fallback); a target that
+    omits its anchors — and so would fall back to the pool — is refused, ensuring a
+    desirability of 0 always means a genuine floor failure rather than pool-worst."""
+    with pytest.raises(ValidationError, match="announce its ramp bounds"):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            ranking_targets=(
+                RankingTarget(property_name="band_gap", direction=direction, weight=1.0),
+            ),
+            ranking_method="geometric_mean",
+        )
+
+
+def test_triagespec_geometric_mean_accepts_fully_announced_targets():
+    """A geometric_mean spec whose every target announces its full ramp constructs
+    cleanly."""
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        ranking_targets=(
+            RankingTarget(
+                property_name="band_gap", direction="maximize", weight=0.5, lower=2.0, target=8.0
+            ),
+            RankingTarget(
+                property_name="density", direction="minimize", weight=0.5, target=2.0, upper=8.0
+            ),
+        ),
+        ranking_method="geometric_mean",
+    )
+
+    assert spec.ranking_method == "geometric_mean"
+
+
 def test_triagespec_allows_same_property_as_constraint_and_ranking_target():
     """A dual-role property is legitimate — gate band gap as a hard filter and
     also prefer higher band gap in ranking — so per-list dedup must not reject
