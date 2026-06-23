@@ -233,9 +233,10 @@ class RankingTarget(BaseModel):
                 f"a '{self.direction}' direction needs {lo_name} and {hi_name} announced "
                 f"together or not at all, but {present} is set without {missing}"
             )
-        if lo is not None and lo > hi:
+        if lo is not None and lo >= hi:
             raise ValueError(
-                f"window anchors must ascend, but {lo_name}={lo} exceeds {hi_name}={hi}"
+                f"window anchors must strictly ascend, but {lo_name}={lo} "
+                f"does not precede {hi_name}={hi}"
             )
 
     def _require_full_window(self) -> None:
@@ -244,9 +245,9 @@ class RankingTarget(BaseModel):
                 raise ValueError(
                     f"a 'target' direction must announce its full window, but {name} is unset"
                 )
-        if not self.lower <= self.target <= self.upper:
+        if not self.lower < self.target < self.upper:
             raise ValueError(
-                "window anchors must ascend, but "
+                "window anchors must strictly ascend, but "
                 f"lower={self.lower}, target={self.target}, upper={self.upper} do not"
             )
 
@@ -338,6 +339,18 @@ class TriageSpec(BaseModel):
                 f"required elements demand {len(must_have)} distinct "
                 f"elements but the count constraint caps it at {cap}"
             )
+        # The 'target' window is a desirability concept only the geometric_mean
+        # ranker scores; the arithmetic_mean ranker normalises via normalize(),
+        # which handles only 'maximize'/'minimize'. Reject the combination here so
+        # it fails fast at spec construction rather than crashing at the rank step.
+        if self.ranking_method != "geometric_mean":
+            targeted = [t.property_name for t in self.ranking_targets if t.direction == "target"]
+            if targeted:
+                raise ValueError(
+                    f"a 'target' direction (here on {targeted}) is a desirability window "
+                    "only the geometric_mean ranker scores, but ranking_method is "
+                    f"{self.ranking_method!r}; set ranking_method='geometric_mean'"
+                )
         return self
 
 

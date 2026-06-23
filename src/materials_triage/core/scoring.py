@@ -59,8 +59,10 @@ def desirability_curve(
     else:
         numerator, span = upper - value, upper - target
     if span == 0:
-        # The anchors collapsed (every candidate shares the value), so the curve
-        # carries no signal; return a neutral 0.5 rather than dividing by zero.
+        # Spec-supplied anchors must strictly ascend, so a zero span now only
+        # arises from pool collapse (every candidate shares the value, so the
+        # pooled min and max coincide); the curve carries no signal, so return a
+        # neutral 0.5 rather than dividing by zero.
         return 0.5
     fraction = min(1.0, max(0.0, numerator / span))
     return fraction**curvature
