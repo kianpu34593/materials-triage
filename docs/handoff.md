@@ -1,4 +1,4 @@
-# Session Handoff - 2026-06-23 10:18
+# Session Handoff - 2026-06-23 11:29
 
 > Single living handoff, git-tracked at `docs/handoff.md`. Keep it **lean** — deep per-session
 > history lives in [`docs/handoff-archive.md`](handoff-archive.md); recurring gotchas live in
@@ -102,10 +102,13 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
   pass-through; future #25–#27). Data is captured in `TriageRun.caveats`; the views read it when built.
 - **Pairs with 2b's "bounded + loud" caveat** (cap-hit) — same `caveats` channel, same honesty rationale.
 
-**2b · 🆕 Pagination in `retrieve()`** — *sibling to #38; together they = "retrieve the complete filtered candidate set." Not part of #38 (#38 is the pure `_query_params` transform; this is the I/O loop).*
-- [ ] page MP's `_skip`/`_limit` to exhaust the (filtered) result set, accumulating candidates
-- **Why it's needed, separately from #38:** today `retrieve()` fetches ONE page (`_limit=100`) and stops, so any query matching >100 materials *silently truncates* and the ranker only ever sees an arbitrary 100. #38 fixes *which* 100 (quality of the page); it does **not** fix the cap. Our composite weighted-average rank can't be pushed server-side (MP sorts by a single field), so the ranker must see the complete filtered set locally.
-- **Three things it must get right:** (1) **filter-first** — pagination depends on #38 landing, or you page an unfiltered subset (tens of thousands of rows, infeasible); #38 shrinks N to something pageable. (2) **bounded + loud** — page up to a declared ceiling and, if hit, record a caveat in the trace ("result set capped at N; ranking over a subset"); a silent bigger cap is the same bug with a bigger number. (3) **adapter-owned** — `_skip`/`_limit` are MP I/O detail, stay inside `retrieve()`; the `SourceAdapter` contract (`retrieve(spec) -> complete candidate list`) is unchanged.
+**2b · 🆕 Pagination in `retrieve()`** — ✅ **BUILT, committed on `feat/retrieve-pagination` (9ab2bd7); PR pending** (no-mistakes review step blocked on a transient `API Error: 529 Overloaded` 2026-06-23 — code is fine, just retry `no-mistakes rerun` when the API recovers). *Sibling to #38; together they = "retrieve the complete filtered candidate set." Not part of #38 (#38 is the pure `_query_params` transform; this is the I/O loop).*
+- [x] page MP's `_skip`/`_limit` to exhaust the (filtered) result set, accumulating candidates
+- **AS BUILT (TDD, vertical slices).** `_paginate(http_get, params, headers, ceiling)` loops `_skip` by `_limit`, accumulates docs, stops on a **short page** (fewer than `_limit` rows ⇒ set exhausted) or the **`_MAX_CANDIDATES=10000` ceiling**; returns `(docs, capped)`. **Page size `_DEFAULT_LIMIT` bumped 100 → 1000** (MP's schema-documented `_limit` max — "Limited to 1000" in `mp_summary_schema.json` — chosen to minimize HTTP calls / blacklist risk per Kian). Ceiling hit ⇒ a **loud caveat** ("result set capped at 10000…; ranking over a subset"), never a silent bigger truncation.
+- **Contract change (Kian-approved): `retrieve(spec) -> RetrievalResult(candidates, caveats)`** (was `list[Candidate]`). New frozen model in `core/schema.py`. The I/O loop reports an incomplete set as a *first-class output*, not hidden state / a side channel. `SourceAdapter` base + deferred stubs adopt it.
+- **Orchestrator wiring:** retrieve node splits the result into the `candidates` channel + a **new single-writer `retrieval_caveats` channel** (preserves the single-writer-per-stage invariant). `export_run` **unions** `retrieval_caveats + caveats` into `TriageRun.caveats` — mirrors how `result.excluded` unions the two exclusion channels at the presentation boundary (NOT a filter-node read+merge). [memory: orchestrator-exclusions-two-sources]
+- **The three requirements met:** (1) **filter-first** — depends on #38 (merged ✅), which shrinks N to a pageable set. (2) **bounded + loud** — ceiling + caveat, same `caveats` honesty channel as 2b's cap notice + 2c. (3) **adapter-owned** — `_skip`/`_limit` stay inside `retrieve`; contract is still `retrieve(spec) -> complete set` (now wrapped in `RetrievalResult`).
+- **Coverage caveat:** multi-page behavior at *real* settings (1000/page) isn't exercised offline (would need 1000+ fixture docs); `_paginate` unit tests drive the loop with small `_limit`, the cap-caveat test monkeypatches the ceiling low, and a `live` run would exercise the real cadence.
 
 > **H₂O is not fixed here.** "Metal oxides" must compile to `all={O}` AND `any={metallic elements}` so water
 > (has O, no metal) drops at the hard-filter stage. That needs the *set* of metals — **#37 area B
@@ -172,15 +175,21 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
   assumption-not-verified bug is exactly how #61's review caught a crash. [memory: verify-against-main-not-reference-impl])
 
 ## Status
-- **`main` @ `f5d8c63`**, clean. **241 tests pass** (10 `live` deselected, incl. the new MP filter-contract suite).
-- **#38 + 2c done this session** (#63 server-side push, #64 exclusive-set local filter): the full
-  filtering architecture is on `main` — **server-side primary (PUSHABLE_PARAMS) + deterministic local filter
-  for the exclusive set (R∩¬Q) + loud caveats (¬R∩¬Q → TriageRun.caveats)**. `is_magnetic` and element `any`
-  now enforced end-to-end (were enforced nowhere before); live-verified.
+- **`main` @ `d2d4074`** (handoff-sync #65 merged on top of #63/#64). Pagination (2b) is **committed on
+  `feat/retrieve-pagination` @ `9ab2bd7`, NOT yet on `main`** — PR pending.
+- **2b pagination BUILT this session** (TDD): `_paginate` + `retrieve() -> RetrievalResult(candidates,
+  caveats)` + page size 1000 + 10k ceiling/loud cap-caveat + orchestrator `retrieval_caveats` channel +
+  `export_run` caveat union. **246 tests pass** (10 `live` deselected), ruff clean, signed commit.
+- **⏸ no-mistakes BLOCKED on a transient `API Error: 529 Overloaded`** at the *review* step (3 attempts, all
+  529 — not a code/finding issue). Branch is bootstrapped on the proxy; just `no-mistakes rerun` when the API
+  recovers (no re-push needed). Local gate is green.
+- **#38 + 2c done** (#63 server-side push, #64 exclusive-set local filter): full filtering architecture on
+  `main` — **server-side primary (PUSHABLE_PARAMS) + deterministic local filter for the exclusive set (R∩¬Q)
+  + loud caveats (¬R∩¬Q → TriageRun.caveats)**. `is_magnetic` and element `any` enforced end-to-end; live-verified.
 - **#39 supply side done** (merged #61). Increment 4 (prompt binding) → **#34**.
 - **#37 done** (A #51 + D #55; B + C deferred).
-- **Parallel work in flight:** `feat/desirability-ranker` (selectable geometric-mean desirability ranker) was
-  in a separate worktree + had its own no-mistakes run this session — independent, untouched by #63/#64.
+- **Parallel work in flight:** `feat/desirability-ranker` (selectable geometric-mean desirability ranker) had
+  its own no-mistakes run running this session — independent, untouched by 2b. Leave it alone.
 - **Known issues / loose ends:**
   - **4 informational nits from #64's review** to fix opportunistically (next time touching the files):
     (1) `classify_predicates` comment oversells — the ¬R caveat is *additive* (explains the empty result),
@@ -224,6 +233,14 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
   value (`bulk_modulus=1.0`) hid the real `{voigt,reuss,vrh}`-dict crash — fixtures for object-typed fields
   must use the **real payload shape**, and verify a ported helper exists on `main` before citing it (the
   no-mistakes review's grep caught the missing `_scalar`). [memory: verify-against-main-not-reference-impl]
+- **Pagination (2b): MP `_limit` caps at 1000** ("Limited to 1000." in the vendored `mp_summary_schema.json`)
+  — a *bigger* page size means *fewer* HTTP calls for the same set, so 1000 is the gentlest-on-the-API choice
+  (counter-intuitively: larger page ≠ more blacklist risk). The composite weighted-average rank **can't** be
+  pushed (MP sorts on one field), so the ranker must see the whole filtered set locally → pagination is
+  mandatory, not optional. Default-arg gotcha: `_paginate(ceiling=_MAX_CANDIDATES)` binds 10000 at def time,
+  so `retrieve` passes the ceiling **explicitly** (else `monkeypatch.setattr(mp, "_MAX_CANDIDATES", …)` in a
+  test wouldn't reach it). Caveats split by stage like exclusions: `retrieval_caveats` (retrieve node) +
+  `caveats` (filter node), unioned in `export_run`. [memory: orchestrator-exclusions-two-sources]
 - **Pushability ≠ retrievability (#38).** What a field *returns* and what it can be *filtered on* are two
   surfaces. The `/summary` GET endpoint declares **124 query params** (≠ the 39 retrievable fields):
   `is_magnetic` is retrievable but not queryable (pushing it **400s**), and the moduli filter via
@@ -285,16 +302,16 @@ property/material class *before* retrieval:
   this is the *consumption* — choose + fetch + flag/restrict ranking by functional).
 
 ## Context for Next Session
-- **Branch:** `main` @ `f5d8c63`, clean. Build the next increment in a worktree (run pytest with
-  `PYTHONPATH="$PWD/src" pytest`). Port from `feat/fast-track-wire-guardrails`.
-- **Verify merged state:** `python -m pytest -q` (241 pass, 10 deselected); `ruff check .`. Live (needs
-  creds): `pytest -m live`.
-- **Next up (pick one):** (a) **pagination** (2b — page `_skip`/`_limit` to exhaust the filtered set; the
-  natural sibling now that #38 makes the page filterable; reuses the `caveats` channel for the "capped at N"
-  notice); (b) **#34** wire the pass-through nodes (gate/hypothesis/synthesis/output_validate) + bind the
-  vocabulary into the hypothesis prompt; (c) **views / render** (#25–#27) — also unblocks 2c's caveat
-  rendering. The deterministic filtering core is now complete, so the remaining v1 gaps are I/O (pagination),
-  the LLM nodes (#34), and presentation (views).
+- **Branch:** `feat/retrieve-pagination` @ `9ab2bd7` (2b, committed, signed) — **finish shipping first:**
+  `no-mistakes rerun` once the API recovers (review step was 529-blocked), then merge via GitHub UI +
+  `/sync-main`. `main` is at `d2d4074`. Build the next increment in a worktree (`PYTHONPATH="$PWD/src" pytest`).
+- **Verify 2b branch:** `PYTHONPATH="$PWD/src" python -m pytest -q` (246 pass, 10 deselected); `ruff check .`.
+  Live (needs creds): `pytest -m live`.
+- **Next up after 2b merges (pick one):** (a) **#34** wire the pass-through nodes
+  (gate/hypothesis/synthesis/output_validate) + bind the vocabulary into the hypothesis prompt; (b) **views /
+  render** (#25–#27) — also unblocks 2c's *and* 2b's caveat rendering (both feed `TriageRun.caveats`). The
+  deterministic filtering + retrieval core is now complete, so the remaining v1 gaps are the LLM nodes (#34)
+  and presentation (views).
 - **Credentials:** `X_API_KEY` (MP), `OPENALEX_MAILTO` (optional polite pool), AWS creds for Bedrock
   (prefer `~/.aws/credentials`; conftest `load_dotenv`s `.env`; AWS keys in `.env` must be UPPERCASE).
   **Never read/print the AWS creds or `X_API_KEY`.**
@@ -303,10 +320,11 @@ property/material class *before* retrieval:
   abort a commit → re-add + re-commit.
 - **Collaboration rules (CLAUDE.md):** ask before choosing between approaches; one function at a time then
   stop for approval; TDD via the `tdd` skill (never batch tests); **don't start coding until told.**
-- **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~ → **pagination (2b, untracked sibling)** ← suggested
-  next, #34, #20, #35, #22, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32, #33,
-  #37, **#39 (supply side; binding → #34)**, **#38 server-side push (#63)**, **2c exclusive-set local filter
-  (#64)**. Open within 2c: render caveats in views (blocked on the view layer #25–#27). Deferred: #37 area
+- **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~, ~~2b pagination (built, PR pending)~~ → **#34** ←
+  suggested next, #20, #35, #22, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32,
+  #33, #37, **#39 (supply side; binding → #34)**, **#38 server-side push (#63)**, **2c exclusive-set local
+  filter (#64)**, **2b pagination (built on `feat/retrieve-pagination`, PR pending 529-retry)**. Open within
+  2c + 2b: render caveats in views (blocked on the view layer #25–#27; both feed `TriageRun.caveats`). Deferred: #37 area
   B/C (area B on the critical path for "metal oxides"); the **multi-source filter abstraction** (universal
   local / filter_capability / residual — "see how it goes"); **v2 XC-functional-first retrieval** (design note
   above). Hosting = HB1–HB10.
