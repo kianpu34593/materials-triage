@@ -1,0 +1,119 @@
+{
+  "openapi": "3.1.0",
+  "components": {
+    "schemas": {
+      "SummaryDoc": {
+        "title": "SummaryDoc",
+        "type": "object",
+        "properties": {
+          "material_id": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Material Id",
+            "description": "The Materials Project ID of the material, used as a universal reference across property documents.This comes in the form: mp-******."
+          },
+          "formula_pretty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pretty Formula",
+            "description": "Cleaned representation of the formula."
+          },
+          "band_gap": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band Gap",
+            "description": "Band gap energy in eV."
+          },
+          "density": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Density",
+            "description": "Density in g/cm\u00b3."
+          },
+          "is_metal": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Metal",
+            "description": "Whether the material is a metal."
+          },
+          "is_stable": {
+            "type": "boolean",
+            "title": "Is Stable",
+            "description": "Flag for whether this material is on the hull and therefore stable.",
+            "default": false
+          },
+          "nelements": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nelements",
+            "description": "Number of elements."
+          },
+          "bulk_modulus": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bulk Modulus",
+            "description": "Voigt, Reuss, and Voigt-Reuss-Hill averages of the bulk modulus in GPa."
+          },
+          "possible_species": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Possible Species",
+            "description": "Possible charged species in this material."
+          }
+        }
+      }
+    }
+  }
+}
