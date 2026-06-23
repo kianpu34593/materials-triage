@@ -19,7 +19,7 @@ from langgraph.types import interrupt
 from pydantic import ValidationError
 
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
-from materials_triage.core.ranking import rank
+from materials_triage.core.ranking import rank_arithmetic_mean, rank_geometric_mean
 from materials_triage.core.schema import (
     Candidate,
     ExcludedCandidate,
@@ -253,12 +253,22 @@ def _make_filter_node(adapter: SourceAdapter | None):
     return filter_node
 
 
+# The ranker chosen per run by `spec.ranking_method`: the compensatory weighted
+# average, or the non-compensatory geometric mean of desirability curves.
+_RANKERS = {
+    "arithmetic_mean": rank_arithmetic_mean,
+    "geometric_mean": rank_geometric_mean,
+}
+
+
 def _rank_node(state: OrchestratorState) -> dict:
-    """The ranking step: weighted-average rank the survivors. The ranker's own
-    missing-policy drops are recorded in the `rank_excluded` channel (the ranking
-    stage's authoritative exclusions), and `result.excluded` is the union of both
-    stages — the complete presentation set the renderers read."""
-    ranked = rank(list(state.get("survivors", ())), state["spec"].ranking_targets)
+    """The ranking step: rank the survivors by the method the spec records. The
+    ranker's own missing-policy drops are recorded in the `rank_excluded` channel
+    (the ranking stage's authoritative exclusions), and `result.excluded` is the
+    union of both stages — the complete presentation set the renderers read."""
+    spec = state["spec"]
+    ranker = _RANKERS[spec.ranking_method]
+    ranked = ranker(list(state.get("survivors", ())), spec.ranking_targets)
     union = tuple(state.get("filter_excluded", ())) + ranked.excluded
     return {
         "rank_excluded": ranked.excluded,

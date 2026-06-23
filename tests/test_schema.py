@@ -285,6 +285,183 @@ def test_ranking_target_defaults_on_missing_to_impute_medium():
     assert target.on_missing == "impute_medium"
 
 
+def test_ranking_target_carries_a_target_window_and_curvature():
+    """A 'target' direction scores a moderate sweet spot, not an extreme: it
+    carries the window anchors (lower/target/upper, where desirability peaks at
+    target and falls to zero at the bounds) and a curvature that bends the
+    desirability curve between them."""
+    target = RankingTarget(
+        property_name="band_gap",
+        direction="target",
+        weight=0.5,
+        lower=2.0,
+        target=5.0,
+        upper=8.0,
+        curvature=2.0,
+    )
+
+    assert target.direction == "target"
+    assert target.lower == 2.0
+    assert target.target == 5.0
+    assert target.upper == 8.0
+    assert target.curvature == 2.0
+
+
+def test_ranking_target_direction_requires_a_target_value():
+    """A 'target' direction scores distance from a sweet spot, and there is no
+    sensible way to infer that sweet spot from the candidate pool's extremes, so
+    the target value is mandatory for this direction."""
+    with pytest.raises(ValidationError):
+        RankingTarget(
+            property_name="band_gap", direction="target", weight=0.5, lower=2.0, upper=8.0
+        )
+
+
+def test_ranking_target_direction_requires_a_lower_anchor():
+    """A 'target' window has no pool fallback, so it must announce its full
+    lower/target/upper; an omitted lower bound is an incomplete window."""
+    with pytest.raises(ValidationError):
+        RankingTarget(
+            property_name="band_gap", direction="target", weight=0.5, target=5.0, upper=8.0
+        )
+
+
+def test_ranking_target_direction_requires_an_upper_anchor():
+    """The 'target' window's upper bound is likewise mandatory — there is no pool
+    fallback to fill it in."""
+    with pytest.raises(ValidationError):
+        RankingTarget(
+            property_name="band_gap", direction="target", weight=0.5, lower=2.0, target=5.0
+        )
+
+
+def test_ranking_target_rejects_anchors_out_of_order():
+    """The window anchors must ascend — desirability rises from ``lower`` to the
+    ``target`` peak and falls to ``upper`` — so a target below its lower bound is
+    an incoherent window."""
+    with pytest.raises(ValidationError):
+        RankingTarget(
+            property_name="band_gap",
+            direction="target",
+            weight=0.5,
+            lower=6.0,
+            target=5.0,
+            upper=8.0,
+        )
+
+
+def test_ranking_target_maximize_rejects_unused_upper_anchor():
+    """A ``maximize`` curve only ramps from ``lower`` to ``target`` and never
+    consults ``upper`` (see ``resolve_bounds``), so a stray ``upper`` would be
+    silently dropped intent: it is rejected rather than masked."""
+    with pytest.raises(ValidationError, match="does not use upper"):
+        RankingTarget(
+            property_name="band_gap",
+            direction="maximize",
+            weight=0.5,
+            lower=2.0,
+            target=4.0,
+            upper=1.0,
+        )
+
+
+def test_ranking_target_still_orders_the_anchors_a_direction_uses():
+    """The relevant anchors a direction does consume must still ascend: a
+    ``maximize`` curve ramps ``lower`` -> ``target``, so a target below its lower
+    bound remains an incoherent window."""
+    with pytest.raises(ValidationError):
+        RankingTarget(
+            property_name="band_gap",
+            direction="maximize",
+            weight=0.5,
+            lower=5.0,
+            target=4.0,
+        )
+
+
+def test_ranking_target_maximize_rejects_one_anchor_without_its_partner():
+    """A ``maximize`` ramp's anchors (``lower``/``target``) must share a source —
+    both from the spec or both from the pool — so supplying one alone (here a
+    ``lower`` floor against a pool-derived saturation) is an incoherent half-window."""
+    with pytest.raises(ValidationError):
+        RankingTarget(property_name="band_gap", direction="maximize", weight=0.5, lower=2.0)
+
+
+def test_ranking_target_minimize_rejects_one_anchor_without_its_partner():
+    """A ``minimize`` ramp's anchors (``target``/``upper``) must likewise be
+    announced together; an ``upper`` bound without its ``target`` partner mixes
+    a spec anchor with a pool extreme and is rejected."""
+    with pytest.raises(ValidationError):
+        RankingTarget(property_name="density", direction="minimize", weight=0.5, upper=8.0)
+
+
+def test_ranking_target_minimize_rejects_unused_lower_anchor():
+    """A ``minimize`` curve ramps only ``target`` -> ``upper``; a stray ``lower``
+    would be silently dropped, so it is rejected rather than accepted as dead intent."""
+    with pytest.raises(ValidationError, match="does not use lower"):
+        RankingTarget(
+            property_name="density",
+            direction="minimize",
+            weight=0.5,
+            lower=1.0,
+            target=4.0,
+            upper=8.0,
+        )
+
+
+def test_ranking_target_maximize_rejects_equal_anchors():
+    """Spec-supplied ramp anchors must strictly ascend: a ``maximize`` target with
+    ``lower`` equal to ``target`` is a zero-width ramp that would silently flatten
+    to a neutral 0.5, so it is refused as a misconfiguration rather than masked."""
+    with pytest.raises(ValidationError, match="strictly ascend"):
+        RankingTarget(
+            property_name="band_gap", direction="maximize", weight=0.5, lower=4.0, target=4.0
+        )
+
+
+def test_ranking_target_minimize_rejects_equal_anchors():
+    """A ``minimize`` ramp likewise must strictly ascend from its ``target`` peak to
+    its ``upper`` floor; an equal pair is a zero-width, signal-free ramp."""
+    with pytest.raises(ValidationError, match="strictly ascend"):
+        RankingTarget(
+            property_name="density", direction="minimize", weight=0.5, target=4.0, upper=4.0
+        )
+
+
+def test_ranking_target_window_rejects_equal_anchors():
+    """A 'target' window must strictly ascend through lower < target < upper; a
+    collapsed pair (here target equal to upper) is an incoherent sweet spot."""
+    with pytest.raises(ValidationError, match="strictly ascend"):
+        RankingTarget(
+            property_name="band_gap",
+            direction="target",
+            weight=0.5,
+            lower=2.0,
+            target=5.0,
+            upper=5.0,
+        )
+
+
+def test_ranking_target_maximize_accepts_neither_anchor():
+    """With no ramp anchors supplied, a ``maximize`` target borrows both from the
+    candidate pool at scoring time, so omitting them is valid."""
+    target = RankingTarget(property_name="band_gap", direction="maximize", weight=0.5)
+
+    assert target.lower is None
+    assert target.target is None
+
+
+def test_ranking_target_maximize_accepts_both_anchors():
+    """Announcing both ramp anchors together is the spec-supplied case: the curve
+    spans the announced floor and saturation regardless of the pool."""
+    target = RankingTarget(
+        property_name="band_gap", direction="maximize", weight=0.5, lower=2.0, target=8.0
+    )
+
+    assert target.lower == 2.0
+    assert target.target == 8.0
+
+
 def test_element_predicate_carries_its_quantifier_and_members():
     """An ElementPredicate is one quantified composition filter: a quantifier over
     a set of element symbols. 'any' means HAS-ANY — at least one member present —
@@ -371,6 +548,137 @@ def test_triagespec_assembles_a_fully_populated_request():
         ElementPredicate(quantifier="none", members=frozenset({"Pb"})),
     )
     assert spec.count == CountConstraint(max=4)
+
+
+def test_triagespec_defaults_ranking_method_to_arithmetic_mean():
+    """The ranking method is part of the recorded spec so a run is replayable;
+    absent a choice it is the established weighted arithmetic mean so existing
+    behavior is unchanged."""
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=1.0),))
+
+    assert spec.ranking_method == "arithmetic_mean"
+
+
+def test_triagespec_accepts_geometric_mean_ranking_method():
+    """A run may opt into the non-compensatory geometric-mean (desirability)
+    ranker by recording it on the spec."""
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        ranking_method="geometric_mean",
+    )
+
+    assert spec.ranking_method == "geometric_mean"
+
+
+def test_triagespec_rejects_target_direction_under_arithmetic_mean():
+    """A 'target' window is a desirability concept only the geometric_mean ranker
+    scores; the default arithmetic_mean ranker normalises via normalize(), which
+    handles only maximize/minimize. The mismatch is caught at spec construction so
+    it fails fast rather than crashing at the rank step after retrieval."""
+    with pytest.raises(ValidationError, match="geometric_mean"):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            ranking_targets=(
+                RankingTarget(
+                    property_name="band_gap",
+                    direction="target",
+                    weight=1.0,
+                    lower=2.0,
+                    target=5.0,
+                    upper=8.0,
+                ),
+            ),
+        )
+
+
+def test_triagespec_accepts_target_direction_under_geometric_mean():
+    """The same target-window spec constructs once the geometric_mean ranker — the
+    one that scores desirability curves — is selected."""
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        ranking_targets=(
+            RankingTarget(
+                property_name="band_gap",
+                direction="target",
+                weight=1.0,
+                lower=2.0,
+                target=5.0,
+                upper=8.0,
+            ),
+        ),
+        ranking_method="geometric_mean",
+    )
+
+    assert spec.ranking_method == "geometric_mean"
+
+
+@pytest.mark.parametrize(
+    "direction,extra",
+    [
+        ("maximize", {"lower": 2.0, "target": 8.0}),
+        ("minimize", {"target": 2.0, "upper": 8.0}),
+        ("maximize", {"curvature": 2.0}),
+    ],
+)
+def test_triagespec_rejects_desirability_curves_under_arithmetic_mean(direction, extra):
+    """The default arithmetic_mean ranker normalises via normalize() (pool extremes
+    only), so it cannot honour anchors or curvature; configuring them is rejected at
+    construction rather than silently dropped — no silent wrong answers."""
+    with pytest.raises(ValidationError, match="geometric_mean"):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            ranking_targets=(
+                RankingTarget(property_name="band_gap", direction=direction, weight=1.0, **extra),
+            ),
+        )
+
+
+def test_triagespec_accepts_bare_target_under_arithmetic_mean():
+    """A maximize target with no anchors and default curvature is the ordinary
+    weighted-sum case and constructs cleanly under the default ranker."""
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        ranking_targets=(
+            RankingTarget(property_name="band_gap", direction="maximize", weight=1.0),
+        ),
+    )
+
+    assert spec.ranking_method == "arithmetic_mean"
+
+
+@pytest.mark.parametrize("direction", ["maximize", "minimize"])
+def test_triagespec_geometric_mean_requires_announced_ramp_bounds(direction):
+    """The geometric_mean ranker zeros a candidate at an acceptability floor, so
+    every target must announce its ramp bounds (no pool fallback); a target that
+    omits its anchors — and so would fall back to the pool — is refused, ensuring a
+    desirability of 0 always means a genuine floor failure rather than pool-worst."""
+    with pytest.raises(ValidationError, match="announce its ramp bounds"):
+        TriageSpec(
+            constraints=(Constraint(property_name="band_gap", min=1.0),),
+            ranking_targets=(
+                RankingTarget(property_name="band_gap", direction=direction, weight=1.0),
+            ),
+            ranking_method="geometric_mean",
+        )
+
+
+def test_triagespec_geometric_mean_accepts_fully_announced_targets():
+    """A geometric_mean spec whose every target announces its full ramp constructs
+    cleanly."""
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        ranking_targets=(
+            RankingTarget(
+                property_name="band_gap", direction="maximize", weight=0.5, lower=2.0, target=8.0
+            ),
+            RankingTarget(
+                property_name="density", direction="minimize", weight=0.5, target=2.0, upper=8.0
+            ),
+        ),
+        ranking_method="geometric_mean",
+    )
+
+    assert spec.ranking_method == "geometric_mean"
 
 
 def test_triagespec_allows_same_property_as_constraint_and_ranking_target():

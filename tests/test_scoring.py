@@ -15,8 +15,11 @@ from materials_triage.core.schema import (
 from materials_triage.core.scoring import (
     apply_hard_filters,
     apply_local_filters,
+    desirability_curve,
     drop_missing_excluded,
     normalize,
+    resolve_bounds,
+    score_desirability,
     score_target,
 )
 
@@ -106,6 +109,166 @@ def test_normalize_rejects_empty_pool():
     an empty pool with a clear error rather than failing deep in min()."""
     with pytest.raises(ValueError, match="empty pool"):
         normalize([], "maximize")
+
+
+def test_desirability_maximize_ramps_linearly_from_lower_to_target():
+    """A 'maximize' curve is zero at the lower anchor and one at the target
+    (saturation) anchor; with a linear curvature the midpoint is 0.5."""
+    assert (
+        desirability_curve(3.0, "maximize", lower=2.0, target=4.0, upper=None, curvature=1.0) == 0.5
+    )
+
+
+def test_desirability_maximize_clamps_outside_the_ramp():
+    """Below the lower anchor a 'maximize' value earns nothing (0); at or above
+    the saturation target it is fully desirable (1) and does not keep climbing."""
+    below = desirability_curve(1.0, "maximize", lower=2.0, target=4.0, upper=None, curvature=1.0)
+    saturated = desirability_curve(
+        9.0, "maximize", lower=2.0, target=4.0, upper=None, curvature=1.0
+    )
+
+    assert below == 0.0
+    assert saturated == 1.0
+
+
+def test_desirability_minimize_ramps_down_from_target_to_upper():
+    """A 'minimize' curve is one at/below the target (the good low value) and
+    falls to zero at the upper anchor; the midpoint is 0.5, and it clamps flat
+    outside the ramp."""
+    mid = desirability_curve(3.0, "minimize", lower=None, target=2.0, upper=4.0, curvature=1.0)
+    good = desirability_curve(1.0, "minimize", lower=None, target=2.0, upper=4.0, curvature=1.0)
+    bad = desirability_curve(9.0, "minimize", lower=None, target=2.0, upper=4.0, curvature=1.0)
+
+    assert mid == 0.5
+    assert good == 1.0
+    assert bad == 0.0
+
+
+def test_desirability_target_peaks_at_the_sweet_spot_and_falls_both_ways():
+    """A 'target' curve is the moderate-is-best case: desirability is 1 at the
+    target, 0 at either outer anchor, and rises/falls linearly on each arm, so the
+    midpoint of each arm is 0.5. Outside the window it is 0."""
+    peak = desirability_curve(5.0, "target", lower=2.0, target=5.0, upper=8.0, curvature=1.0)
+    rising_mid = desirability_curve(3.5, "target", lower=2.0, target=5.0, upper=8.0, curvature=1.0)
+    falling_mid = desirability_curve(6.5, "target", lower=2.0, target=5.0, upper=8.0, curvature=1.0)
+    outside = desirability_curve(9.0, "target", lower=2.0, target=5.0, upper=8.0, curvature=1.0)
+
+    assert peak == 1.0
+    assert rising_mid == 0.5
+    assert falling_mid == 0.5
+    assert outside == 0.0
+
+
+def test_desirability_curvature_bends_credit_for_off_target_values():
+    """Curvature is the exponent on the ramp fraction: >1 is strict (the midpoint
+    earns only 0.25, credit comes only near the ideal), <1 is lenient (the
+    midpoint earns ~0.71, partial credit accrues fast)."""
+    strict = desirability_curve(3.0, "maximize", lower=2.0, target=4.0, upper=None, curvature=2.0)
+    lenient = desirability_curve(3.0, "maximize", lower=2.0, target=4.0, upper=None, curvature=0.5)
+
+    assert strict == 0.25
+    assert lenient == pytest.approx(0.7071, abs=1e-4)
+
+
+def test_resolve_bounds_maximize_falls_back_to_pool_extremes():
+    """With no anchors supplied, a 'maximize' target borrows the pool's range: the
+    lower (zero) anchor is the pool minimum and the saturation anchor is the pool
+    maximum, so the curve spans the actual candidates."""
+    target = RankingTarget(property_name="band_gap", direction="maximize", weight=1.0)
+
+    lower, peak, upper = resolve_bounds(target, [2.0, 3.0, 4.0])
+
+    assert lower == 2.0
+    assert peak == 4.0
+
+
+def test_resolve_bounds_minimize_falls_back_to_pool_extremes():
+    """For 'minimize', smaller is better: the pool minimum is the fully-desirable
+    target and the pool maximum is the zero-desirability upper anchor."""
+    target = RankingTarget(property_name="density", direction="minimize", weight=1.0)
+
+    lower, peak, upper = resolve_bounds(target, [2.0, 3.0, 4.0])
+
+    assert peak == 2.0
+    assert upper == 4.0
+
+
+def test_resolve_bounds_target_returns_the_announced_window_verbatim():
+    """A 'target' direction names its full window, so resolve_bounds returns the
+    announced lower/target/upper as-is and never consults the candidate pool."""
+    target = RankingTarget(
+        property_name="band_gap", direction="target", weight=1.0, lower=1.0, target=3.0, upper=5.0
+    )
+
+    lower, peak, upper = resolve_bounds(target, [10.0, 20.0, 30.0])
+
+    assert lower == 1.0
+    assert peak == 3.0
+    assert upper == 5.0
+
+
+def test_resolve_bounds_prefers_supplied_anchors_over_the_pool():
+    """A spec-supplied anchor is absolute and overrides the pool fallback, so the
+    curve does not drift as the candidate set changes."""
+    target = RankingTarget(
+        property_name="band_gap", direction="maximize", weight=1.0, lower=0.0, target=10.0
+    )
+
+    lower, peak, _upper = resolve_bounds(target, [2.0, 3.0, 4.0])
+
+    assert lower == 0.0
+    assert peak == 10.0
+
+
+def test_score_desirability_maps_present_values_through_the_curve_unflagged():
+    """Across the pool, each present value is mapped to its desirability by the
+    resolved curve — here a 'maximize' over [2, 4] puts the low candidate at 0 and
+    the high one at 1 — and neither is flagged because nothing was imputed."""
+    low = _candidate("mp-low", "PbO", band_gap=2.0)
+    high = _candidate("mp-high", "SnO2", band_gap=4.0)
+    target = RankingTarget(property_name="band_gap", direction="maximize", weight=1.0)
+
+    scored = score_desirability([low, high], target)
+
+    assert scored == [(0.0, False), (1.0, False)]
+
+
+def test_score_desirability_imputes_neutral_half_for_missing_and_flags_it():
+    """A candidate lacking the ranked property is imputed a neutral 0.5 (so a
+    single gap cannot zero the geometric mean) and flagged, while present
+    candidates still score by the curve."""
+    low = _candidate("mp-low", "PbO", band_gap=2.0)
+    high = _candidate("mp-has", "SnO2", band_gap=4.0)
+    blank = _candidate("mp-missing", "NaCl")
+    target = RankingTarget(property_name="band_gap", direction="maximize", weight=1.0)
+
+    scored = score_desirability([low, high, blank], target)
+
+    assert scored[0] == (0.0, False)
+    assert scored[1] == (1.0, False)
+    assert scored[2] == (0.5, True)
+
+
+def test_desirability_degenerate_span_maps_to_neutral_half():
+    """When an anchor span collapses to zero — every candidate shares the value,
+    so the property carries no signal — the curve returns a neutral 0.5 rather
+    than dividing by zero, matching the normaliser's degenerate behaviour."""
+    flat = desirability_curve(4.0, "maximize", lower=4.0, target=4.0, upper=None, curvature=1.0)
+
+    assert flat == 0.5
+
+
+def test_score_desirability_all_missing_imputes_half_without_evaluating_the_curve():
+    """When no candidate has the ranked property there is no pool to anchor the
+    curve, so every candidate is imputed the neutral 0.5 and flagged rather than
+    the curve being evaluated against undefined bounds."""
+    a = _candidate("mp-a", "NaCl")
+    b = _candidate("mp-b", "KCl")
+    target = RankingTarget(property_name="band_gap", direction="maximize", weight=1.0)
+
+    scored = score_desirability([a, b], target)
+
+    assert scored == [(0.5, True), (0.5, True)]
 
 
 def test_apply_hard_filters_excludes_candidate_below_min():
