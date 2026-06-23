@@ -264,6 +264,24 @@ def test_ranking_target_names_property_with_direction_and_weight():
     assert target.weight == 0.5
 
 
+def test_ranking_target_json_schema_surfaces_the_ramp_bound_guidance():
+    """The structured-output JSON schema (what the hypothesis LLM sees via
+    with_structured_output) must explain the desirability fields, so the LLM knows
+    to announce ramp bounds — the agent ranks by weighted geometric mean, which
+    requires them. The anchors and direction carry descriptions; the bound guidance
+    names the ramp semantics."""
+    props = RankingTarget.model_json_schema()["properties"]
+
+    for field in ("direction", "lower", "target", "upper", "curvature"):
+        assert props[field].get("description"), f"{field} needs a description for the LLM"
+
+    bound_guidance = " ".join(props[f]["description"] for f in ("lower", "target", "upper")).lower()
+    assert "ramp" in bound_guidance or "desirability" in bound_guidance
+    assert "direction" in props["direction"]["description"].lower() or "better" in (
+        props["direction"]["description"].lower()
+    )
+
+
 def test_ranking_target_requires_positive_weight():
     """A zero or negative weight contributes nothing to the weighted average."""
     with pytest.raises(ValidationError):

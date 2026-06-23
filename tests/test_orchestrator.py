@@ -16,9 +16,11 @@ from materials_triage.agent.orchestrator import (
     WORKFLOW_STEPS,
     HypothesisConformanceError,
     SpecCompilationError,
+    _hypothesis_prompt,
     build_orchestrator,
     resume_run,
 )
+from materials_triage.agent.prompts import RANKING_TARGET_GUIDANCE
 from materials_triage.core.hypothesis import (
     Citation,
     ConstraintProposal,
@@ -40,6 +42,18 @@ from materials_triage.core.schema import (
     TriageSpec,
 )
 from materials_triage.sources.base import SourceAdapter
+
+
+def test_hypothesis_prompt_surfaces_the_ranking_target_guidance():
+    """The hypothesis prompt carries the ranking-target guidance so the LLM proposes
+    ramp-bounded targets the default geometric-mean ranker can score — both on the
+    first attempt and on a retry (the guidance must not be dropped on the retry path)."""
+    first = _hypothesis_prompt("wide-gap oxide", None)
+    retry = _hypothesis_prompt("wide-gap oxide", "prior schema error")
+
+    assert RANKING_TARGET_GUIDANCE in first
+    assert RANKING_TARGET_GUIDANCE in retry
+    assert "wide-gap oxide" in first
 
 
 def test_orchestrator_compiles_with_a_checkpointer_and_wires_the_steps_linearly():
@@ -431,6 +445,77 @@ def test_hypothesis_node_raises_a_wrapped_error_when_retries_are_exhausted():
     assert len(provider.prompts) == DEFAULT_MAX_HYPOTHESIS_ATTEMPTS  # capped, no infinite loop
 
 
+def _ranking_hypothesis(*, bounded):
+    """A shape-valid Hypothesis whose ranking target either announces its ramp
+    bounds (compiles under the geometric default) or omits them (does not)."""
+    target = (
+        RankingTarget(
+            property_name="band_gap", direction="maximize", weight=1.0, lower=1.0, target=3.0
+        )
+        if bounded
+        else RankingTarget(property_name="band_gap", direction="maximize", weight=1.0)
+    )
+    return Hypothesis(
+        proposals=(
+            ConstraintProposal(
+                constraint=Constraint(property_name="band_gap", min=2.0),
+                rationale="wide gap",
+                confidence=0.8,
+            ),
+            RankingProposal(ranking_target=target, rationale="prefer wider", confidence=0.8),
+        ),
+        mechanism="m",
+    )
+
+
+class _CompileFlakyProvider:
+    """Returns a SHAPE-valid but non-COMPILING hypothesis (a ranking target missing
+    the ramp bounds the geometric default requires) for the first ``fail_times``
+    calls, then a compilable one. Records every prompt it was handed."""
+
+    def __init__(self, fail_times):
+        self.fail_times = fail_times
+        self.prompts = []
+
+    def propose(self, prompt):
+        self.prompts.append(prompt)
+        return _ranking_hypothesis(bounded=len(self.prompts) > self.fail_times)
+
+
+def test_hypothesis_node_retries_when_proposals_do_not_compile():
+    """A shape-valid Hypothesis can still fail to compile — here a ranking target
+    missing the ramp bounds the default geometric ranker requires. The node
+    trial-compiles inside the retry loop and feeds the compile error back, so a
+    transient omission self-corrects instead of failing terminally later in
+    spec_build with no feedback to the LLM."""
+    provider = _CompileFlakyProvider(fail_times=1)
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "compile-retry"}}
+    final = orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert isinstance(final["hypothesis"], Hypothesis)
+    assert len(provider.prompts) == 2  # one non-compiling attempt + one good
+    assert provider.prompts[1] != provider.prompts[0]  # the compile error was fed back
+
+
+def test_hypothesis_node_raises_when_proposals_never_compile():
+    """If the proposals never compile within the cap, the node raises the same
+    wrapped HypothesisConformanceError (cause = the compile ValidationError), not a
+    terminal SpecCompilationError downstream."""
+    provider = _CompileFlakyProvider(fail_times=99)  # never compiles
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "compile-exhausted"}}
+    with pytest.raises(HypothesisConformanceError) as excinfo:
+        orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert isinstance(excinfo.value.__cause__, ValidationError)
+    assert len(provider.prompts) == DEFAULT_MAX_HYPOTHESIS_ATTEMPTS
+
+
 class _BrokenProvider:
     """A provider whose call fails for a NON-schema reason (transport/throttle)."""
 
@@ -480,14 +565,22 @@ def _hypothesis_with_unnormalized_weights():
             ),
             RankingProposal(
                 ranking_target=RankingTarget(
-                    property_name="band_gap", direction="maximize", weight=0.6
+                    property_name="band_gap",
+                    direction="maximize",
+                    weight=0.6,
+                    lower=1.0,
+                    target=3.0,
                 ),
                 rationale="prefer wider",
                 confidence=0.8,
             ),
             RankingProposal(
                 ranking_target=RankingTarget(
-                    property_name="density", direction="minimize", weight=0.2
+                    property_name="density",
+                    direction="minimize",
+                    weight=0.2,
+                    target=2.0,
+                    upper=8.0,
                 ),
                 rationale="prefer lighter",
                 confidence=0.8,
@@ -556,10 +649,13 @@ def test_spec_build_resume_with_an_edit_uses_the_humans_spec():
 
 
 def test_spec_build_wraps_an_incoherent_compile_spec_error():
-    """If the proposals are individually valid but don't compile to a coherent
-    TriageSpec (here: two constraints on the same property), spec_build raises a
-    wrapped SpecCompilationError preserving the pydantic ValidationError — no raw
-    validation dump leaks, and the pipeline never pauses on an uncompilable spec."""
+    """A hypothesis that reaches spec_build WITHOUT passing the hypothesis node's
+    trial-compile — here seeded directly into state with no provider, as on a resume —
+    still gets a wrapped SpecCompilationError if its proposals don't compile (here two
+    constraints on the same property). No raw validation dump leaks, and the pipeline
+    never pauses on an uncompilable spec. (When a provider IS present, the hypothesis
+    node trial-compiles and retries first, so this terminal wrapper is the defensive
+    backstop for the bypass path.)"""
     incoherent = Hypothesis(
         proposals=(
             ConstraintProposal(
@@ -575,12 +671,11 @@ def test_spec_build_wraps_an_incoherent_compile_spec_error():
         ),
         mechanism="m",
     )
-    provider = _StubProvider(incoherent)
-    orchestrator = build_orchestrator(provider=provider)
+    orchestrator = build_orchestrator()  # no provider → hypothesis node passes the seed through
     config = {"configurable": {"thread_id": "hitl-bad"}}
 
     with pytest.raises(SpecCompilationError) as excinfo:
-        orchestrator.invoke({"goal": "wide-gap oxide"}, config)
+        orchestrator.invoke({"goal": "wide-gap oxide", "hypothesis": incoherent}, config)
 
     assert isinstance(excinfo.value.__cause__, ValidationError)
 
@@ -599,7 +694,11 @@ def test_spec_build_note_does_not_claim_rescaling_when_weights_already_sum_to_on
             ),
             RankingProposal(
                 ranking_target=RankingTarget(
-                    property_name="band_gap", direction="maximize", weight=1.0
+                    property_name="band_gap",
+                    direction="maximize",
+                    weight=1.0,
+                    lower=1.0,
+                    target=3.0,
                 ),
                 rationale="prefer wider",
                 confidence=0.8,

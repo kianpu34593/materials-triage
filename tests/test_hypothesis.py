@@ -206,16 +206,37 @@ def _ranking_proposal(name, weight, direction="maximize"):
     )
 
 
+def test_compile_spec_defaults_to_the_geometric_mean_ranker():
+    """The agent ranks by the non-compensatory weighted geometric mean by default,
+    so compile_spec produces a geometric_mean spec — which requires each ranking
+    target to announce its desirability ramp bounds (here lower/target for a
+    maximize ramp)."""
+    bounded = RankingProposal(
+        ranking_target=RankingTarget(
+            property_name="band_gap", direction="maximize", weight=1.0, lower=1.0, target=3.0
+        ),
+        rationale="prefer wide gaps",
+        confidence=0.7,
+    )
+
+    spec = compile_spec((_constraint_proposal(min=1.0), bounded))
+
+    assert spec.ranking_method == "geometric_mean"
+
+
 def test_compile_spec_normalizes_ranking_weights_to_sum_to_one():
     """The human gate accepts proposals independently, so surviving weights rarely
     sum to 1 — but TriageSpec requires it. compile_spec normalizes them, preserving
     ratios: proposed 0.6/0.2 (sum 0.8) compile to 0.75/0.25."""
+    # Weight normalization is ranking-method-agnostic; use arithmetic_mean so the
+    # bare targets (no ramp bounds) stay valid and the test stays focused on weights.
     spec = compile_spec(
         (
             _constraint_proposal(min=1.0),
             _ranking_proposal("band_gap", 0.6),
             _ranking_proposal("density", 0.2, direction="minimize"),
-        )
+        ),
+        ranking_method="arithmetic_mean",
     )
 
     weights = {t.property_name: t.weight for t in spec.ranking_targets}
@@ -226,7 +247,10 @@ def test_compile_spec_normalizes_ranking_weights_to_sum_to_one():
 def test_compile_spec_makes_a_lone_ranking_weight_one():
     """A single accepted ranking target must carry the whole weight, whatever the
     LLM proposed (pin: the normalization formula already yields 1.0)."""
-    spec = compile_spec((_constraint_proposal(min=1.0), _ranking_proposal("band_gap", 0.4)))
+    spec = compile_spec(
+        (_constraint_proposal(min=1.0), _ranking_proposal("band_gap", 0.4)),
+        ranking_method="arithmetic_mean",
+    )
 
     assert spec.ranking_targets[0].weight == pytest.approx(1.0)
 
