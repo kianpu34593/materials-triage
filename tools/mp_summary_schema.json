@@ -1,0 +1,844 @@
+{
+  "_source": "https://api.materialsproject.org/openapi.json",
+  "_openapi": "3.1.0",
+  "_api_version": "0.87.2.dev4+g6bd8ed856",
+  "components": {
+    "schemas": {
+      "SummaryDoc": {
+        "properties": {
+          "phonon_IDs": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phonon Ids",
+            "description": "Identfiers for phonon documents associated with this material."
+          },
+          "theoretical": {
+            "type": "boolean",
+            "title": "Theoretical",
+            "description": "Whether the material is theoretical.",
+            "default": true
+          },
+          "database_IDs": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database Ids",
+            "description": "External database IDs corresponding to this material."
+          },
+          "possible_species": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Possible Species",
+            "description": "Possible charged species in this material."
+          },
+          "weighted_surface_energy_EV_PER_ANG2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weighted Surface Energy Ev Per Ang2",
+            "description": "Weighted surface energy in eV/\u00c5\u00b2."
+          },
+          "weighted_surface_energy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weighted Surface Energy",
+            "description": "Weighted surface energy in J/m\u00b2."
+          },
+          "weighted_work_function": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weighted Work Function",
+            "description": "Weighted work function in eV."
+          },
+          "surface_anisotropy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surface Anisotropy",
+            "description": "Surface energy anisotropy."
+          },
+          "shape_factor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shape Factor",
+            "description": "Shape factor."
+          },
+          "has_reconstructed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Reconstructed",
+            "description": "Whether the material has any reconstructed surfaces."
+          },
+          "e_ij_max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "E Ij Max",
+            "description": "Piezoelectric modulus."
+          },
+          "e_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "E Total",
+            "description": "Total dielectric constant."
+          },
+          "e_ionic": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "E Ionic",
+            "description": "Ionic contribution to dielectric constant."
+          },
+          "e_electronic": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "E Electronic",
+            "description": "Electronic contribution to dielectric constant."
+          },
+          "n": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "N",
+            "description": "Refractive index."
+          },
+          "bulk_modulus": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bulk Modulus",
+            "description": "Voigt, Reuss, and Voigt-Reuss-Hill averages of the bulk modulus in GPa."
+          },
+          "shear_modulus": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shear Modulus",
+            "description": "Voigt, Reuss, and Voigt-Reuss-Hill averages of the shear modulus in GPa."
+          },
+          "universal_anisotropy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Universal Anisotropy",
+            "description": "Elastic anisotropy."
+          },
+          "homogeneous_poisson": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Homogeneous Poisson",
+            "description": "Poisson's ratio."
+          },
+          "is_magnetic": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Magnetic",
+            "description": "Whether the material is magnetic."
+          },
+          "ordering": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ordering",
+            "description": "Type of magnetic ordering."
+          },
+          "total_magnetization": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Magnetization",
+            "description": "Total magnetization in \u03bcB."
+          },
+          "total_magnetization_normalized_vol": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Magnetization Normalized Vol",
+            "description": "Total magnetization normalized by volume in \u03bcB/\u212b\u00b3."
+          },
+          "total_magnetization_normalized_formula_units": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Magnetization Normalized Formula Units",
+            "description": "Total magnetization normalized by formula unit in \u03bcB/f.u. ."
+          },
+          "num_magnetic_sites": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Magnetic Sites",
+            "description": "The number of magnetic sites."
+          },
+          "num_unique_magnetic_sites": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Unique Magnetic Sites",
+            "description": "The number of unique magnetic sites."
+          },
+          "types_of_magnetic_species": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Types Of Magnetic Species",
+            "description": "Magnetic species elements."
+          },
+          "dos": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DosData"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Density of states data for the material."
+          },
+          "dos_energy_up": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dos Energy Up",
+            "description": "Spin-up DOS band gap in eV."
+          },
+          "dos_energy_down": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dos Energy Down",
+            "description": "Spin-down DOS band gap in eV."
+          },
+          "bandstructure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BandstructureData"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Band structure data for the material."
+          },
+          "band_gap": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band Gap",
+            "description": "Band gap energy in eV."
+          },
+          "cbm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cbm",
+            "description": "Conduction band minimum data."
+          },
+          "vbm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vbm",
+            "description": "Valence band maximum data."
+          },
+          "efermi": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Efermi",
+            "description": "Fermi energy in eV."
+          },
+          "is_gap_direct": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Gap Direct",
+            "description": "Whether the band gap is direct."
+          },
+          "is_metal": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Metal",
+            "description": "Whether the material is a metal."
+          },
+          "grain_boundaries": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/GBSearchData"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain Boundaries",
+            "description": "List of grain boundary documents."
+          },
+          "xas": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/XASSearchData"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Xas",
+            "description": "List of xas documents."
+          },
+          "uncorrected_energy_per_atom": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uncorrected Energy Per Atom",
+            "description": "The total DFT energy of this material per atom in eV/atom."
+          },
+          "energy_per_atom": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Energy Per Atom",
+            "description": "The total corrected DFT energy of this material per atom in eV/atom."
+          },
+          "formation_energy_per_atom": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Formation Energy Per Atom",
+            "description": "The formation energy per atom in eV/atom."
+          },
+          "energy_above_hull": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Energy Above Hull",
+            "description": "The energy above the hull in eV/Atom."
+          },
+          "is_stable": {
+            "type": "boolean",
+            "title": "Is Stable",
+            "description": "Flag for whether this material is on the hull and therefore stable.",
+            "default": false
+          },
+          "equilibrium_reaction_energy_per_atom": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Equilibrium Reaction Energy Per Atom",
+            "description": "The reaction energy of a stable entry from the neighboring equilibrium stable materials in eV. Also known as the inverse distance to hull."
+          },
+          "decomposes_to": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DecompositionProduct"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decomposes To",
+            "description": "List of decomposition data for this material. Only valid for metastable or unstable material."
+          },
+          "builder_meta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmmetMeta"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Builder metadata."
+          },
+          "nsites": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nsites",
+            "description": "Total number of sites in the structure."
+          },
+          "elements": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elements",
+            "description": "List of elements in the material."
+          },
+          "nelements": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nelements",
+            "description": "Number of elements."
+          },
+          "composition": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Composition",
+            "description": "Full composition for the material."
+          },
+          "composition_reduced": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reduced Composition",
+            "description": "Simplified representation of the composition."
+          },
+          "formula_pretty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pretty Formula",
+            "description": "Cleaned representation of the formula."
+          },
+          "formula_anonymous": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anonymous Formula",
+            "description": "Anonymized representation of the formula."
+          },
+          "chemsys": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chemical System",
+            "description": "Dash-separated string of elements in the material."
+          },
+          "volume": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume",
+            "description": "Total volume for this structure in \u00c5\u00b3."
+          },
+          "density": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Density",
+            "description": "Density in g/cm\u00b3."
+          },
+          "density_atomic": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Packing Density",
+            "description": "The atomic packing density in \u00c5\u00b3/atom."
+          },
+          "symmetry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SymmetryData"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Symmetry data for this material."
+          },
+          "material_id": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Material Id",
+            "description": "The Materials Project ID of the material, used as a universal reference across property documents.This comes in the form: mp-******."
+          },
+          "deprecated": {
+            "type": "boolean",
+            "title": "Deprecated",
+            "description": "Whether this property document is deprecated.",
+            "default": true
+          },
+          "deprecation_reasons": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deprecation Reasons",
+            "description": "List of deprecation tags detailing why this document isn't valid."
+          },
+          "last_updated": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Updated",
+            "description": "Timestamp for the most recent calculation update for this property."
+          },
+          "origins": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PropertyOrigin"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origins",
+            "description": "Dictionary for tracking the provenance of properties."
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "Any warnings related to this property.",
+            "default": []
+          },
+          "structure": {
+            "$ref": "#/components/schemas/TypedStructureDict",
+            "title": "Structure",
+            "description": "The lowest energy structure for this material."
+          },
+          "property_name": {
+            "type": "string",
+            "title": "Property Name",
+            "default": "summary"
+          },
+          "task_ids": {
+            "items": {},
+            "type": "array",
+            "title": "Calculation IDs",
+            "description": "List of Calculations IDs associated with this material.",
+            "default": []
+          },
+          "has_props": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "boolean"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Props",
+            "description": "List of properties that are available for a given material."
+          }
+        },
+        "type": "object",
+        "required": [
+          "structure"
+        ],
+        "title": "SummaryDoc",
+        "description": "Summary information about materials and their properties, useful for materials\nscreening studies and searching."
+      }
+    }
+  }
+}

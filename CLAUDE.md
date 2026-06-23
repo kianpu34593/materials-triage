@@ -60,11 +60,17 @@ Package layout (monorepo):
   deterministic logic (`scoring.py`, `ranking.py`), hypothesis layer (`hypothesis.py`),
   audit-trace export (`run_trace.py`). Pure, no heavy deps.
 - `src/materials_triage/sources/` — `SourceAdapter` + the Materials Project adapter
-  (injected `http_get`, lazy `requests`). `retrieval/rag.py` — BM25 literature RAG.
+  (injected `http_get`, lazy `requests`). The adapter exposes `property_vocabulary()`
+  — its queryable property→unit surface — derived from the committed, generated
+  `_mp_fields.py` table (units + XC-functional origins). `retrieval/rag.py` — BM25
+  literature RAG.
 - `src/materials_triage/agent/` — Bedrock `HypothesisProvider` (`llm.py`), prompts,
   LangGraph `orchestrator.py` (9-step linear graph + checkpointer). `policy/guardrails.py`
   — input gate + trust-boundary wrapper. `memory/store.py` — lab memory.
 - `server/` — public-web-app hosting layer; imports the pure core, never the reverse.
+- `tools/` — dev-only generators, never part of the runtime package (on the test
+  pythonpath only): `gen_mp_vocab.py` parses the vendored MP OpenAPI snapshot
+  (`mp_summary_schema.json`) into the committed `sources/_mp_fields.py` table.
 - Heavy deps (`langchain-aws`, `requests`) live at the edges behind optional extras +
   lazy imports; the live Bedrock/MP/OpenAlex tests are `live`-marked (deselected in CI).
 

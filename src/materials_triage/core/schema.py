@@ -37,14 +37,17 @@ class Provenance(BaseModel):
 class PropertyValue(BaseModel):
     """A scientific value bound to the receipt proving where it came from.
 
-    The number and its unit are one inseparable fact; every value carries a
-    ``Provenance`` so the output validator can confirm nothing was invented.
+    The number and its unit are one inseparable fact (``unit`` is ``None`` for a
+    genuinely dimensionless quantity — refractive index, dielectric constant); every
+    value carries a ``Provenance`` so the output validator can confirm nothing was
+    invented. This is a deterministic-layer model the adapter fills from trusted API
+    data, not an LLM-built one, so its constraints are internal invariants.
     """
 
     model_config = ConfigDict(frozen=True)
 
     value: float | None = None
-    unit: str
+    unit: str | None
     missing: bool = False
     provenance: Provenance
 
