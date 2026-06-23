@@ -20,19 +20,36 @@ RAG, hypothesis layer, LLM provider, orchestrator, and guardrails are merged. Th
 ~10 tasks, each a **port-via-TDD** increment (working reference impl on `feat/fast-track-wire-guardrails`).
 One function at a time, stop for approval after each.
 
-**Build order (agreed 2026-06-22):**
-1. **#39** — derive source vocabulary from the published API schema + bind it into the hypothesis prompt.
-   *Foundational: kills the "vocab drift → empty results" bug and expands past today's 6 fields. Owns the
-   `FIELD_UNITS`/`_FIELD_ORIGIN` lockstep invariant.*
-2. **#38** — push the #37 predicates (boolean/element/count) server-side in the MP adapter (`_query_params`
-   only). *This is what actually makes "require a metal / cap element count" filter at the source — the fix
-   for "H₂O ranked top." Leverage order: spec expressiveness (#37 ✓) → server filters (#38) → prompt (#22).*
-3. **#20** output validator · **#35** synthesis · **#22** prompt templates (hypothesis + synthesis).
-4. **#34** — wire gate / hypothesis / synthesis / output_validate into the orchestrator nodes (replace the
-   pass-throughs).
-5. **#25/#26** renderers → **#27** CLI (`triage "<q>" --view pi|audit`; `resume`).
-6. **#41** notebooks refresh · **#40** RAG→synthesis (citations + caveats + ordering-fidelity; capstone,
-   unblocks after #35+#20).
+**Build order (agreed 2026-06-22).** Each `[ ]` is one TDD increment (one function, stop for approval).
+Port every increment from the reference impl on `feat/fast-track-wire-guardrails`.
+
+**1 · #39 — Source vocabulary binding** *(foundational: kills "vocab drift → empty results", expands past
+today's 6 fields; owns the `FIELD_UNITS`/`_FIELD_ORIGIN` lockstep invariant)*
+- [ ] `property_vocabulary()` on the MP adapter — derive queryable name surface from the published API schema
+- [ ] grow `FIELD_UNITS` + `_FIELD_ORIGIN` in lockstep with the new surface
+- [ ] bind the vocabulary into the hypothesis prompt ("use ONLY these names")
+
+**2 · #38 — Push #37 predicates server-side** (`_query_params` only) *(the "H₂O ranked top" fix; leverage
+order: spec expressiveness #37 ✓ → server filters #38 → prompt #22)*
+- [ ] BooleanConstraint → `_query_params`
+- [ ] ElementPredicate (all / any / none) → `_query_params`
+- [ ] CountConstraint (cap element count) → `_query_params`
+
+**3 · Synthesis & validation primitives** (port from reference)
+- [ ] **#20** output validator — every referenced ID + citation must resolve to retrieved provenance
+- [ ] **#35** synthesis — grounded narrative + mechanistic "why," each claim cited, no invented numbers
+- [ ] **#22** prompt templates — hypothesis + synthesis
+
+**4 · #34 — Wire the orchestrator** *(replace the four PASS-THROUGH nodes)*
+- [ ] gate node · [ ] hypothesis node · [ ] synthesis node · [ ] output_validate node
+
+**5 · Renderers → CLI** *(render BOTH views from ONE `TriageRun`)*
+- [ ] **#25** PI renderer (`view=pi`) · [ ] **#26** audit renderer (`view=audit`)
+- [ ] **#27** CLI — `triage "<q>" --view pi|audit`; `resume`
+
+**6 · Capstone / polish**
+- [ ] **#41** notebooks refresh
+- [ ] **#40** RAG→synthesis (citations + caveats + ordering-fidelity) — unblocks after #35 + #20
 
 **Out of scope for the CLI:** #28 (eval), #29/#30/#36 (docs), #31 (drop reasons), all HB* hosting tasks,
 #37 area B (element-class constants) + area C (ranking) — both **deferred** (low priority).
@@ -61,7 +78,7 @@ One function at a time, stop for approval after each.
   `_scalar` collapse. Port from it.
 
 ## Status
-- **`main` @ `cb3d92e`**, clean. 207 tests pass (3 `live` deselected).
+- **`main` @ `1745fe6`**, clean. 207 tests pass (3 `live` deselected).
 - **#37 done** (A #51 + D #55; B + C deferred). This unblocked **#38/#39/#41**.
 - **No parallel sessions in flight.** `feat/value-trust-metadata` merged (#55) + pruned.
 - **Known issues / loose ends:**
@@ -103,7 +120,7 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
   abort` → `axi run --intent`; verify locally with `PYTHONPATH="$PWD/src" pytest`. [memory: no-mistakes-run-bootstrap]
 
 ## Context for Next Session
-- **Branch:** `main` @ `cb3d92e`, clean. Build the next increment in a worktree (run pytest with
+- **Branch:** `main` @ `1745fe6`, clean. Build the next increment in a worktree (run pytest with
   `PYTHONPATH="$PWD/src" pytest`). Port from `feat/fast-track-wire-guardrails`.
 - **Verify merged state:** `python -m pytest -q` (207 pass, 3 deselected); `ruff check .`. Live (needs
   creds): `pytest -m live`.
