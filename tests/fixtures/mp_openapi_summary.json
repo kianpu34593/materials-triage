@@ -156,6 +156,18 @@
             ],
             "title": "Reduced Composition",
             "description": "Simplified representation of the composition."
+          },
+          "deprecated": {
+            "type": "boolean",
+            "title": "Deprecated",
+            "description": "Whether this property document is deprecated.",
+            "default": true
+          },
+          "theoretical": {
+            "type": "boolean",
+            "title": "Theoretical",
+            "description": "Whether the material is theoretical.",
+            "default": true
           }
         }
       }

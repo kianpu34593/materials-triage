@@ -11,7 +11,13 @@ import json
 from pathlib import Path
 
 import pytest
-from gen_mp_vocab import build_table, parse_summary_fields, vocabulary_fields
+from gen_mp_vocab import (
+    _VENDORED_SCHEMA,
+    build_table,
+    generate_table,
+    parse_summary_fields,
+    vocabulary_fields,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mp_openapi_summary.json"
 
@@ -53,6 +59,17 @@ def test_vocabulary_fields_keeps_vrh_moduli_but_not_composition_objects():
     assert "composition_reduced" not in surface
 
 
+def test_vocabulary_fields_excludes_document_metadata_flags():
+    """deprecated / theoretical / has_reconstructed are boolean, so they pass the
+    type filter — but they describe the *document*, not the material, and the LLM
+    shouldn't filter a shortlist on them. They're denied by name."""
+    surface = vocabulary_fields(parse_summary_fields(json.loads(FIXTURE.read_text())))
+
+    assert "deprecated" not in surface
+    assert "theoretical" not in surface
+    assert "is_metal" in surface  # a real boolean property still survives
+
+
 def test_build_table_merges_unit_and_origin_per_field():
     """The committed table pairs each vocabulary field with its hand-pinned unit and
     XC-functional origin (neither is in the schema). A dimensionless count carries an
@@ -80,3 +97,17 @@ def test_build_table_rejects_a_vocabulary_field_missing_from_metadata():
 
     with pytest.raises(ValueError, match="efermi"):
         build_table(surface, meta)
+
+
+def test_generate_table_covers_the_full_vendored_surface():
+    """End to end on the real vendored SummaryDoc schema: _FIELD_META covers the
+    whole vocabulary surface (no lockstep gap) and the confirmed findings hold —
+    band_gap traces to electronic_structure, the elastic moduli carry a unit but no
+    traceable functional (origin None), and a bare count has neither."""
+    table = generate_table(json.loads(_VENDORED_SCHEMA.read_text()))
+
+    assert len(table) == 39  # 42 numeric/bool+VRH fields, minus 3 document-metadata flags
+    assert table["band_gap"] == {"unit": "eV", "origin": "electronic_structure"}
+    assert table["bulk_modulus"] == {"unit": "GPa", "origin": None}  # untraceable functional
+    assert table["nelements"] == {"unit": None, "origin": None}  # bare count
+    assert "deprecated" not in table  # metadata flag excluded
