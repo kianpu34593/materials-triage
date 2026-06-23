@@ -12,10 +12,17 @@
     fieldset { border: 1px solid #8884; border-radius: 6px; margin: 1rem 0; }
     button { font: inherit; padding: .5rem 1.2rem; cursor: pointer; }
     .hint { color: #8888; font-size: .85rem; }
-    .result { background: #8881; border-radius: 6px; padding: 1rem; overflow-x: auto; white-space: pre; font: 14px/1.45 ui-monospace, monospace; }
+    .result { background: #8881; border-radius: 6px; padding: 1rem; white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.45 ui-monospace, monospace; }
     .banner { border-radius: 6px; padding: .8rem 1rem; margin: 1rem 0; }
     .banner.refusal { background: #f5a6231a; border: 1px solid #f5a623; }
     .banner.error { background: #e74c3c1a; border: 1px solid #e74c3c; }
+    .step { padding: .15rem 0; transition: opacity .2s; }
+    .step .mark { display: inline-block; width: 1.4em; text-align: center; }
+    .step.pending { opacity: .45; }
+    .step.running { font-weight: 600; }
+    .step.running .mark { animation: pulse 1s ease-in-out infinite; }
+    .step.done { color: #2e9e4f; }
+    @keyframes pulse { 50% { opacity: .3; } }
   </style>
 </head>
 <body>
@@ -32,6 +39,12 @@
     <p class="hint">Runs live against AWS Bedrock + Materials Project; a request can take 10&ndash;60s.</p>
   </form>
 
+  <!-- Live, JS-driven panes (filled by the SSE stream). -->
+  <div id="progress"></div>
+  <div id="result"></div>
+
+  <!-- No-JS fallback: full-page POST render. Hidden once JS takes over. -->
+  <noscript>
   {% if refusal %}
   <div class="banner refusal">
     <strong>Refused [{{ refusal.category }}]</strong>: {{ refusal.reason }}
@@ -46,5 +59,80 @@
   <h2>Result <span class="hint">({{ view }} view)</span></h2>
   <div class="result">{{ result_md }}</div>
   {% endif %}
+  </noscript>
+
+  <script>
+    const STEPS = {{ steps_json|safe }};
+    const form = document.querySelector("form");
+    const progress = document.getElementById("progress");
+    const result = document.getElementById("result");
+
+    const setState = (name, state) => {
+      const el = document.getElementById("step-" + name);
+      if (!el) return;
+      el.className = "step " + state;
+      el.querySelector(".mark").textContent =
+        state === "done" ? "✓" : state === "running" ? "…" : "○";
+    };
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const goal = form.goal.value.trim();
+      if (!goal) return;
+      const view = form.querySelector("input[name=view]:checked").value;
+
+      result.innerHTML = "";
+      progress.innerHTML =
+        "<h2>Running…</h2>" +
+        STEPS.map((s) =>
+          `<div class="step pending" id="step-${s.name}"><span class="mark">○</span> ${s.label}</div>`
+        ).join("");
+      if (STEPS[0]) setState(STEPS[0].name, "running");
+
+      const url = "/triage/stream?goal=" + encodeURIComponent(goal) +
+                  "&view=" + encodeURIComponent(view);
+      const es = new EventSource(url);
+
+      es.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "step") {
+          setState(msg.name, "done");
+          const i = STEPS.findIndex((s) => s.name === msg.name);
+          if (STEPS[i + 1]) setState(STEPS[i + 1].name, "running");
+        } else if (msg.type === "done") {
+          progress.querySelector("h2").textContent = "Done";
+          const h = document.createElement("h2");
+          h.textContent = "Result (" + msg.view + " view)";
+          const pane = document.createElement("div");
+          pane.className = "result";
+          pane.textContent = msg.result;
+          result.replaceChildren(h, pane);
+          es.close();
+        } else if (msg.type === "refused") {
+          const b = document.createElement("div");
+          b.className = "banner refusal";
+          b.innerHTML = "<strong>Refused [" + msg.category + "]</strong>: ";
+          b.appendChild(document.createTextNode(msg.reason));
+          progress.replaceChildren(b);
+          es.close();
+        } else if (msg.type === "error") {
+          const b = document.createElement("div");
+          b.className = "banner error";
+          b.innerHTML = "<strong>Error</strong>: ";
+          b.appendChild(document.createTextNode(msg.message));
+          progress.appendChild(b);
+          es.close();
+        }
+      };
+      es.onerror = () => {
+        if (es.readyState === EventSource.CLOSED) return;
+        es.close();
+        const b = document.createElement("div");
+        b.className = "banner error";
+        b.textContent = "Connection lost before the run finished.";
+        progress.appendChild(b);
+      };
+    });
+  </script>
 </body>
 </html>
