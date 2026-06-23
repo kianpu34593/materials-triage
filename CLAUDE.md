@@ -27,7 +27,10 @@ profile — the spec is LLM-built and remembered in lab memory).
 4. **Retrieve (code, not LLM)** — deterministic API calls; **v1: Materials Project only**. Returns
    candidates + `PropertyValue`s, each carrying `Provenance`.
 5. **Hard filters** — drop any candidate violating any hard constraint; each drop records a reason.
-6. **Ranking** — **v1: weighted average** of target properties; applies `on_missing` and flags missing data.
+6. **Ranking** — one of two selectable strategies, recorded per run on `TriageSpec.ranking_method`:
+   `arithmetic_mean` (the default, compensatory weighted average of target properties) or
+   `geometric_mean` (non-compensatory weighted geometric mean of per-target Derringer–Suich
+   desirabilities, where one zero desirability zeros the score). Applies `on_missing` and flags missing data.
 7. **Synthesis (LLM + RAG)** — grounded narrative + mechanistic "why," each claim cited; no invented numbers.
 8. **Output validator** — every referenced ID + citation must resolve to retrieved provenance; ungrounded → reject & retry.
 9. **Render** — `view=pi` concise summary · `view=audit` renders the full trace.
