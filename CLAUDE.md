@@ -62,7 +62,11 @@ Package layout (monorepo):
 - `src/materials_triage/sources/` — `SourceAdapter` + the Materials Project adapter
   (injected `http_get`, lazy `requests`). The adapter exposes `property_vocabulary()`
   — its queryable property→unit surface — derived from the committed, generated
-  `_mp_fields.py` table (units + XC-functional origins). `retrieval/rag.py` — BM25
+  `_mp_fields.py` table (`MP_FIELDS`: units + XC-functional origins). That module
+  also carries `PUSHABLE_PARAMS` — the distinct, larger `/summary` GET query-param
+  surface; the adapter pushes every hard filter MP can express server-side (numeric
+  bounds, booleans, element all/none, element count), gating each on that set and
+  acting as the single authority for what it pushes. `retrieval/rag.py` — BM25
   literature RAG.
 - `src/materials_triage/agent/` — Bedrock `HypothesisProvider` (`llm.py`), prompts,
   LangGraph `orchestrator.py` (9-step linear graph + checkpointer). `policy/guardrails.py`
@@ -70,7 +74,8 @@ Package layout (monorepo):
 - `server/` — public-web-app hosting layer; imports the pure core, never the reverse.
 - `tools/` — dev-only generators, never part of the runtime package (on the test
   pythonpath only): `gen_mp_vocab.py` parses the vendored MP OpenAPI snapshot
-  (`mp_summary_schema.json`) into the committed `sources/_mp_fields.py` table.
+  (`mp_summary_schema.json`) into the committed `sources/_mp_fields.py` module —
+  both the `MP_FIELDS` table and the `PUSHABLE_PARAMS` query-param set.
 - Heavy deps (`langchain-aws`, `requests`) live at the edges behind optional extras +
   lazy imports; the live Bedrock/MP/OpenAlex tests are `live`-marked (deselected in CI).
 

@@ -17,7 +17,7 @@ import os
 from collections.abc import Callable, Mapping
 
 from materials_triage.core.schema import Candidate, PropertyValue, Provenance, TriageSpec
-from materials_triage.sources._mp_fields import MP_FIELDS
+from materials_triage.sources._mp_fields import MP_FIELDS, PUSHABLE_PARAMS
 from materials_triage.sources.base import SourceAdapter
 
 #: A transport: ``(url, params, headers) -> parsed JSON envelope (dict)``.
@@ -81,26 +81,68 @@ class MaterialsProjectAdapter(SourceAdapter):
 _IDENTITY_FIELDS = ("material_id", "formula_pretty")
 _DEFAULT_LIMIT = 100
 
+#: Property name → the base of its MP range filter param, when it differs from the
+#: field name. The elastic moduli are *returned* as ``bulk_modulus``/``shear_modulus``
+#: (a Voigt-Reuss-Hill dict) but *filtered* via the VRH averages ``k_vrh``/``g_vrh`` —
+#: ``bulk_modulus_min`` is not a real query param. The only non-1:1 field→param cases;
+#: every other numeric field's range param is just ``<field>_min``/``<field>_max``.
+_FILTER_PARAM_BASE = {"bulk_modulus": "k_vrh", "shear_modulus": "g_vrh"}
+
 
 def _query_params(spec: TriageSpec) -> dict[str, str]:
     """Derive the API query from the spec: request exactly the columns the filter
     and ranker will read (the union of constrained and ranked property names) plus
-    the identity fields. Hard filtering itself stays the job of apply_hard_filters.
+    the identity fields, and push every hard filter MP can express server-side
+    (numeric bounds, booleans, exclude_elements/elements, nelements range), each
+    gated on PUSHABLE_PARAMS — the schema-derived set of real query-param names.
     """
     properties = {c.property_name for c in spec.constraints}
     properties |= {t.property_name for t in spec.ranking_targets}
     # origins is the per-property bridge to the task carrying each value's XC functional.
     fields = list(_IDENTITY_FIELDS) + ["origins"] + sorted(properties)
     params = {"_fields": ",".join(fields), "_limit": str(_DEFAULT_LIMIT)}
-    # Composition scoping is pushed server-side; the numeric bounds stay with
-    # apply_hard_filters, which remains the authority on what survives. Only the
-    # "all" quantifier maps to MP's AND-semantics `elements` param — "any"/"none"
-    # are honoured by the deterministic filter, not the query.
+    # Push every hard filter MP can express, each gated on PUSHABLE_PARAMS — the
+    # schema-derived set of real /summary query-param names. Server-side is the single
+    # authority for what it pushes (the live contract suite verifies MP honours each
+    # name); a predicate whose param isn't in the set is never sent, so it never 400s
+    # the query. Such a predicate (element "any" has no MP OR-param; is_magnetic and
+    # the like aren't query params at all) is currently enforced NOWHERE —
+    # apply_hard_filters only handles numeric spec.constraints, and these are read only
+    # here. Refocusing the local filter to enforce the DB-inexpressible predicates is
+    # task 2c in docs/handoff.md; before this work "any" was already enforced nowhere.
+    #
+    # Composition: "all" → AND-membership `elements`, "none" → `exclude_elements`.
     must_have = sorted(
         e for p in spec.element_predicates if p.quantifier == "all" for e in p.members
     )
-    if must_have:
+    if must_have and "elements" in PUSHABLE_PARAMS:
         params["elements"] = ",".join(must_have)
+    must_lack = sorted(
+        e for p in spec.element_predicates if p.quantifier == "none" for e in p.members
+    )
+    if must_lack and "exclude_elements" in PUSHABLE_PARAMS:
+        params["exclude_elements"] = ",".join(must_lack)
+    # Numeric bounds → inclusive <field>_min/<field>_max (or the VRH alias for the moduli).
+    for c in spec.constraints:
+        base = _FILTER_PARAM_BASE.get(c.property_name, c.property_name)
+        if c.min is not None and f"{base}_min" in PUSHABLE_PARAMS:
+            params[f"{base}_min"] = str(c.min)
+        if c.max is not None and f"{base}_max" in PUSHABLE_PARAMS:
+            params[f"{base}_max"] = str(c.max)
+    # Booleans → same-named exact-match param. Double-gate on PUSHABLE_PARAMS *and*
+    # FIELD_UNITS: BooleanConstraint.property_name is unrestricted (LLM proposals pass
+    # through verbatim), so requiring it also be a real retrievable property field stops
+    # a constraint named e.g. "deprecated"/"formula"/"_all_fields" — query params that
+    # aren't boolean properties — from colliding with a non-boolean param.
+    for b in spec.boolean_constraints:
+        if b.property_name in PUSHABLE_PARAMS and b.property_name in FIELD_UNITS:
+            params[b.property_name] = "true" if b.required else "false"
+    # Element-count cap → inclusive nelements range.
+    if spec.count is not None:
+        if spec.count.min is not None and "nelements_min" in PUSHABLE_PARAMS:
+            params["nelements_min"] = str(spec.count.min)
+        if spec.count.max is not None and "nelements_max" in PUSHABLE_PARAMS:
+            params["nelements_max"] = str(spec.count.max)
     return params
 
 

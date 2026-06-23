@@ -42,7 +42,12 @@ unwraps the transport envelope, pins units the payload omits, attaches provenanc
 
 - **Not every constraint is pushable server-side.** The adapter scopes the query, but the
   deterministic `apply_hard_filters`/`rank` stages remain the filtering/ranking authority — the
-  adapter never silently filters.
+  adapter never silently filters. *(#38, later refinement — partly reversed: the adapter now
+  pushes every hard filter MP can express, gated on the schema-derived `PUSHABLE_PARAMS`, and is
+  the **single authority** for those pushed filters — there is no redundant local re-check.
+  `apply_hard_filters` stays the authority only for the DB-inexpressible complement, e.g. element
+  `any`. Correctness of the pushed filters is guaranteed by a `live`-marked contract suite, not a
+  local backstop.)*
 - **Network reality** — latency, rate limits, pagination. Mitigated by the step-cache (re-runs
   reuse retrieval) and a `_limit` cap; live calls sit behind a deselected `live` test marker.
 - **API drift** — a source changing its schema breaks one adapter; the per-source field→unit
@@ -65,7 +70,9 @@ unwraps the transport envelope, pins units the payload omits, attaches provenanc
   property names are fetchable (`None` unit = dimensionless); retrieval itself stays the
   single `retrieve` method. The MP adapter's field→unit table referenced above is no
   longer hand-typed: it is generated from the vendored MP OpenAPI snapshot by
-  `tools/gen_mp_vocab.py` into a committed `sources/_mp_fields.py` (units + XC-functional
-  origins), and `FIELD_UNITS`/`_FIELD_ORIGIN` derive from it — keeping the surface in
-  lockstep with the schema while the "localizes the blast radius" property above still
-  holds.
+  `tools/gen_mp_vocab.py` into a committed `sources/_mp_fields.py` (the `MP_FIELDS` table:
+  units + XC-functional origins), and `FIELD_UNITS`/`_FIELD_ORIGIN` derive from it — keeping
+  the surface in lockstep with the schema while the "localizes the blast radius" property above
+  still holds. The same generator also emits `PUSHABLE_PARAMS` — the `/summary` GET query-param
+  surface (distinct from, and larger than, the retrievable fields) — which gates the server-side
+  filter push (#38).

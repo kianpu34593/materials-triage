@@ -1,5 +1,26 @@
 {
   "openapi": "3.1.0",
+  "paths": {
+    "/materials/summary/": {
+      "get": {
+        "operationId": "search_materials_summary__get",
+        "parameters": [
+          { "name": "elements", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "exclude_elements", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "nelements_min", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "nelements_max", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "band_gap_min", "in": "query", "required": false, "schema": { "type": "number" } },
+          { "name": "band_gap_max", "in": "query", "required": false, "schema": { "type": "number" } },
+          { "name": "k_vrh_min", "in": "query", "required": false, "schema": { "type": "number" } },
+          { "name": "k_vrh_max", "in": "query", "required": false, "schema": { "type": "number" } },
+          { "name": "is_stable", "in": "query", "required": false, "schema": { "type": "boolean" } },
+          { "name": "is_metal", "in": "query", "required": false, "schema": { "type": "boolean" } },
+          { "name": "_fields", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "_limit", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ]
+      }
+    }
+  },
   "components": {
     "schemas": {
       "SummaryDoc": {

@@ -16,6 +16,7 @@ from gen_mp_vocab import (
     _VENDORED_SCHEMA,
     build_table,
     generate_table,
+    parse_query_params,
     parse_summary_fields,
     render_module,
     vocabulary_fields,
@@ -33,6 +34,20 @@ def test_parser_classifies_summary_fields_by_scalar_type():
     assert fields["band_gap"] == "number"  # anyOf[number, null] -> number
     assert fields["is_stable"] == "boolean"  # plain boolean (no anyOf wrapper)
     assert fields["nelements"] == "integer"  # anyOf[integer, null] -> integer
+
+
+def test_parse_query_params_extracts_summary_filter_param_names():
+    """The pushable surface is the /summary GET endpoint's declared query params —
+    a DISTINCT, larger set than the retrievable fields. The parser reads their names
+    so the adapter can gate what it pushes on real param names (is_magnetic is
+    retrievable but NOT a query param, so it must be absent)."""
+    params = parse_query_params(json.loads(FIXTURE.read_text()))
+
+    assert "is_stable" in params  # queryable boolean
+    assert "band_gap_min" in params  # numeric range param
+    assert "k_vrh_min" in params  # VRH modulus filters via k_vrh, not bulk_modulus_min
+    assert "exclude_elements" in params  # composition operator
+    assert "is_magnetic" not in params  # retrievable field, but not a query param (400s)
 
 
 def test_vocabulary_fields_keeps_numeric_and_boolean_drops_the_rest():
@@ -115,6 +130,21 @@ def test_generate_table_covers_the_full_vendored_surface():
     assert "deprecated" not in table  # metadata flag excluded
 
 
+def test_render_module_emits_the_pushable_params_set():
+    """The generated module also carries PUSHABLE_PARAMS — the schema-derived gate the
+    adapter pushes against — emitted sorted for a stable diff."""
+    module = render_module(
+        {"band_gap": {"unit": "eV", "origin": "electronic_structure"}},
+        {"band_gap_min", "is_stable", "k_vrh_min"},
+        source="x",
+    )
+
+    assert "PUSHABLE_PARAMS" in module
+    assert '"band_gap_min"' in module
+    assert '"is_stable"' in module
+    assert '"k_vrh_min"' in module
+
+
 def test_committed_table_is_in_sync_with_the_generator():
     """The checked-in ``_mp_fields.py`` must equal what regenerating from the vendored
     schema + ``_FIELD_META`` produces — otherwise an edit to either leaves a stale
@@ -122,6 +152,6 @@ def test_committed_table_is_in_sync_with_the_generator():
     ``python tools/gen_mp_vocab.py``."""
     openapi = json.loads(_VENDORED_SCHEMA.read_text())
     source = openapi.get("_api_version") or openapi.get("_source") or "vendored schema"
-    regenerated = render_module(generate_table(openapi), source=source)
+    regenerated = render_module(generate_table(openapi), parse_query_params(openapi), source=source)
 
     assert _OUTPUT.read_text() == regenerated

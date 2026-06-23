@@ -71,7 +71,7 @@
               }
             ],
             "title": "Weighted Surface Energy Ev Per Ang2",
-            "description": "Weighted surface energy in eV/\u00c5\u00b2."
+            "description": "Weighted surface energy in eV/Å²."
           },
           "weighted_surface_energy": {
             "anyOf": [
@@ -83,7 +83,7 @@
               }
             ],
             "title": "Weighted Surface Energy",
-            "description": "Weighted surface energy in J/m\u00b2."
+            "description": "Weighted surface energy in J/m²."
           },
           "weighted_work_function": {
             "anyOf": [
@@ -281,7 +281,7 @@
               }
             ],
             "title": "Total Magnetization",
-            "description": "Total magnetization in \u03bcB."
+            "description": "Total magnetization in μB."
           },
           "total_magnetization_normalized_vol": {
             "anyOf": [
@@ -293,7 +293,7 @@
               }
             ],
             "title": "Total Magnetization Normalized Vol",
-            "description": "Total magnetization normalized by volume in \u03bcB/\u212b\u00b3."
+            "description": "Total magnetization normalized by volume in μB/Å³."
           },
           "total_magnetization_normalized_formula_units": {
             "anyOf": [
@@ -305,7 +305,7 @@
               }
             ],
             "title": "Total Magnetization Normalized Formula Units",
-            "description": "Total magnetization normalized by formula unit in \u03bcB/f.u. ."
+            "description": "Total magnetization normalized by formula unit in μB/f.u. ."
           },
           "num_magnetic_sites": {
             "anyOf": [
@@ -701,7 +701,7 @@
               }
             ],
             "title": "Volume",
-            "description": "Total volume for this structure in \u00c5\u00b3."
+            "description": "Total volume for this structure in Å³."
           },
           "density": {
             "anyOf": [
@@ -713,7 +713,7 @@
               }
             ],
             "title": "Density",
-            "description": "Density in g/cm\u00b3."
+            "description": "Density in g/cm³."
           },
           "density_atomic": {
             "anyOf": [
@@ -725,7 +725,7 @@
               }
             ],
             "title": "Packing Density",
-            "description": "The atomic packing density in \u00c5\u00b3/atom."
+            "description": "The atomic packing density in Å³/atom."
           },
           "symmetry": {
             "anyOf": [
@@ -838,6 +838,2034 @@
         ],
         "title": "SummaryDoc",
         "description": "Summary information about materials and their properties, useful for materials\nscreening studies and searching."
+      }
+    }
+  },
+  "paths": {
+    "/materials/summary/": {
+      "get": {
+        "operationId": "search_materials_summary__get",
+        "parameters": [
+          {
+            "name": "material_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated list of material_id values to query on",
+              "title": "Material Ids"
+            }
+          },
+          {
+            "name": "formula",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query by formula including anonymized formula or by including wild cards. A comma delimited string list of anonymous formulas or regular formulas can also be provided.",
+              "title": "Formula"
+            }
+          },
+          {
+            "name": "chemsys",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A comma delimited string list of chemical systems. Wildcards for unknown elements only supported for single chemsys queries",
+              "title": "Chemsys"
+            }
+          },
+          {
+            "name": "elements",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 60
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query by elements in the material composition as a comma-separated list",
+              "title": "Elements"
+            }
+          },
+          {
+            "name": "exclude_elements",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 60
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query by excluded elements in the material composition as a comma-separated list",
+              "title": "Exclude Elements"
+            }
+          },
+          {
+            "name": "possible_species",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Comma delimited list of element symbols appended with oxidation states.                 (e.g. Cr2+,O2-)",
+              "title": "Possible Species"
+            }
+          },
+          {
+            "name": "crystal_system",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Crystal system of the material. If a comma-separated string, will query by multiple crystal systems.",
+              "title": "Crystal System"
+            }
+          },
+          {
+            "name": "spacegroup_number",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Space group number of the material. If a comma-separated string, will query by multiple space group numbers.",
+              "title": "Spacegroup Number"
+            }
+          },
+          {
+            "name": "spacegroup_symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Space group symbol of the material. If a comma-separated string, will query by multiple space group numbers.",
+              "title": "Spacegroup Symbol"
+            }
+          },
+          {
+            "name": "is_stable",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether the material is stable.",
+              "title": "Is Stable"
+            }
+          },
+          {
+            "name": "theoretical",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether the material is theoretical.",
+              "title": "Theoretical"
+            }
+          },
+          {
+            "name": "ordering",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Ordering"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Magnetic ordering of the material.",
+              "title": "Ordering"
+            }
+          },
+          {
+            "name": "is_gap_direct",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether a band gap is direct or not.",
+              "title": "Is Gap Direct"
+            }
+          },
+          {
+            "name": "is_metal",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether the material is considered a metal.",
+              "title": "Is Metal"
+            }
+          },
+          {
+            "name": "weighted_surface_energy_EV_PER_ANG2_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of weighted_surface_energy_EV_PER_ANG2",
+              "title": "Weighted Surface Energy Ev Per Ang2 Max"
+            }
+          },
+          {
+            "name": "weighted_surface_energy_EV_PER_ANG2_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of weighted_surface_energy_EV_PER_ANG2",
+              "title": "Weighted Surface Energy Ev Per Ang2 Min"
+            }
+          },
+          {
+            "name": "weighted_surface_energy_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of weighted_surface_energy",
+              "title": "Weighted Surface Energy Max"
+            }
+          },
+          {
+            "name": "weighted_surface_energy_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of weighted_surface_energy",
+              "title": "Weighted Surface Energy Min"
+            }
+          },
+          {
+            "name": "weighted_work_function_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of weighted_work_function",
+              "title": "Weighted Work Function Max"
+            }
+          },
+          {
+            "name": "weighted_work_function_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of weighted_work_function",
+              "title": "Weighted Work Function Min"
+            }
+          },
+          {
+            "name": "surface_anisotropy_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of surface_anisotropy",
+              "title": "Surface Anisotropy Max"
+            }
+          },
+          {
+            "name": "surface_anisotropy_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of surface_anisotropy",
+              "title": "Surface Anisotropy Min"
+            }
+          },
+          {
+            "name": "shape_factor_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of shape_factor",
+              "title": "Shape Factor Max"
+            }
+          },
+          {
+            "name": "shape_factor_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of shape_factor",
+              "title": "Shape Factor Min"
+            }
+          },
+          {
+            "name": "e_ij_max_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of e_ij_max",
+              "title": "E Ij Max Max"
+            }
+          },
+          {
+            "name": "e_ij_max_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of e_ij_max",
+              "title": "E Ij Max Min"
+            }
+          },
+          {
+            "name": "e_total_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of e_total",
+              "title": "E Total Max"
+            }
+          },
+          {
+            "name": "e_total_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of e_total",
+              "title": "E Total Min"
+            }
+          },
+          {
+            "name": "e_ionic_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of e_ionic",
+              "title": "E Ionic Max"
+            }
+          },
+          {
+            "name": "e_ionic_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of e_ionic",
+              "title": "E Ionic Min"
+            }
+          },
+          {
+            "name": "e_electronic_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of e_electronic",
+              "title": "E Electronic Max"
+            }
+          },
+          {
+            "name": "e_electronic_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of e_electronic",
+              "title": "E Electronic Min"
+            }
+          },
+          {
+            "name": "n_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of n",
+              "title": "N Max"
+            }
+          },
+          {
+            "name": "n_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of n",
+              "title": "N Min"
+            }
+          },
+          {
+            "name": "universal_anisotropy_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of universal_anisotropy",
+              "title": "Universal Anisotropy Max"
+            }
+          },
+          {
+            "name": "universal_anisotropy_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of universal_anisotropy",
+              "title": "Universal Anisotropy Min"
+            }
+          },
+          {
+            "name": "homogeneous_poisson_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of homogeneous_poisson",
+              "title": "Homogeneous Poisson Max"
+            }
+          },
+          {
+            "name": "homogeneous_poisson_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of homogeneous_poisson",
+              "title": "Homogeneous Poisson Min"
+            }
+          },
+          {
+            "name": "total_magnetization_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of total_magnetization",
+              "title": "Total Magnetization Max"
+            }
+          },
+          {
+            "name": "total_magnetization_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of total_magnetization",
+              "title": "Total Magnetization Min"
+            }
+          },
+          {
+            "name": "total_magnetization_normalized_vol_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of total_magnetization_normalized_vol",
+              "title": "Total Magnetization Normalized Vol Max"
+            }
+          },
+          {
+            "name": "total_magnetization_normalized_vol_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of total_magnetization_normalized_vol",
+              "title": "Total Magnetization Normalized Vol Min"
+            }
+          },
+          {
+            "name": "total_magnetization_normalized_formula_units_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of total_magnetization_normalized_formula_units",
+              "title": "Total Magnetization Normalized Formula Units Max"
+            }
+          },
+          {
+            "name": "total_magnetization_normalized_formula_units_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of total_magnetization_normalized_formula_units",
+              "title": "Total Magnetization Normalized Formula Units Min"
+            }
+          },
+          {
+            "name": "num_magnetic_sites_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of num_magnetic_sites",
+              "title": "Num Magnetic Sites Max"
+            }
+          },
+          {
+            "name": "num_magnetic_sites_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of num_magnetic_sites",
+              "title": "Num Magnetic Sites Min"
+            }
+          },
+          {
+            "name": "num_magnetic_sites",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for num_magnetic_sites being equal to an exact value",
+              "title": "Num Magnetic Sites"
+            }
+          },
+          {
+            "name": "num_magnetic_sites_not_eq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for num_magnetic_sites being not equal to an exact value",
+              "title": "Num Magnetic Sites Not Eq"
+            }
+          },
+          {
+            "name": "num_magnetic_sites_eq_any",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Query for num_magnetic_sites being any of these values. Provide a comma separated list.",
+              "title": "Num Magnetic Sites Eq Any"
+            }
+          },
+          {
+            "name": "num_magnetic_sites_neq_any",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Query for num_magnetic_sites being not any of these values.                             Provide a comma separated list.",
+              "title": "Num Magnetic Sites Neq Any"
+            }
+          },
+          {
+            "name": "num_unique_magnetic_sites_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of num_unique_magnetic_sites",
+              "title": "Num Unique Magnetic Sites Max"
+            }
+          },
+          {
+            "name": "num_unique_magnetic_sites_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of num_unique_magnetic_sites",
+              "title": "Num Unique Magnetic Sites Min"
+            }
+          },
+          {
+            "name": "num_unique_magnetic_sites",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for num_unique_magnetic_sites being equal to an exact value",
+              "title": "Num Unique Magnetic Sites"
+            }
+          },
+          {
+            "name": "num_unique_magnetic_sites_not_eq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for num_unique_magnetic_sites being not equal to an exact value",
+              "title": "Num Unique Magnetic Sites Not Eq"
+            }
+          },
+          {
+            "name": "num_unique_magnetic_sites_eq_any",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Query for num_unique_magnetic_sites being any of these values. Provide a comma separated list.",
+              "title": "Num Unique Magnetic Sites Eq Any"
+            }
+          },
+          {
+            "name": "num_unique_magnetic_sites_neq_any",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Query for num_unique_magnetic_sites being not any of these values.                             Provide a comma separated list.",
+              "title": "Num Unique Magnetic Sites Neq Any"
+            }
+          },
+          {
+            "name": "dos_energy_up_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of dos_energy_up",
+              "title": "Dos Energy Up Max"
+            }
+          },
+          {
+            "name": "dos_energy_up_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of dos_energy_up",
+              "title": "Dos Energy Up Min"
+            }
+          },
+          {
+            "name": "dos_energy_down_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of dos_energy_down",
+              "title": "Dos Energy Down Max"
+            }
+          },
+          {
+            "name": "dos_energy_down_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of dos_energy_down",
+              "title": "Dos Energy Down Min"
+            }
+          },
+          {
+            "name": "band_gap_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of band_gap",
+              "title": "Band Gap Max"
+            }
+          },
+          {
+            "name": "band_gap_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of band_gap",
+              "title": "Band Gap Min"
+            }
+          },
+          {
+            "name": "cbm_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of cbm",
+              "title": "Cbm Max"
+            }
+          },
+          {
+            "name": "cbm_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of cbm",
+              "title": "Cbm Min"
+            }
+          },
+          {
+            "name": "vbm_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of vbm",
+              "title": "Vbm Max"
+            }
+          },
+          {
+            "name": "vbm_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of vbm",
+              "title": "Vbm Min"
+            }
+          },
+          {
+            "name": "efermi_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of efermi",
+              "title": "Efermi Max"
+            }
+          },
+          {
+            "name": "efermi_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of efermi",
+              "title": "Efermi Min"
+            }
+          },
+          {
+            "name": "uncorrected_energy_per_atom_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of uncorrected_energy_per_atom",
+              "title": "Uncorrected Energy Per Atom Max"
+            }
+          },
+          {
+            "name": "uncorrected_energy_per_atom_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of uncorrected_energy_per_atom",
+              "title": "Uncorrected Energy Per Atom Min"
+            }
+          },
+          {
+            "name": "energy_per_atom_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of energy_per_atom",
+              "title": "Energy Per Atom Max"
+            }
+          },
+          {
+            "name": "energy_per_atom_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of energy_per_atom",
+              "title": "Energy Per Atom Min"
+            }
+          },
+          {
+            "name": "formation_energy_per_atom_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of formation_energy_per_atom",
+              "title": "Formation Energy Per Atom Max"
+            }
+          },
+          {
+            "name": "formation_energy_per_atom_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of formation_energy_per_atom",
+              "title": "Formation Energy Per Atom Min"
+            }
+          },
+          {
+            "name": "energy_above_hull_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of energy_above_hull",
+              "title": "Energy Above Hull Max"
+            }
+          },
+          {
+            "name": "energy_above_hull_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of energy_above_hull",
+              "title": "Energy Above Hull Min"
+            }
+          },
+          {
+            "name": "equilibrium_reaction_energy_per_atom_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of equilibrium_reaction_energy_per_atom",
+              "title": "Equilibrium Reaction Energy Per Atom Max"
+            }
+          },
+          {
+            "name": "equilibrium_reaction_energy_per_atom_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of equilibrium_reaction_energy_per_atom",
+              "title": "Equilibrium Reaction Energy Per Atom Min"
+            }
+          },
+          {
+            "name": "nsites_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of nsites",
+              "title": "Nsites Max"
+            }
+          },
+          {
+            "name": "nsites_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of nsites",
+              "title": "Nsites Min"
+            }
+          },
+          {
+            "name": "nsites",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for nsites being equal to an exact value",
+              "title": "Nsites"
+            }
+          },
+          {
+            "name": "nsites_not_eq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for nsites being not equal to an exact value",
+              "title": "Nsites Not Eq"
+            }
+          },
+          {
+            "name": "nsites_eq_any",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Query for nsites being any of these values. Provide a comma separated list.",
+              "title": "Nsites Eq Any"
+            }
+          },
+          {
+            "name": "nsites_neq_any",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Query for nsites being not any of these values.                             Provide a comma separated list.",
+              "title": "Nsites Neq Any"
+            }
+          },
+          {
+            "name": "nelements_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of nelements",
+              "title": "Nelements Max"
+            }
+          },
+          {
+            "name": "nelements_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of nelements",
+              "title": "Nelements Min"
+            }
+          },
+          {
+            "name": "nelements",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for nelements being equal to an exact value",
+              "title": "Nelements"
+            }
+          },
+          {
+            "name": "nelements_not_eq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for nelements being not equal to an exact value",
+              "title": "Nelements Not Eq"
+            }
+          },
+          {
+            "name": "nelements_eq_any",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Query for nelements being any of these values. Provide a comma separated list.",
+              "title": "Nelements Eq Any"
+            }
+          },
+          {
+            "name": "nelements_neq_any",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Query for nelements being not any of these values.                             Provide a comma separated list.",
+              "title": "Nelements Neq Any"
+            }
+          },
+          {
+            "name": "volume_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of volume",
+              "title": "Volume Max"
+            }
+          },
+          {
+            "name": "volume_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of volume",
+              "title": "Volume Min"
+            }
+          },
+          {
+            "name": "density_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of density",
+              "title": "Density Max"
+            }
+          },
+          {
+            "name": "density_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of density",
+              "title": "Density Min"
+            }
+          },
+          {
+            "name": "density_atomic_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for maximum value of density_atomic",
+              "title": "Density Atomic Max"
+            }
+          },
+          {
+            "name": "density_atomic_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query for minimum value of density_atomic",
+              "title": "Density Atomic Min"
+            }
+          },
+          {
+            "name": "k_voigt_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum value for the Voigt average of the bulk modulus in GPa.",
+              "title": "K Voigt Max"
+            }
+          },
+          {
+            "name": "k_voigt_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum value for the Voigt average of the bulk modulus in GPa.",
+              "title": "K Voigt Min"
+            }
+          },
+          {
+            "name": "k_reuss_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum value for the Reuss average of the bulk modulus in GPa.",
+              "title": "K Reuss Max"
+            }
+          },
+          {
+            "name": "k_reuss_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum value for the Reuss average of the bulk modulus in GPa.",
+              "title": "K Reuss Min"
+            }
+          },
+          {
+            "name": "k_vrh_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum value for the Voigt-Reuss-Hill average of the bulk modulus in GPa.",
+              "title": "K Vrh Max"
+            }
+          },
+          {
+            "name": "k_vrh_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum value for the Voigt-Reuss-Hill average of the bulk modulus in GPa.",
+              "title": "K Vrh Min"
+            }
+          },
+          {
+            "name": "g_voigt_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum value for the Voigt average of the shear modulus in GPa.",
+              "title": "G Voigt Max"
+            }
+          },
+          {
+            "name": "g_voigt_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum value for the Voigt average of the shear modulus in GPa.",
+              "title": "G Voigt Min"
+            }
+          },
+          {
+            "name": "g_reuss_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum value for the Reuss average of the shear modulus in GPa.",
+              "title": "G Reuss Max"
+            }
+          },
+          {
+            "name": "g_reuss_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum value for the Reuss average of the shear modulus in GPa.",
+              "title": "G Reuss Min"
+            }
+          },
+          {
+            "name": "g_vrh_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum value for the Voigt-Reuss-Hill average of the shear modulus in GPa.",
+              "title": "G Vrh Max"
+            }
+          },
+          {
+            "name": "g_vrh_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum value for the Voigt-Reuss-Hill average of the shear modulus in GPa.",
+              "title": "G Vrh Min"
+            }
+          },
+          {
+            "name": "has_reconstructed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether an entry or material has a reconstructed surface.",
+              "title": "Has Reconstructed"
+            }
+          },
+          {
+            "name": "has_props",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-delimited list of possible properties given by HasPropsEnum to search for.",
+              "title": "Has Props"
+            }
+          },
+          {
+            "name": "deprecated",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether the material is marked as deprecated",
+              "default": false,
+              "title": "Deprecated"
+            }
+          },
+          {
+            "name": "_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "description": "Page number to request (takes precedent over _limit and _skip).",
+              "title": " Page"
+            }
+          },
+          {
+            "name": "_per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "description": "Number of entries to show per page (takes precedent over _limit and _skip). Limited to 1000.",
+              "default": 100,
+              "title": " Per Page"
+            }
+          },
+          {
+            "name": "_skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "description": "Number of entries to skip in the search.",
+              "default": 0,
+              "title": " Skip"
+            }
+          },
+          {
+            "name": "_limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "description": "Max number of entries to return in a single query. Limited to 1000.",
+              "default": 100,
+              "title": " Limit"
+            }
+          },
+          {
+            "name": "_fields",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Fields to project from SummaryDoc as a list of comma separated strings.                    Fields include: `prop_origins` `phonon_IDs` `theoretical` `database_IDs` `possible_species` `weighted_surface_energy_EV_PER_ANG2` `weighted_surface_energy` `weighted_work_function` `surface_anisotropy` `shape_factor` `has_reconstructed` `e_ij_max` `e_total` `e_ionic` `e_electronic` `n` `bulk_modulus` `shear_modulus` `universal_anisotropy` `homogeneous_poisson` `is_magnetic` `ordering` `total_magnetization` `total_magnetization_normalized_vol` `total_magnetization_normalized_formula_units` `num_magnetic_sites` `num_unique_magnetic_sites` `types_of_magnetic_species` `dos` `dos_energy_up` `dos_energy_down` `bandstructure` `band_gap` `cbm` `vbm` `efermi` `is_gap_direct` `is_metal` `grain_boundaries` `xas` `uncorrected_energy_per_atom` `energy_per_atom` `formation_energy_per_atom` `energy_above_hull` `is_stable` `equilibrium_reaction_energy_per_atom` `decomposes_to` `builder_meta` `nsites` `elements` `nelements` `composition` `composition_reduced` `formula_pretty` `formula_anonymous` `chemsys` `volume` `density` `density_atomic` `symmetry` `material_id` `deprecated` `deprecation_reasons` `last_updated` `origins` `warnings` `structure` `property_name` `task_ids` `has_props`",
+              "title": " Fields"
+            }
+          },
+          {
+            "name": "_all_fields",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include all fields.",
+              "default": false,
+              "title": " All Fields"
+            }
+          },
+          {
+            "name": "license",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "BY-C",
+                    "BY-NC",
+                    "All"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query by license. Can be commercial or non-commercial, or both",
+              "default": "BY-C",
+              "title": "License"
+            }
+          },
+          {
+            "name": "_sort_fields",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma delimited fields to sort with. Prefixing '-' to a field will force a sort in descending order.",
+              "title": " Sort Fields"
+            }
+          },
+          {
+            "name": "batch_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query by batch identifier",
+              "title": "Batch Id"
+            }
+          },
+          {
+            "name": "batch_id_not_eq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exclude batch identifier",
+              "title": "Batch Id Not Eq"
+            }
+          },
+          {
+            "name": "batch_id_eq_any",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Query by a comma-separated list of batch identifiers",
+              "title": "Batch Id Eq Any"
+            }
+          },
+          {
+            "name": "batch_id_neq_any",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exclude a comma-separated list of batch identifiers",
+              "title": "Batch Id Neq Any"
+            }
+          },
+          {
+            "name": "id_format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional. If set to 'legacy', MP identifier fields in the response are returned in the form 'mp-149'. If set to 'alpha', they are returned in the padded AlphaID form 'mp-aaaaaaft'. If omitted (or set to any other value), identifiers are returned in their stored form. This is a purely cosmetic transform; query inputs accept either shape regardless.",
+              "title": "Id Format"
+            }
+          }
+        ]
       }
     }
   }
