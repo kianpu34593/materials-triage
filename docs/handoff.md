@@ -1,4 +1,4 @@
-# Session Handoff - 2026-06-23 10:18
+# Session Handoff - 2026-06-23 12:01
 
 > Single living handoff, git-tracked at `docs/handoff.md`. Keep it **lean** — deep per-session
 > history lives in [`docs/handoff-archive.md`](handoff-archive.md); recurring gotchas live in
@@ -130,12 +130,34 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
 - [ ] **#40** RAG→synthesis (citations + caveats + ordering-fidelity) — unblocks after #35 + #20
 
 **Out of scope for the CLI:** #28 (eval), #29/#30/#36 (docs), #31 (drop reasons), all HB* hosting tasks,
-#37 area B (element-class constants) + area C (ranking) — both **deferred** (low priority).
+#37 area B (element-class constants) — **deferred**. (#37 area C "ranking beyond weighted-sum" is **partly
+shipped** by #66 — the geometric-mean desirability ranker — see "Ranking" below.)
+
+**Ranking — selectable arithmetic/geometric-mean rankers — ✅ MERGED (#66, 2026-06-23).** A second
+deterministic ranker now sits alongside the preserved weighted-sum, selected per run by
+`TriageSpec.ranking_method` (recorded → traceable/replayable). `arithmetic_mean` (default, unchanged
+behavior) is the old `rank()` renamed; `geometric_mean` is the non-compensatory weighted geometric mean of
+per-target **Derringer–Suich desirability curves** (`maximize`/`minimize`/`target` "moderate-is-best" shapes
++ a curvature exponent). The contract is fail-fast at spec construction (no silent wrong answers):
+- **anchors/curvature are geometric-only** — rejected under `arithmetic_mean` (it scores via pool-relative
+  `normalize`, which would silently ignore them); a `target` direction *requires* `geometric_mean`.
+- **`geometric_mean` requires announced absolute bounds on every target** (no pool fallback) — so a `0`
+  desirability means a genuine acceptability-floor failure, not merely pool-worst (which the geometric mean
+  would catastrophically zero). Per direction: maximize→`lower`+`target`, minimize→`target`+`upper`,
+  target→all three; strictly ascending; the unused monotonic anchor must be omitted.
+- **`arithmetic_mean` keeps pool fallback** (additive, no catastrophic zero).
+- **Default stays `arithmetic_mean`** (zero-setup). Flipping the default to `geometric_mean` is **deferred to
+  the #34/#22 PR** — because a default-geometric spec forces every target to announce bounds, which nothing
+  upstream provides until the hypothesis prompt does. **The bounds announcement is the #34/#22 hypothesis
+  responsibility** (the ranking step only enforces via the schema → LLM retry). [memory:
+  desirability-ranking-bounds-same-source]
 
 ## What's merged on `main` (the foundation to build on)
 - **Core:** `core/schema.py` (all frozen models; `Provenance` now carries required `method` + optional
   `xc_functional`), `core/elements.py`, `core/scoring.py` (`apply_hard_filters`/`on_missing`),
-  `core/ranking.py` (weighted-average), `core/hypothesis.py` (models + `compile_spec`, `kind`-discriminated
+  `core/ranking.py` (**two selectable rankers**: `rank_arithmetic_mean` weighted-average + `rank_geometric_mean`
+  desirability, #66), `core/scoring.py` also carries the desirability primitives (`desirability_curve`,
+  `resolve_bounds`, `score_desirability`), `core/hypothesis.py` (models + `compile_spec`, `kind`-discriminated
   union). #37 spec expressiveness areas **A** (BooleanConstraint / ElementPredicate all·any·none /
   CountConstraint) + **D** (trust metadata) shipped.
 - **Retrieval:** `sources/base.py` + `stubs.py` + `materials_project.py` — MP adapter does a **two-call**
@@ -155,6 +177,12 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
   (R∩¬Q → local, ¬R∩¬Q → caveat). `core/scoring.py` `apply_local_filters` enforces local booleans
   (`boolean_mismatch`) + element `any` (`element_mismatch`); `Candidate.elements` + retrieve request-back;
   orchestrator `_make_filter_node(adapter)` runs both filters + writes `TriageRun.caveats`. Live-verified.
+- **Selectable rankers (merged #66):** `core/ranking.py` `rank_arithmetic_mean` (was `rank()`) +
+  `rank_geometric_mean`; desirability primitives in `core/scoring.py`; `TriageSpec.ranking_method`
+  (`arithmetic_mean` default | `geometric_mean`) dispatched in `orchestrator._rank_node` via `_RANKERS`.
+  `RankingTarget` gains `direction="target"` + `lower/target/upper/curvature`; `TriageSpec`/`RankingTarget`
+  validators enforce the geometric-only + announced-bounds + strict-ascending contract (see "Ranking" above).
+  CLAUDE.md step 6 + the demo notebook were synced by the PR. [memory: desirability-ranking-bounds-same-source]
 - **Agent:** `agent/llm.py` Bedrock `HypothesisProvider` (injected `complete` seam; `us.*` inference-profile
   model id). `agent/prompts.py` `ROLE_SYSTEM_PROMPT` + `build_chat_messages`. `agent/orchestrator.py`
   LangGraph graph with per-stage exclusion channels + retry + spec-build HITL gate; `core/run_trace.py`
@@ -172,16 +200,25 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
   assumption-not-verified bug is exactly how #61's review caught a crash. [memory: verify-against-main-not-reference-impl])
 
 ## Status
-- **`main` @ `f5d8c63`**, clean. **241 tests pass** (10 `live` deselected, incl. the new MP filter-contract suite).
-- **#38 + 2c done this session** (#63 server-side push, #64 exclusive-set local filter): the full
-  filtering architecture is on `main` — **server-side primary (PUSHABLE_PARAMS) + deterministic local filter
-  for the exclusive set (R∩¬Q) + loud caveats (¬R∩¬Q → TriageRun.caveats)**. `is_magnetic` and element `any`
-  now enforced end-to-end (were enforced nowhere before); live-verified.
+- **`main` @ `a40ef46`**, clean. **284 tests pass** (10 `live` deselected, incl. the MP filter-contract suite).
+- **Selectable rankers merged (#66):** arithmetic/geometric-mean rankers on `main` via
+  `TriageSpec.ranking_method`; the desirability contract (geometric-only anchors, geometric-requires-announced-
+  bounds, same-source/strict-ascending) is fail-fast at spec construction. Default stays `arithmetic_mean`;
+  geometric-as-default deferred to the #34/#22 PR (needs upstream bounds announcement). [memory:
+  desirability-ranking-bounds-same-source]
+- **#38 + 2c done** (#63 server-side push, #64 exclusive-set local filter): the full filtering architecture is
+  on `main` — **server-side primary (PUSHABLE_PARAMS) + deterministic local filter for the exclusive set
+  (R∩¬Q) + loud caveats (¬R∩¬Q → TriageRun.caveats)**. `is_magnetic` and element `any` enforced end-to-end;
+  live-verified.
 - **#39 supply side done** (merged #61). Increment 4 (prompt binding) → **#34**.
-- **#37 done** (A #51 + D #55; B + C deferred).
-- **Parallel work in flight:** `feat/desirability-ranker` (selectable geometric-mean desirability ranker) was
-  in a separate worktree + had its own no-mistakes run this session — independent, untouched by #63/#64.
+- **#37 done** (A #51 + D #55; B deferred; **C "ranking beyond weighted-sum" partly shipped by #66**).
+- **Parallel sessions:** the other worktrees are on `feat/retrieve-pagination` (2b, PR pending — was 529-blocked)
+  and `feat/synthesis-primitives`. Independent of this handoff; do not touch their branches.
 - **Known issues / loose ends:**
+  - **2 informational no-ops from #66's review** (intentional): (1) `rank_geometric_mean` stores raw `dᵢ` in
+    `ScoredCandidate.contributions` (multiplicative, do NOT sum to score) vs `rank_arithmetic_mean`'s additive
+    shares — a future audit renderer must not assume additivity. (2) `docs/ultimate-design.md` §C3 still frames
+    geometric-mean desirability as "future" — left as roadmap; reclassify when convenient.
   - **4 informational nits from #64's review** to fix opportunistically (next time touching the files):
     (1) `classify_predicates` comment oversells — the ¬R caveat is *additive* (explains the empty result),
     NOT *protective*; `apply_hard_filters` still drops the candidates as `missing_data`. (2) `classify_predicates`
@@ -241,6 +278,16 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
   adapter); functional lives in the task doc, varies per-property. [memory: materials-project-api, dft-xc-functional-comparability-v2]
 - **no-mistakes:** bootstrap from the **main repo** (not a worktree); `git push no-mistakes <branch>` → `axi
   abort` → `axi run --intent`; verify locally with `PYTHONPATH="$PWD/src" pytest`. [memory: no-mistakes-run-bootstrap]
+  *#66 corollary:* runs are per-branch and coexist concurrently (multiple sessions ran in parallel fine); a
+  worktree can drive `respond`/`rerun`, only the bootstrap *push* must come from the main repo. Transient
+  `529 Overloaded` API errors crash the no-mistakes Claude agents (review/fix/lint) → just `rerun`.
+- **Desirability/geometric ranker (#66): min-max normalization + a non-compensatory geometric mean is a trap.**
+  Pool-relative `d=0` (worst-in-pool) under `Π dᵢ^wᵢ` zeros a candidate's whole score for being last on *one*
+  axis — so the geometric ranker must use **absolute announced bounds** where `0` means a real floor failure,
+  never pool fallback. Mixing one announced + one pooled anchor also flips a ramp's sign (maximize → minimize)
+  → the **same-source rule**. The fix family is all fail-fast spec validation ("no silent wrong answers"): same
+  theme as H₂O. Announcing the bounds is an **upstream/hypothesis** duty (#34/#22). [memory:
+  desirability-ranking-bounds-same-source]
 
 ## Design direction (v2+): XC-functional-FIRST retrieval, not canonical-value acceptance
 *Raised by Kian 2026-06-23 while tracing #38's per-property functional handling. Important; likely **not v1**.*
@@ -285,9 +332,9 @@ property/material class *before* retrieval:
   this is the *consumption* — choose + fetch + flag/restrict ranking by functional).
 
 ## Context for Next Session
-- **Branch:** `main` @ `f5d8c63`, clean. Build the next increment in a worktree (run pytest with
+- **Branch:** `main` @ `a40ef46`, clean. Build the next increment in a worktree (run pytest with
   `PYTHONPATH="$PWD/src" pytest`). Port from `feat/fast-track-wire-guardrails`.
-- **Verify merged state:** `python -m pytest -q` (241 pass, 10 deselected); `ruff check .`. Live (needs
+- **Verify merged state:** `python -m pytest -q` (284 pass, 10 deselected); `ruff check .`. Live (needs
   creds): `pytest -m live`.
 - **Next up (pick one):** (a) **pagination** (2b — page `_skip`/`_limit` to exhaust the filtered set; the
   natural sibling now that #38 makes the page filterable; reuses the `caveats` channel for the "capped at N"
@@ -303,10 +350,12 @@ property/material class *before* retrieval:
   abort a commit → re-add + re-commit.
 - **Collaboration rules (CLAUDE.md):** ask before choosing between approaches; one function at a time then
   stop for approval; TDD via the `tdd` skill (never batch tests); **don't start coding until told.**
-- **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~ → **pagination (2b, untracked sibling)** ← suggested
-  next, #34, #20, #35, #22, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32, #33,
-  #37, **#39 (supply side; binding → #34)**, **#38 server-side push (#63)**, **2c exclusive-set local filter
-  (#64)**. Open within 2c: render caveats in views (blocked on the view layer #25–#27). Deferred: #37 area
-  B/C (area B on the critical path for "metal oxides"); the **multi-source filter abstraction** (universal
-  local / filter_capability / residual — "see how it goes"); **v2 XC-functional-first retrieval** (design note
+- **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~, ~~ranking #66~~ → **pagination (2b, in flight on
+  `feat/retrieve-pagination`)**, #34, #20, #35, #22, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21,
+  #23, #24, #32, #33, #37, **#39 (supply side; binding → #34)**, **#38 server-side push (#63)**, **2c
+  exclusive-set local filter (#64)**, **selectable rankers (#66)**. Open within 2c: render caveats in views
+  (blocked on the view layer #25–#27). **#34/#22 now also owns:** bind the source vocabulary into the
+  hypothesis prompt AND have the LLM announce desirability bounds for `geometric_mean` targets (prerequisite to
+  flipping the default to `geometric_mean`). Deferred: #37 area B (on the critical path for "metal oxides"); the
+  **multi-source filter abstraction** ("see how it goes"); **v2 XC-functional-first retrieval** (design note
   above). Hosting = HB1–HB10.
