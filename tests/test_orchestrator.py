@@ -17,7 +17,6 @@ from materials_triage.agent.orchestrator import (
     HypothesisConformanceError,
     InputRefused,
     SpecCompilationError,
-    SynthesisConformanceError,
     _output_validate_node,
     build_orchestrator,
     resume_run,
@@ -718,10 +717,12 @@ def test_synthesis_node_retries_when_a_claim_is_ungrounded_then_succeeds():
     assert "mp-999" in syn_provider.prompts[1]  # the ungrounded id was fed back
 
 
-def test_synthesis_node_raises_when_it_cannot_ground_within_the_cap():
+def test_synthesis_node_degrades_gracefully_when_it_cannot_ground():
     """If every attempt cites an unretrieved material, the node exhausts its retries
-    and raises SynthesisConformanceError — an ungrounded narrative never silently
-    reaches the output validator or the rendered result."""
+    and DEGRADES rather than crashing the run: it omits the narrative (synthesis stays
+    None) and surfaces a loud caveat, so the deterministic ranked shortlist — the
+    product's core value — is still delivered. The output validator passes because no
+    ungrounded narrative reaches it."""
     ungrounded = Synthesis(
         summary="Always invented.",
         claims=(GroundedClaim(text="bogus", record_id="mp-404"),),
@@ -734,10 +735,14 @@ def test_synthesis_node_raises_when_it_cannot_ground_within_the_cap():
     orchestrator = build_orchestrator(
         adapter=adapter, provider=provider, synthesis_provider=syn_provider
     )
-    config = {"configurable": {"thread_id": "synth-fail"}}
+    config = {"configurable": {"thread_id": "synth-degrade"}}
+    final = orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
 
-    with pytest.raises(SynthesisConformanceError):
-        orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+    # The run completed (no crash) and still produced the ranked shortlist.
+    assert final["synthesis"] is None
+    assert [sc.candidate.identifier for sc in final["result"].ranked] == ["mp-1"]
+    # A loud caveat explains the omitted narrative.
+    assert any("synthesis" in c.lower() for c in final["synthesis_caveats"])
 
 
 def test_hypothesis_node_grounds_the_prompt_in_rag_literature_via_extracted_keywords():

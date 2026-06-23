@@ -125,6 +125,21 @@ def test_build_synthesis_prompt_grounds_in_the_shortlist_goal_and_literature():
     assert "cite" in prompt.lower()  # the grounding instruction
 
 
+def test_build_synthesis_prompt_forbids_inventing_ids():
+    """A live failure mode: the LLM pattern-matches the id format and fabricates
+    same-format ids not in the shortlist. The prompt must explicitly forbid emitting
+    any id not in the list (copy verbatim, omit anything ungroundable) to curb it."""
+    result = TriageResult(
+        ranked=(ScoredCandidate(candidate=_candidate("mp-1", "TiO2"), score=1.0),)
+    )
+
+    prompt = build_synthesis_prompt("g", result, [], nonce="n").lower()
+
+    assert "verbatim" in prompt or "exactly" in prompt  # copy the ids, don't paraphrase
+    assert "invent" in prompt or "not in the list" in prompt  # never emit an unlisted id
+    assert "omit" in prompt  # drop anything you cannot ground
+
+
 def test_build_synthesis_prompt_fences_untrusted_goal_and_literature():
     """The user goal and document snippets are untrusted DATA: they are wrapped in
     the trust-boundary tags (with the call's nonce) so the LLM treats them as content,

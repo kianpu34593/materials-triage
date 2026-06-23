@@ -91,13 +91,6 @@ class InputRefused(RuntimeError):
         self.category = category
 
 
-class SynthesisConformanceError(RuntimeError):
-    """The synthesis step could not produce a fully-grounded, schema-valid Synthesis
-    within the retry cap: every attempt either failed the Synthesis schema or cited a
-    material not in retrieved provenance. The output validator (step 8) is the final
-    backstop, but synthesis raises here so an ungrounded narrative never reaches it."""
-
-
 class SpecCompilationError(RuntimeError):
     """The hypothesis's proposals were individually valid but did not compile to
     a coherent TriageSpec (e.g. duplicate constraint on one property, no
@@ -158,9 +151,11 @@ class OrchestratorState(TypedDict, total=False):
     # (the exporter unions them for presentation, like the two exclusion channels):
     # `retrieval_caveats` from the retrieve node (e.g. a page-capped, incomplete set);
     # `caveats` from the filter node (a hard predicate the source could neither push
-    # nor return data for, ¬R∩¬Q).
+    # nor return data for, ¬R∩¬Q); `synthesis_caveats` from the synthesis node (the
+    # narrative was omitted because it could not be grounded within the retry limit).
     retrieval_caveats: tuple[str, ...]
     caveats: tuple[str, ...]
+    synthesis_caveats: tuple[str, ...]
     result: TriageResult | None
     synthesis: Synthesis | None
 
@@ -424,9 +419,18 @@ def _make_synthesis_node(
             prior_error = (
                 f"these cited materials were not in retrieved provenance: {', '.join(ungrounded)}"
             )
-        raise SynthesisConformanceError(
-            f"no grounded, schema-valid Synthesis in {max_attempts} attempts: {prior_error}"
-        )
+        # Retries exhausted: degrade rather than crash the run. The narrative is
+        # secondary — the deterministic ranked shortlist is the product — so omit the
+        # unfounded narrative (synthesis stays None) and surface a loud caveat. The
+        # output validator then passes (no ungrounded narrative reaches it).
+        return {
+            "synthesis": None,
+            "synthesis_caveats": (
+                f"synthesis narrative omitted: the model could not produce a grounded, "
+                f"schema-valid narrative within {max_attempts} attempts "
+                f"({prior_error}); the ranked shortlist below is unaffected.",
+            ),
+        }
 
     return synthesis
 

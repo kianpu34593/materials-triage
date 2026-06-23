@@ -83,6 +83,28 @@ def test_export_run_carries_the_synthesis_narrative():
     assert run.synthesis == synthesis
 
 
+def test_export_run_unions_the_synthesis_degradation_caveat():
+    """When synthesis degrades (could not ground), its caveat lands in the same trace
+    caveats channel as the retrieval/routing caveats, and the narrative is omitted —
+    so the audit/PI views surface the honesty signal and still show the shortlist."""
+    ungrounded = Synthesis(
+        summary="invented",
+        claims=(GroundedClaim(text="bogus", record_id="mp-404"),),
+    )
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)])
+    orchestrator = build_orchestrator(
+        adapter=adapter, synthesis_provider=_StubSynthesisProvider(ungrounded)
+    )
+    config = {"configurable": {"thread_id": "export-degrade"}}
+    orchestrator.invoke({"goal": "wide-gap oxide", "run_id": "run-d", "spec": spec}, config)
+
+    run = export_run(orchestrator, config)
+
+    assert run.synthesis is None
+    assert any("synthesis narrative omitted" in c for c in run.caveats)
+
+
 class _RagProvider:
     """A hypothesis provider that extracts fixed keywords and returns a compiling
     hypothesis, so a run reaches retrieval with literature persisted."""
