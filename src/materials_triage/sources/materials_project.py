@@ -101,6 +101,11 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
     )
     if must_have:
         params["elements"] = ",".join(must_have)
+    must_lack = sorted(
+        e for p in spec.element_predicates if p.quantifier == "none" for e in p.members
+    )
+    if must_lack:
+        params["exclude_elements"] = ",".join(must_lack)
     return params
 
 

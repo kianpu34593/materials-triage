@@ -406,6 +406,25 @@ def test_retrieve_omits_elements_when_spec_has_no_required_elements():
     assert "elements" not in captured["params"]
 
 
+def test_retrieve_excludes_forbidden_elements_server_side():
+    """A "none"-quantifier ElementPredicate scopes the pool server-side via MP's
+    `exclude_elements` param (sorted, comma-joined) — the mirror of `elements`."""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        element_predicates=(ElementPredicate(quantifier="none", members=frozenset({"Pb", "Cd"})),),
+    )
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    assert captured["params"]["exclude_elements"] == "Cd,Pb"
+
+
 def test_retrieve_sends_the_api_key_header():
     """The summary API authenticates by an X-API-KEY header; retrieve sends the
     configured key so the live request is authorized."""
