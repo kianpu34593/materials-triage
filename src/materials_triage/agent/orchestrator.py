@@ -23,10 +23,11 @@ from materials_triage.core.ranking import rank
 from materials_triage.core.schema import (
     Candidate,
     ExcludedCandidate,
+    PredicateRouting,
     TriageResult,
     TriageSpec,
 )
-from materials_triage.core.scoring import apply_hard_filters
+from materials_triage.core.scoring import apply_hard_filters, apply_local_filters
 from materials_triage.sources.base import SourceAdapter
 
 #: Default cap on how many times the hypothesis node re-invokes the LLM provider
@@ -225,13 +226,27 @@ def _make_retrieve_node(adapter: SourceAdapter | None):
     return retrieve
 
 
-def _filter_node(state: OrchestratorState) -> dict:
-    """The hard-filter step: partition retrieved candidates into survivors and
-    the stage's own structured exclusions against the spec's constraints."""
-    survivors, excluded = apply_hard_filters(
-        list(state.get("candidates", ())), state["spec"].constraints
-    )
-    return {"survivors": tuple(survivors), "filter_excluded": tuple(excluded)}
+def _make_filter_node(adapter: SourceAdapter | None):
+    """The hard-filter step: partition retrieved candidates into survivors and the
+    stage's structured exclusions. Numeric ``Constraint``s are checked by
+    ``apply_hard_filters``; the source's *exclusive set* — predicates it could neither
+    push nor express, routed via ``classify_predicates`` — is enforced by
+    ``apply_local_filters``. Both drops land in the single ``filter_excluded`` channel.
+    With no adapter (a resume seeded with candidates) only the numeric filter runs."""
+
+    def filter_node(state: OrchestratorState) -> dict:
+        spec = state["spec"]
+        survivors, excluded = apply_hard_filters(
+            list(state.get("candidates", ())), spec.constraints
+        )
+        routing = adapter.classify_predicates(spec) if adapter is not None else PredicateRouting()
+        survivors, local_excluded = apply_local_filters(survivors, routing)
+        return {
+            "survivors": tuple(survivors),
+            "filter_excluded": tuple(excluded) + tuple(local_excluded),
+        }
+
+    return filter_node
 
 
 def _rank_node(state: OrchestratorState) -> dict:
@@ -266,7 +281,7 @@ def build_orchestrator(
         "hypothesis": _make_hypothesis_node(provider),
         "spec_build": _spec_build_node,
         "retrieve": _make_retrieve_node(adapter),
-        "filter": _filter_node,
+        "filter": _make_filter_node(adapter),
         "rank": _rank_node,
     }
     builder = StateGraph(OrchestratorState)

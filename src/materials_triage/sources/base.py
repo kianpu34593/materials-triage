@@ -9,7 +9,7 @@ and ranking stages.
 import abc
 from collections.abc import Mapping
 
-from materials_triage.core.schema import Candidate, TriageSpec
+from materials_triage.core.schema import Candidate, PredicateRouting, TriageSpec
 
 
 class SourceAdapter(abc.ABC):
@@ -36,3 +36,12 @@ class SourceAdapter(abc.ABC):
         source that declares no vocabulary constrains nothing); a real source
         overrides it."""
         return {}
+
+    def classify_predicates(self, spec: TriageSpec) -> PredicateRouting:
+        """Route the spec's hard predicates between server-side push and local
+        enforcement, so the deterministic filter knows which ones this source could
+        neither push nor express (its *exclusive set*) and which it can't enforce at
+        all (caveats). The default routes nothing local — a source with no declared
+        capability is assumed to enforce its own pushes; a real source overrides this
+        using its retrievable and queryable surfaces."""
+        return PredicateRouting()
