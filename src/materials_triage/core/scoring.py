@@ -34,6 +34,65 @@ def normalize(values: list[float], direction: Literal["maximize", "minimize"]) -
     return [(hi - v) / span for v in values]
 
 
+def desirability_curve(
+    value: float,
+    direction: Literal["maximize", "minimize", "target"],
+    lower: float | None,
+    target: float | None,
+    upper: float | None,
+    curvature: float,
+) -> float:
+    """Map ``value`` to a Derringer-Suich desirability in [0, 1] over absolute anchors.
+
+    A ``maximize`` curve rises from 0 at ``lower`` to 1 at the ``target``
+    saturation anchor; a ``minimize`` curve is 1 at/below ``target`` and falls to
+    0 at ``upper``; a ``target`` curve peaks at ``target`` and falls to 0 at both
+    outer anchors (moderate-is-best). Each is clamped flat outside its ramp;
+    ``curvature`` bends the ramp (1 linear, >1 strict, <1 lenient).
+    """
+    if direction == "maximize":
+        numerator, span = value - lower, target - lower
+    elif direction == "minimize":
+        numerator, span = upper - value, upper - target
+    elif value <= target:
+        numerator, span = value - lower, target - lower
+    else:
+        numerator, span = upper - value, upper - target
+    if span == 0:
+        # Spec-supplied anchors must strictly ascend, so a zero span now only
+        # arises from pool collapse (every candidate shares the value, so the
+        # pooled min and max coincide); the curve carries no signal, so return a
+        # neutral 0.5 rather than dividing by zero.
+        return 0.5
+    fraction = min(1.0, max(0.0, numerator / span))
+    return fraction**curvature
+
+
+def resolve_bounds(
+    target: RankingTarget, present_values: list[float]
+) -> tuple[float | None, float | None, float | None]:
+    """Resolve a target's desirability anchors to absolute (lower, target, upper).
+
+    The same-source rule (enforced by ``RankingTarget``): a ramp's two anchors are
+    either both supplied by the spec or both omitted, in which case they fall back
+    together to the candidate pool's extremes — so the span can never go negative.
+    ``maximize`` ramps the pool minimum (floor) up to the maximum (saturation),
+    ``minimize`` is the mirror, and ``target`` always names its full window.
+    """
+    pool_min = min(present_values) if present_values else None
+    pool_max = max(present_values) if present_values else None
+
+    if target.direction == "maximize":
+        if target.lower is None:
+            return pool_min, pool_max, None
+        return target.lower, target.target, None
+    if target.direction == "minimize":
+        if target.upper is None:
+            return None, pool_min, pool_max
+        return None, target.target, target.upper
+    return target.lower, target.target, target.upper
+
+
 def apply_hard_filters(
     candidates: list[Candidate], constraints: tuple[Constraint, ...]
 ) -> tuple[list[Candidate], list[ExcludedCandidate]]:
@@ -183,3 +242,29 @@ def score_target(candidates: list[Candidate], target: RankingTarget) -> list[tup
     present = [v for v in values if v is not None]
     normalized = iter(normalize(present, target.direction)) if present else iter(())
     return [(0.5, True) if v is None else (next(normalized), False) for v in values]
+
+
+def score_desirability(
+    candidates: list[Candidate], target: RankingTarget
+) -> list[tuple[float, bool]]:
+    """Score one ranking target across a pool by its desirability curve.
+
+    Anchors are resolved once against the present values, then each present value
+    is mapped through :func:`desirability_curve`; a candidate missing the value is
+    imputed the neutral midpoint ``0.5`` and flagged so one gap cannot zero the
+    geometric mean. Each entry is ``(desirability, flagged)``, aligned to
+    ``candidates`` — the same shape as :func:`score_target` so the ranker composes
+    either scorer unchanged.
+    """
+    values = [
+        prop.value if (prop := candidate.properties.get(target.property_name)) else None
+        for candidate in candidates
+    ]
+    present = [v for v in values if v is not None]
+    lower, peak, upper = resolve_bounds(target, present)
+    return [
+        (0.5, True)
+        if v is None
+        else (desirability_curve(v, target.direction, lower, peak, upper, target.curvature), False)
+        for v in values
+    ]

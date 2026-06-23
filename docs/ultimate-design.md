@@ -81,7 +81,7 @@ conservative to ambitious:
 | **Fatal / config** | 401 auth, 400 bad query | **fail fast** with an actionable message (the 401 we hit) |
 | **Semantic-degenerate** | 0 survivors · all `missing_data` · all tied | **re-plan loop** |
 
-The semantic case is the architecture change. After `rank`, a quality gate
+The semantic case is the architecture change. After ranking, a quality gate
 inspects the result; if degenerate it routes **back to `spec_build`** with a
 **deterministic diagnosis** (the filter stage knows the binding constraint:
 *"`formation_energy ≤ -5.0` eliminated 100/100 — relax it"*), capped at N

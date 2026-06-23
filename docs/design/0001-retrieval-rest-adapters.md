@@ -16,7 +16,7 @@ Each source is a **thin REST/JSON adapter** behind one uniform interface —
 `SourceAdapter.retrieve(spec: TriageSpec) -> list[Candidate]` — calling the source's public
 HTTP API through an injected transport (`http_get(url, params, headers) -> dict`). The adapter
 unwraps the transport envelope, pins units the payload omits, attaches provenance, and returns
-`Candidate`s straight into `apply_hard_filters` → `rank`.
+`Candidate`s straight into `apply_hard_filters` → the ranker (`rank_arithmetic_mean`/`rank_geometric_mean`).
 
 ## Rationale (flexibility + locked decisions)
 
@@ -41,7 +41,7 @@ unwraps the transport envelope, pins units the payload omits, attaches provenanc
 ## Trade-offs (accepted)
 
 - **Not every constraint is pushable server-side.** The adapter scopes the query, but the
-  deterministic `apply_hard_filters`/`rank` stages remain the filtering/ranking authority — the
+  deterministic `apply_hard_filters`/ranking stages remain the filtering/ranking authority — the
   adapter never silently filters. *(#38, later refinement — partly reversed: the adapter now
   pushes every hard filter MP can express, gated on the schema-derived `PUSHABLE_PARAMS`, and is
   the **single authority** for those pushed filters — there is no redundant local re-check.

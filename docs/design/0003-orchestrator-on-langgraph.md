@@ -62,7 +62,7 @@ stores**:
 - **In-family dependency.** We already depend on `langchain-aws` (`ChatBedrockConverse`); `langgraph`
   is the same ecosystem — no new vendor surface, and the provider already returns validated pydantic.
 - **Mockability preserved.** The deterministic nodes wrap existing pure functions
-  (`apply_hard_filters`, `rank`) and the injected-seam adapters/provider; the LLM provider's
+  (`apply_hard_filters`, `rank_arithmetic_mean`/`rank_geometric_mean`) and the injected-seam adapters/provider; the LLM provider's
   `complete` seam and the source adapter's `http_get` seam still make the whole graph offline-testable
   with a `MemorySaver`. LangGraph does not force network or AWS into construction.
 

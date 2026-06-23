@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from materials_triage.core.ranking import rank
+from materials_triage.core.ranking import rank_arithmetic_mean
 from materials_triage.core.schema import (
     BooleanConstraint,
     Constraint,
@@ -923,7 +923,7 @@ def test_retrieved_candidates_flow_through_filter_and_rank():
 
     candidates = _fixed(envelope).retrieve(spec).candidates
     survivors, excluded = apply_hard_filters(candidates, spec.constraints)
-    result = rank(survivors, spec.ranking_targets)
+    result = rank_arithmetic_mean(survivors, spec.ranking_targets)
 
     assert [sc.candidate.identifier for sc in result.ranked] == ["mp-good"]
     assert excluded[0].candidate.identifier == "mp-low"

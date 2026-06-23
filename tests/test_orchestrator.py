@@ -264,6 +264,50 @@ def test_filter_node_enforces_the_adapters_local_bucket():
     assert filter_drops == {"mp-non": "boolean_mismatch"}
 
 
+def test_rank_node_selects_the_method_recorded_on_the_spec():
+    """The ranker is chosen by `spec.ranking_method`: a 'geometric_mean' spec runs
+    the non-compensatory geometric mean, so a balanced candidate outranks one that
+    aces a target but zeroes another — an order the default weighted-sum would not
+    produce (it ties them). This proves the dispatch reads the spec, not a
+    hard-coded ranker."""
+    prov = Provenance(source="Materials Project", record_id="x", method="computational")
+
+    def _two_prop(identifier, gap, density):
+        return Candidate(
+            identifier=identifier,
+            formula="ZnO",
+            properties={
+                "band_gap": PropertyValue(value=gap, unit="eV", provenance=prov),
+                "density": PropertyValue(value=density, unit="g/cm^3", provenance=prov),
+            },
+        )
+
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=0.0),),
+        ranking_targets=(
+            RankingTarget(
+                property_name="band_gap", direction="maximize", weight=0.5, lower=0.0, target=10.0
+            ),
+            RankingTarget(
+                property_name="density", direction="minimize", weight=0.5, target=0.0, upper=10.0
+            ),
+        ),
+        ranking_method="geometric_mean",
+    )
+    spike = _two_prop("mp-spike", 10.0, 10.0)  # perfect gap, worst density -> zeroed
+    balanced = _two_prop("mp-balanced", 5.0, 5.0)  # middling on both
+    adapter = _FakeAdapter([spike, balanced])
+
+    orchestrator = build_orchestrator(adapter=adapter)
+    final = orchestrator.invoke(
+        {"goal": "balanced oxide", "spec": spec}, {"configurable": {"thread_id": "desir"}}
+    )
+
+    ranked = final["result"].ranked
+    assert [sc.candidate.identifier for sc in ranked] == ["mp-balanced", "mp-spike"]
+    assert ranked[-1].score == 0.0
+
+
 def test_filter_and_ranking_exclusions_live_in_separate_authoritative_channels():
     """Slice 3b: exclusions are split by STAGE into two single-writer channels —
     `filter_excluded` (the hard-filter node) and `rank_excluded` (the ranking

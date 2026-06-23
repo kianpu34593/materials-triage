@@ -177,8 +177,21 @@ class CountConstraint(BaseModel):
 
 
 class RankingTarget(BaseModel):
-    """A soft scoring preference on one property: the ranker normalises the
-    property in the given direction and weights it in the weighted average.
+    """A soft scoring preference on one property: the ranker maps the property to
+    a desirability in [0, 1] in the given direction and weights it in the
+    weighted geometric mean.
+
+    ``direction`` is the shape of that desirability curve: ``maximize`` /
+    ``minimize`` are monotonic (bigger / smaller is always better), while
+    ``target`` is the non-monotonic "moderate is best" case — desirability peaks
+    at ``target`` and falls to zero away from it. The window anchors
+    (``lower`` / ``target`` / ``upper``) are absolute. A ramp's two anchors share
+    a source: ``maximize`` (``lower``/``target``) and ``minimize``
+    (``target``/``upper``) take both from the spec or fill both from the candidate
+    pool's extremes, so they must be announced together or not at all; a
+    ``target`` direction names its full window explicitly (no pool fallback).
+    ``curvature`` (an exponent ``> 0``) bends the curve between the anchors:
+    ``1`` linear, ``> 1`` strict (credit only near the ideal), ``< 1`` lenient.
 
     ``weight`` is a proportional share in ``(0, 1]``; across the targets of a
     single ``TriageSpec`` the weights must sum to 1.
@@ -187,15 +200,74 @@ class RankingTarget(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     property_name: str = Field(min_length=1)
-    direction: Literal["maximize", "minimize"]
+    direction: Literal["maximize", "minimize", "target"]
     weight: float = Field(gt=0, le=1)
     on_missing: Literal["exclude", "impute_medium"] = "impute_medium"
+    lower: float | None = None
+    target: float | None = None
+    upper: float | None = None
+    curvature: float = Field(default=1.0, gt=0)
+
+    @model_validator(mode="after")
+    def _anchors_share_a_source(self) -> Self:
+        # A desirability ramp's two anchors must come from the same source —
+        # both announced in the spec, or both filled from the candidate pool —
+        # so the curve's span can never go negative (see ``resolve_bounds``).
+        # ``maximize`` ramps lower->target, ``minimize`` ramps target->upper, and
+        # ``target`` names its full lower->target->upper window (no pool fallback).
+        if self.direction == "maximize":
+            self._reject_unused_anchor("upper", self.upper)
+            self._require_both_or_neither(("lower", self.lower), ("target", self.target))
+        elif self.direction == "minimize":
+            self._reject_unused_anchor("lower", self.lower)
+            self._require_both_or_neither(("target", self.target), ("upper", self.upper))
+        else:
+            self._require_full_window()
+        return self
+
+    def _reject_unused_anchor(self, name: str, value: float | None) -> None:
+        if value is not None:
+            raise ValueError(
+                f"a '{self.direction}' direction does not use {name}, but {name}={value} is set"
+            )
+
+    def _require_both_or_neither(
+        self, low: tuple[str, float | None], high: tuple[str, float | None]
+    ) -> None:
+        (lo_name, lo), (hi_name, hi) = low, high
+        if (lo is None) != (hi is None):
+            present, missing = (lo_name, hi_name) if lo is not None else (hi_name, lo_name)
+            raise ValueError(
+                f"a '{self.direction}' direction needs {lo_name} and {hi_name} announced "
+                f"together or not at all, but {present} is set without {missing}"
+            )
+        if lo is not None and lo >= hi:
+            raise ValueError(
+                f"window anchors must strictly ascend, but {lo_name}={lo} "
+                f"does not precede {hi_name}={hi}"
+            )
+
+    def _require_full_window(self) -> None:
+        for name, value in (("lower", self.lower), ("target", self.target), ("upper", self.upper)):
+            if value is None:
+                raise ValueError(
+                    f"a 'target' direction must announce its full window, but {name} is unset"
+                )
+        if not self.lower < self.target < self.upper:
+            raise ValueError(
+                "window anchors must strictly ascend, but "
+                f"lower={self.lower}, target={self.target}, upper={self.upper} do not"
+            )
 
 
 class TriageSpec(BaseModel):
     """The fully-resolved request the deterministic pipeline consumes:
-    the hard filters it gates on, the soft targets it ranks by, and the
-    composition rules that scope retrieval.
+    the hard filters it gates on, the soft targets it ranks by, the
+    composition rules that scope retrieval, and the ranking method that
+    combines the soft targets (``arithmetic_mean`` — the compensatory weighted
+    average, the default — or ``geometric_mean`` — the non-compensatory
+    geometric mean of desirability curves). The method is on the spec so a run
+    records and replays it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -205,6 +277,7 @@ class TriageSpec(BaseModel):
     ranking_targets: tuple[RankingTarget, ...] = ()
     element_predicates: tuple[ElementPredicate, ...] = ()
     count: CountConstraint | None = None
+    ranking_method: Literal["arithmetic_mean", "geometric_mean"] = "arithmetic_mean"
 
     @model_validator(mode="after")
     def _has_a_hard_filter(self) -> Self:
@@ -274,6 +347,50 @@ class TriageSpec(BaseModel):
                 f"required elements demand {len(must_have)} distinct "
                 f"elements but the count constraint caps it at {cap}"
             )
+        # Desirability anchors and curvature are a geometric_mean-only feature, so
+        # neither ranker can silently ignore or mis-handle them. The geometric_mean
+        # ranker zeros a candidate at an acceptability floor, so it requires every
+        # target to announce its ramp bounds (no pool fallback) — then a desirability
+        # of 0 means a genuine floor failure, not merely pool-worst. The
+        # arithmetic_mean ranker normalises via normalize() (pool extremes only), so
+        # it cannot honour anchors or curvature; reject them rather than drop them.
+        if self.ranking_method == "geometric_mean":
+            for t in self.ranking_targets:
+                required = {
+                    "maximize": (("lower", t.lower), ("target", t.target)),
+                    "minimize": (("target", t.target), ("upper", t.upper)),
+                    "target": (("lower", t.lower), ("target", t.target), ("upper", t.upper)),
+                }[t.direction]
+                missing = [name for name, value in required if value is None]
+                if missing:
+                    raise ValueError(
+                        f"ranking_method='geometric_mean' requires {t.property_name!r} to "
+                        f"announce its ramp bounds, but {missing} are unset"
+                    )
+        else:
+            # A 'target' direction is itself a desirability window — name the method
+            # to fix rather than the anchors, since dropping anchors won't help it.
+            targeted = [t.property_name for t in self.ranking_targets if t.direction == "target"]
+            if targeted:
+                raise ValueError(
+                    f"a 'target' direction (here on {targeted}) is a desirability window "
+                    "only the geometric_mean ranker scores, but ranking_method is "
+                    f"{self.ranking_method!r}; set ranking_method='geometric_mean'"
+                )
+            configured = [
+                t.property_name
+                for t in self.ranking_targets
+                if t.lower is not None
+                or t.target is not None
+                or t.upper is not None
+                or t.curvature != 1.0
+            ]
+            if configured:
+                raise ValueError(
+                    f"anchors and curvature configure desirability curves (here on "
+                    f"{configured}) and are only valid with ranking_method='geometric_mean', "
+                    f"but ranking_method is {self.ranking_method!r}"
+                )
         return self
 
 
