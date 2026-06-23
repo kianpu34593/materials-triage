@@ -350,22 +350,19 @@ def test_ranking_target_rejects_anchors_out_of_order():
         )
 
 
-def test_ranking_target_ignores_an_irrelevant_unused_anchor():
+def test_ranking_target_maximize_rejects_unused_upper_anchor():
     """A ``maximize`` curve only ramps from ``lower`` to ``target`` and never
-    consults ``upper`` (see ``resolve_bounds``), so an out-of-order ``upper`` is
-    irrelevant: it must be accepted, not rejected, since it can't affect scoring."""
-    target = RankingTarget(
-        property_name="band_gap",
-        direction="maximize",
-        weight=0.5,
-        lower=2.0,
-        target=4.0,
-        upper=1.0,
-    )
-
-    assert target.lower == 2.0
-    assert target.target == 4.0
-    assert target.upper == 1.0
+    consults ``upper`` (see ``resolve_bounds``), so a stray ``upper`` would be
+    silently dropped intent: it is rejected rather than masked."""
+    with pytest.raises(ValidationError, match="does not use upper"):
+        RankingTarget(
+            property_name="band_gap",
+            direction="maximize",
+            weight=0.5,
+            lower=2.0,
+            target=4.0,
+            upper=1.0,
+        )
 
 
 def test_ranking_target_still_orders_the_anchors_a_direction_uses():
@@ -396,6 +393,20 @@ def test_ranking_target_minimize_rejects_one_anchor_without_its_partner():
     a spec anchor with a pool extreme and is rejected."""
     with pytest.raises(ValidationError):
         RankingTarget(property_name="density", direction="minimize", weight=0.5, upper=8.0)
+
+
+def test_ranking_target_minimize_rejects_unused_lower_anchor():
+    """A ``minimize`` curve ramps only ``target`` -> ``upper``; a stray ``lower``
+    would be silently dropped, so it is rejected rather than accepted as dead intent."""
+    with pytest.raises(ValidationError, match="does not use lower"):
+        RankingTarget(
+            property_name="density",
+            direction="minimize",
+            weight=0.5,
+            lower=1.0,
+            target=4.0,
+            upper=8.0,
+        )
 
 
 def test_ranking_target_maximize_rejects_equal_anchors():

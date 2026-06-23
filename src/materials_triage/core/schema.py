@@ -216,12 +216,20 @@ class RankingTarget(BaseModel):
         # ``maximize`` ramps lower->target, ``minimize`` ramps target->upper, and
         # ``target`` names its full lower->target->upper window (no pool fallback).
         if self.direction == "maximize":
+            self._reject_unused_anchor("upper", self.upper)
             self._require_both_or_neither(("lower", self.lower), ("target", self.target))
         elif self.direction == "minimize":
+            self._reject_unused_anchor("lower", self.lower)
             self._require_both_or_neither(("target", self.target), ("upper", self.upper))
         else:
             self._require_full_window()
         return self
+
+    def _reject_unused_anchor(self, name: str, value: float | None) -> None:
+        if value is not None:
+            raise ValueError(
+                f"a '{self.direction}' direction does not use {name}, but {name}={value} is set"
+            )
 
     def _require_both_or_neither(
         self, low: tuple[str, float | None], high: tuple[str, float | None]
