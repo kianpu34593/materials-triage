@@ -28,6 +28,7 @@ from materials_triage.core.hypothesis import (
     Hypothesis,
     RankingProposal,
 )
+from materials_triage.core.run_trace import export_run
 from materials_triage.core.schema import (
     BooleanConstraint,
     Candidate,
@@ -889,6 +890,96 @@ def _hypothesis_with_unnormalized_weights():
     )
 
 
+class _FakeCritic:
+    """A ranking critic returning a fixed RankingCritique, ignoring the prompt."""
+
+    def __init__(self, critique):
+        self._critique = critique
+        self.calls = 0
+
+    def critique(self, prompt):
+        self.calls += 1
+        return self._critique
+
+
+class _RaisingCritic:
+    """A critic whose call always fails — to test soft-degradation."""
+
+    def critique(self, prompt):
+        raise RuntimeError("bedrock unavailable")
+
+
+def test_hypothesis_node_prunes_off_goal_ranking_targets_via_the_critic():
+    """When a RankingCritic is injected, the hypothesis node runs it on the proposed
+    ranking targets and drops the ones it rejects, so an invented objective (density)
+    never reaches the compiled spec the human is shown."""
+    from materials_triage.core.critique import RankingCritique, TargetVerdict
+
+    provider = _StubProvider(_hypothesis_with_unnormalized_weights())
+    critic = _FakeCritic(
+        RankingCritique(
+            verdicts=(
+                TargetVerdict(property_name="band_gap", keep=True, reason="core"),
+                TargetVerdict(property_name="density", keep=False, reason="goal never asked"),
+            )
+        )
+    )
+    orchestrator = build_orchestrator(provider=provider, critic=critic)
+    config = {"configurable": {"thread_id": "critic-prune"}}
+
+    result = orchestrator.invoke({"goal": "wide-gap oxide"}, config)
+
+    recommended = result["__interrupt__"][0].value["recommended_spec"]
+    targets = {t.property_name for t in recommended.ranking_targets}
+    assert targets == {"band_gap"}  # density pruned; band_gap survives, reweighted to 1.0
+    assert critic.calls == 1
+
+
+def test_critic_bound_flags_surface_as_advisory_caveats_in_the_run():
+    """Advisory bound flags (#6) the critic raises are surfaced to the human as caveats
+    in the exported run — never auto-applied to the spec, just a note. They appear even
+    when no ranking target was pruned."""
+    from materials_triage.core.critique import BoundFlag, RankingCritique, TargetVerdict
+
+    provider = _StubProvider(_hypothesis_with_unnormalized_weights())
+    critic = _FakeCritic(
+        RankingCritique(
+            verdicts=(
+                TargetVerdict(property_name="band_gap", keep=True, reason="core"),
+                TargetVerdict(property_name="density", keep=True, reason="core"),
+            ),
+            bound_flags=(
+                BoundFlag(property_name="band_gap", concern="a 12 eV ceiling excludes nothing"),
+            ),
+        )
+    )
+    orchestrator = build_orchestrator(provider=provider, critic=critic)
+    config = {"configurable": {"thread_id": "critic-boundflag"}}
+    paused = orchestrator.invoke({"goal": "wide-gap oxide"}, config)
+    recommended = paused["__interrupt__"][0].value["recommended_spec"]
+    orchestrator.invoke(Command(resume=recommended), config)
+
+    run = export_run(orchestrator, config)
+
+    assert any("12 eV ceiling" in c for c in run.caveats)
+    # advisory only: the band_gap constraint bound was NOT rewritten
+    assert {t.property_name for t in run.spec.ranking_targets} == {"band_gap", "density"}
+
+
+def test_hypothesis_node_soft_degrades_when_the_critic_fails():
+    """The critic is best-effort grounding, never fatal: if its call raises, the run
+    keeps the un-pruned proposals rather than failing."""
+    provider = _StubProvider(_hypothesis_with_unnormalized_weights())
+    orchestrator = build_orchestrator(provider=provider, critic=_RaisingCritic())
+    config = {"configurable": {"thread_id": "critic-degrade"}}
+
+    result = orchestrator.invoke({"goal": "wide-gap oxide"}, config)
+
+    recommended = result["__interrupt__"][0].value["recommended_spec"]
+    targets = {t.property_name for t in recommended.ranking_targets}
+    assert targets == {"band_gap", "density"}  # nothing pruned; run survived
+
+
 def test_spec_build_pauses_for_human_confirmation_with_normalized_weights():
     """Slice 5 (HITL): with a hypothesis and no pre-resolved spec, spec_build
     compiles the recommended TriageSpec and PAUSES via interrupt(), surfacing it
@@ -910,6 +1001,54 @@ def test_spec_build_pauses_for_human_confirmation_with_normalized_weights():
 
     # The recommendation is not yet committed — the human still has to confirm.
     assert orchestrator.get_state(config).values.get("spec") is None
+
+
+def _hypothesis_dropping_the_oxide_facet():
+    """A hypothesis that kept the band-gap filter but omitted the "oxide" composition
+    rule the goal states — the common LLM fidelity failure the gate must repair."""
+    return Hypothesis(
+        proposals=(
+            ConstraintProposal(
+                constraint=Constraint(property_name="band_gap", min=2.0),
+                rationale="wide gap",
+                confidence=0.8,
+            ),
+        ),
+        mechanism="wide gaps lower leakage",
+    )
+
+
+def test_spec_build_seeds_dropped_facets_before_the_human_gate():
+    """The fidelity gate runs inside spec_build, after compile_spec and before the
+    interrupt: a goal that says "oxide" but whose hypothesis dropped it gets a
+    require-O predicate seeded into the recommended spec the human is shown."""
+    provider = _StubProvider(_hypothesis_dropping_the_oxide_facet())
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "fidelity-seed"}}
+
+    result = orchestrator.invoke({"goal": "wide-gap oxide for photocatalysis"}, config)
+
+    recommended = result["__interrupt__"][0].value["recommended_spec"]
+    required = {
+        e for p in recommended.element_predicates if p.quantifier == "all" for e in p.members
+    }
+    assert "O" in required  # the dropped "oxide" facet was seeded back in
+
+
+def test_fidelity_caveat_reaches_the_exported_run():
+    """A seeded facet whose enforcement is element-level only (the non-toxic
+    oxidation-state caveat) is written to the single-writer `spec_caveats` channel and
+    unioned into the exported run's caveats, so the honesty signal reaches the user."""
+    provider = _StubProvider(_hypothesis_dropping_the_oxide_facet())
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "fidelity-caveat"}}
+    paused = orchestrator.invoke({"goal": "a non-toxic oxide"}, config)
+    recommended = paused["__interrupt__"][0].value["recommended_spec"]
+    orchestrator.invoke(Command(resume=recommended), config)
+
+    run = export_run(orchestrator, config)
+
+    assert any("oxidation-state" in c for c in run.caveats)
 
 
 def test_spec_build_resume_accept_commits_recommended_spec_and_continues():

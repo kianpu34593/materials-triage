@@ -9,6 +9,7 @@ to Bedrock — mirroring the MaterialsProjectAdapter's ``http_get`` seam.
 from collections.abc import Callable
 
 from materials_triage.agent.prompts import KEYWORD_EXTRACTION_SYSTEM_PROMPT, ROLE_SYSTEM_PROMPT
+from materials_triage.core.critique import RankingCritique
 from materials_triage.core.hypothesis import Hypothesis
 from materials_triage.core.synthesis import Synthesis
 
@@ -20,6 +21,9 @@ ExtractKeywords = Callable[[str], str]
 
 #: A synthesis seam: a rendered prompt string -> a validated Synthesis.
 Synthesize = Callable[[str], Synthesis]
+
+#: A critique seam: a rendered prompt string -> a validated RankingCritique.
+Critique = Callable[[str], RankingCritique]
 
 
 def _role_messages(prompt: str) -> list[tuple[str, str]]:
@@ -79,6 +83,26 @@ class SynthesisProvider:
         return self._synthesize(prompt)
 
 
+class RankingCritic:
+    """Produce a RankingCritique (keep/drop verdicts on ranking objectives) from a
+    rendered prompt via an injected Bedrock seam.
+
+    Mirrors :class:`SynthesisProvider`: the seam is injected for offline tests and
+    built lazily for the real path, so importing this module never needs langchain_aws
+    or AWS credentials."""
+
+    def __init__(
+        self,
+        critique: Critique | None = None,
+        model_id: str = DEFAULT_MODEL_ID,
+        region: str = DEFAULT_REGION,
+    ) -> None:
+        self._critique = critique or _bedrock_critique(model_id, region)
+
+    def critique(self, prompt: str) -> RankingCritique:
+        return self._critique(prompt)
+
+
 def _bedrock_complete(model_id: str, region: str) -> Complete:
     """Build the real completion seam. ``langchain_aws`` is imported only when the
     seam is actually invoked, so construction and offline use never require it.
@@ -105,6 +129,20 @@ def _bedrock_synthesize(model_id: str, region: str) -> Synthesize:
         return model.with_structured_output(Synthesis).invoke(_role_messages(prompt))
 
     return synthesize
+
+
+def _bedrock_critique(model_id: str, region: str) -> Critique:
+    """Build the real critique seam. Like ``_bedrock_synthesize``, imports
+    ``langchain_aws`` only when invoked; the rendered critique prompt rides the human
+    slot under ROLE_SYSTEM_PROMPT, and structured output validates to a RankingCritique."""
+
+    def critique(prompt: str) -> RankingCritique:
+        from langchain_aws import ChatBedrockConverse
+
+        model = ChatBedrockConverse(model=model_id, region_name=region)
+        return model.with_structured_output(RankingCritique).invoke(_role_messages(prompt))
+
+    return critique
 
 
 def _bedrock_extract_keywords(model_id: str, region: str) -> ExtractKeywords:

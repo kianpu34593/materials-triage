@@ -23,10 +23,13 @@ from pydantic import ValidationError
 
 from materials_triage.agent.prompts import (
     DEFAULT_TOP_K,
+    build_critique_prompt,
     build_hypothesis_prompt,
     build_synthesis_prompt,
 )
 from materials_triage.agent.validator import validate_output
+from materials_triage.core.critique import RankingCritique, prune_ranking_proposals
+from materials_triage.core.fidelity import reconcile_spec
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
 from materials_triage.core.ranking import rank_arithmetic_mean, rank_geometric_mean
 from materials_triage.core.schema import (
@@ -71,6 +74,15 @@ class SynthesisProvider(Protocol):
     Synthesis out (or a pydantic ValidationError if the output is malformed)."""
 
     def synthesize(self, prompt: str) -> Synthesis: ...
+
+
+class RankingCritic(Protocol):
+    """The second-agent seam the hypothesis node calls to vet ranking objectives: a
+    rendered critique prompt in, a validated RankingCritique (keep/drop verdicts) out.
+    Best-effort — its result only prunes invented objectives; a failure soft-degrades
+    to the un-pruned proposals, so it never fails the run."""
+
+    def critique(self, prompt: str) -> RankingCritique: ...
 
 
 class HypothesisConformanceError(RuntimeError):
@@ -157,7 +169,13 @@ class OrchestratorState(TypedDict, total=False):
     # `caveats` from the filter node (a hard predicate the source could neither push
     # nor return data for, ¬R∩¬Q); `synthesis_caveats` from the synthesis node (the
     # narrative was omitted because it could not be grounded within the retry limit).
+    # `hypothesis_caveats` from the hypothesis node (the ranking critic's advisory
+    # bound flags — surfaced to the human, never auto-applied);
+    # `spec_caveats` from the spec_build node (the fidelity gate seeded a facet whose
+    # enforcement is element-level only, e.g. the oxidation-state toxicity caveat).
+    hypothesis_caveats: tuple[str, ...]
     retrieval_caveats: tuple[str, ...]
+    spec_caveats: tuple[str, ...]
     caveats: tuple[str, ...]
     synthesis_caveats: tuple[str, ...]
     result: TriageResult | None
@@ -184,10 +202,41 @@ def _gate_node(state: OrchestratorState) -> dict:
     return {}
 
 
+def _apply_critic(
+    critic: "RankingCritic | None", goal: str, proposed: Hypothesis, nonce: str
+) -> tuple[Hypothesis, tuple[str, ...]]:
+    """Run the ranking critic on a compiled hypothesis: drop the objectives it rejects
+    (relevance + redundancy, auto-applied) and collect its advisory bound flags as
+    human-facing notes (surfaced, never auto-applied). Returns the (possibly pruned)
+    hypothesis and the advisory caveat notes. Best-effort: any critic failure (a
+    transport error, malformed output) or a pruning that no longer compiles
+    soft-degrades to the original ``proposed`` with no notes — the critic never fails
+    the run."""
+    if critic is None:
+        return proposed, ()
+    try:
+        prompt = build_critique_prompt(goal, proposed.proposals, nonce=nonce)
+        critique = critic.critique(prompt)
+        notes = tuple(
+            f"advisory: ranking critic flagged the '{f.property_name}' bound — {f.concern} "
+            "(not applied; review at the spec gate)"
+            for f in critique.bound_flags
+        )
+        kept, dropped = prune_ranking_proposals(proposed.proposals, critique)
+        if not dropped:
+            return proposed, notes
+        pruned = proposed.model_copy(update={"proposals": tuple(kept)})
+        compile_spec(pruned.proposals)  # the pruned set must still form a coherent spec
+        return pruned, notes
+    except Exception:  # noqa: BLE001 — the critic is best-effort grounding, never fatal
+        return proposed, ()
+
+
 def _make_hypothesis_node(
     provider: HypothesisProvider | None,
     adapter: SourceAdapter | None = None,
     rag: LiteratureRetriever | None = None,
+    critic: RankingCritic | None = None,
     max_attempts: int = DEFAULT_MAX_HYPOTHESIS_ATTEMPTS,
 ):
     """The hypothesis step (workflow step 3: LLM + RAG). When a ``rag`` seam is
@@ -242,7 +291,12 @@ def _make_hypothesis_node(
             except ValidationError as exc:
                 last_exc = exc
                 continue
-            return {"hypothesis": proposed, "literature": tuple(snippets)}
+            proposed, critic_caveats = _apply_critic(critic, goal, proposed, nonce)
+            return {
+                "hypothesis": proposed,
+                "literature": tuple(snippets),
+                "hypothesis_caveats": critic_caveats,
+            }
         raise HypothesisConformanceError(
             f"LLM did not produce a schema-valid, compilable Hypothesis in {max_attempts} attempts"
         ) from last_exc
@@ -274,6 +328,12 @@ def _spec_build_node(state: OrchestratorState) -> dict:
         raise SpecCompilationError(
             "the hypothesis proposals did not compile to a coherent TriageSpec"
         ) from exc
+
+    # Fidelity gate: deterministically seed any hard facet the goal states plainly
+    # but the LLM dropped ("oxide" -> require O, "non-toxic" -> exclude toxic,
+    # "simple" -> count cap). The human still approves the seeded spec at the gate.
+    recommended, findings = reconcile_spec(state["goal"], recommended)
+    spec_caveats = tuple(f.caveat for f in findings if f.caveat)
 
     proposed_weights = [
         p.ranking_target.weight for p in hypothesis.proposals if p.kind == "ranking_target"
@@ -307,7 +367,7 @@ def _spec_build_node(state: OrchestratorState) -> dict:
             "the resumed spec-build decision must be a TriageSpec, "
             f"got {type(approved_spec).__name__}"
         )
-    return {"spec": approved_spec}
+    return {"spec": approved_spec, "spec_caveats": spec_caveats}
 
 
 def _make_retrieve_node(adapter: SourceAdapter | None):
@@ -460,6 +520,7 @@ def build_orchestrator(
     provider: HypothesisProvider | None = None,
     rag: LiteratureRetriever | None = None,
     synthesis_provider: SynthesisProvider | None = None,
+    critic: RankingCritic | None = None,
     top_k: int = DEFAULT_TOP_K,
     checkpointer: MemorySaver | None = None,
 ) -> CompiledStateGraph:
@@ -482,7 +543,7 @@ def build_orchestrator(
     """
     nodes = {
         "gate": _gate_node,
-        "hypothesis": _make_hypothesis_node(provider, adapter, rag),
+        "hypothesis": _make_hypothesis_node(provider, adapter, rag, critic),
         "spec_build": _spec_build_node,
         "retrieve": _make_retrieve_node(adapter),
         "filter": _make_filter_node(adapter),

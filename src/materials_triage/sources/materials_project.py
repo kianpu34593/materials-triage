@@ -113,10 +113,16 @@ class MaterialsProjectAdapter(SourceAdapter):
         )
         # Composition is retrievable (`elements` comes back), but only `all`/`none` map
         # to query params (`elements`/`exclude_elements`); `any` has no MP OR-param, so
-        # it's the exclusive set — enforced locally.
+        # it's always the exclusive set — enforced locally. A `none` predicate is also
+        # routed locally when its joined `exclude_elements` value exceeds MP's 60-char
+        # cap (which it would otherwise 422), so the toxic-set filter is still enforced.
         local_element_predicates = tuple(
             p for p in spec.element_predicates if p.quantifier == "any"
         )
+        if not _can_push_exclude_elements(spec):
+            local_element_predicates += tuple(
+                p for p in spec.element_predicates if p.quantifier == "none"
+            )
         # A constraint on a field MP can't return (not retrievable) can be neither
         # pushed nor enforced locally — record a loud caveat so the run doesn't silently
         # drop every candidate as missing-data (numeric) or quietly ignore it (boolean).
@@ -146,12 +152,40 @@ _DEFAULT_LIMIT = 1000
 #: caveat (ranking saw only a subset) rather than silently truncating the set.
 _MAX_CANDIDATES = 10000
 
+#: MP's ``/summary`` caps the ``exclude_elements`` query string at 60 characters
+#: (a live 422: ``string_too_long``). A ``none`` predicate whose sorted, comma-joined
+#: members exceed this can't be pushed — it's routed to the local filter instead. The
+#: fidelity gate's ~29-element non-toxic set (~89 chars) is exactly this case.
+_MAX_EXCLUDE_ELEMENTS_LEN = 60
+
 #: Property name → the base of its MP range filter param, when it differs from the
 #: field name. The elastic moduli are *returned* as ``bulk_modulus``/``shear_modulus``
 #: (a Voigt-Reuss-Hill dict) but *filtered* via the VRH averages ``k_vrh``/``g_vrh`` —
 #: ``bulk_modulus_min`` is not a real query param. The only non-1:1 field→param cases;
 #: every other numeric field's range param is just ``<field>_min``/``<field>_max``.
 _FILTER_PARAM_BASE = {"bulk_modulus": "k_vrh", "shear_modulus": "g_vrh"}
+
+
+def _exclude_elements_value(spec: TriageSpec) -> str:
+    """The sorted, comma-joined union of every ``none`` predicate's members — the
+    string MP's ``exclude_elements`` param would carry."""
+    members = sorted(
+        e for p in spec.element_predicates if p.quantifier == "none" for e in p.members
+    )
+    return ",".join(members)
+
+
+def _can_push_exclude_elements(spec: TriageSpec) -> bool:
+    """Whether the spec's ``none`` predicates can be pushed server-side: MP must
+    support the param and the joined value must fit MP's 60-char cap. Otherwise the
+    ``none`` predicates are routed to the local filter (the single source of truth for
+    this decision, shared by ``classify_predicates`` and ``_query_params``)."""
+    value = _exclude_elements_value(spec)
+    return (
+        bool(value)
+        and "exclude_elements" in PUSHABLE_PARAMS
+        and len(value) <= _MAX_EXCLUDE_ELEMENTS_LEN
+    )
 
 
 def _paginate(
@@ -212,11 +246,11 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
     )
     if must_have and "elements" in PUSHABLE_PARAMS:
         params["elements"] = ",".join(must_have)
-    must_lack = sorted(
-        e for p in spec.element_predicates if p.quantifier == "none" for e in p.members
-    )
-    if must_lack and "exclude_elements" in PUSHABLE_PARAMS:
-        params["exclude_elements"] = ",".join(must_lack)
+    # "none" → `exclude_elements`, but only when MP can accept it (param supported and
+    # the joined value within MP's 60-char cap). An oversized list (the fidelity gate's
+    # toxic set) would 422, so it is enforced locally instead — see classify_predicates.
+    if _can_push_exclude_elements(spec):
+        params["exclude_elements"] = _exclude_elements_value(spec)
     # Numeric bounds → inclusive <field>_min/<field>_max (or the VRH alias for the moduli).
     for c in spec.constraints:
         base = _FILTER_PARAM_BASE.get(c.property_name, c.property_name)

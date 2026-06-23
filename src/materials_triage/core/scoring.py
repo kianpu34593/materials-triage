@@ -176,10 +176,19 @@ def apply_local_filters(
                 )
                 break
         if drop is None:
-            # Only "any" is routed here (no MP OR-param). It holds when the candidate
-            # shares at least one required member with its composition.
+            # Element predicates routed here because the source could not push them:
+            # "any" (no MP OR-param) holds when the composition shares >=1 member;
+            # "none" (an oversized exclude_elements list MP rejects, >60 chars) holds
+            # when the composition shares NO member; "all" holds when it contains every
+            # member. A violation is an element_mismatch drop.
             for predicate in routing.local_element_predicates:
-                if not (candidate.elements & predicate.members):
+                overlap = candidate.elements & predicate.members
+                violated = {
+                    "any": not overlap,
+                    "none": bool(overlap),
+                    "all": predicate.members - candidate.elements != frozenset(),
+                }[predicate.quantifier]
+                if violated:
                     drop = ExcludedCandidate(
                         candidate=candidate,
                         property_name="elements",

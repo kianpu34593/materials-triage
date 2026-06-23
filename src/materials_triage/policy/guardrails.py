@@ -60,6 +60,123 @@ _FORBIDDEN_ACTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 )
 
 
+# Allowlist of materials-domain signal words. An in-scope request must show at
+# least one of these (or a chemical formula) — the allowlist-first scope check.
+# Deliberately broad: it is a scope filter to catch obviously off-topic requests
+# cheaply before any LLM call, NOT the safety guarantee (capability-by-construction
+# is — ADR 0004). Tradeoff: odd phrasing with zero domain keywords could be wrongly
+# refused; the cost of that is a polite redirect, not a wrong answer.
+_DOMAIN_TERMS: frozenset[str] = frozenset(
+    {
+        # substance classes
+        "material",
+        "materials",
+        "compound",
+        "compounds",
+        "alloy",
+        "alloys",
+        "oxide",
+        "oxides",
+        "nitride",
+        "nitrides",
+        "carbide",
+        "carbides",
+        "sulfide",
+        "sulfides",
+        "halide",
+        "halides",
+        "perovskite",
+        "perovskites",
+        "semiconductor",
+        "semiconductors",
+        "ceramic",
+        "ceramics",
+        "polymer",
+        "polymers",
+        "crystal",
+        "crystals",
+        "lattice",
+        "phase",
+        "phases",
+        "metal",
+        "metals",
+        "element",
+        "elements",
+        "molecule",
+        "molecules",
+        # properties / quantities
+        "band",
+        "bandgap",
+        "gap",
+        "conductivity",
+        "conductor",
+        "dielectric",
+        "magnetic",
+        "magnetism",
+        "ferroelectric",
+        "piezoelectric",
+        "thermoelectric",
+        "modulus",
+        "hardness",
+        "density",
+        "stiffness",
+        "elastic",
+        "stability",
+        "stable",
+        "metastable",
+        "formation",
+        "refractive",
+        "absorption",
+        "emission",
+        "doping",
+        "dopant",
+        "stoichiometry",
+        "formula",
+        "superconductor",
+        "superconducting",
+        "thermal",
+        "optical",
+        "electronic",
+        # application / triage intent
+        "battery",
+        "batteries",
+        "cathode",
+        "anode",
+        "electrode",
+        "electrolyte",
+        "photovoltaic",
+        "catalyst",
+        "catalysis",
+        "screen",
+        "screening",
+        "shortlist",
+        "candidate",
+        "candidates",
+        "property",
+        "properties",
+    }
+)
+# A chemical-formula shape (TiO2, Fe2O3, LiCoO2): two or more element-like tokens
+# (Capital + optional lowercase + optional subscript) with at least one subscript
+# present (the lookahead), so it reads as a formula, not an ordinary capitalized
+# word like "McDonald".
+_FORMULA_RE = re.compile(r"\b(?=[A-Za-z]*\d)(?:[A-Z][a-z]?\d*){2,}\b")
+
+#: What the agent can do — appended to every refusal so the user gets a polite
+#: redirect to the agent's purpose, never a bare "no".
+CAPABILITIES = (
+    "I'm Materials-Triage: I turn a materials-property request into a ranked, "
+    "fully-cited shortlist of candidate materials from public databases — for "
+    'example, "stable, low-density oxides with a band gap above 2 eV." I don\'t '
+    "run lab work, use private data, or answer non-materials questions."
+)
+
+
+def _refuse(category: str, reason: str) -> GateDecision:
+    """A refusal verdict whose reason ends with the polite capabilities redirect."""
+    return GateDecision(allowed=False, category=category, reason=f"{reason} {CAPABILITIES}")
+
+
 def _scrub(text: str) -> str:
     """Normalize compatibility forms, then strip invisible control/format characters.
 
@@ -115,9 +232,23 @@ def check_input(text: str) -> GateDecision:
     # "in the lab" must not match inside "within the lab", and "scrape" must not
     # match inside "telescraper". Still best-effort — capability-by-construction is
     # the guarantee (ADR 0004).
-    lowered = _scrub(text).lower()
+    scrubbed = _scrub(text)
+    lowered = scrubbed.lower()
+
+    # 1. Forbidden-action denylist (literal trigger phrases).
     for category, reason, terms in _FORBIDDEN_ACTIONS:
         for term in terms:
             if re.search(rf"\b{re.escape(term)}\b", lowered):
-                return GateDecision(allowed=False, category=category, reason=reason)
+                return _refuse(category, reason)
+
+    # 2. Allowlist-first scope: an in-scope request must show a materials-domain
+    # signal (a domain term or a chemical formula). No signal -> out of scope.
+    has_domain_term = bool(_DOMAIN_TERMS & set(re.findall(r"[a-z]+", lowered)))
+    has_formula = bool(_FORMULA_RE.search(scrubbed))
+    if not (has_domain_term or has_formula):
+        return _refuse(
+            "out_of_scope",
+            "This isn't a materials-property request, so I can't triage it.",
+        )
+
     return GateDecision(allowed=True, category="in_scope")

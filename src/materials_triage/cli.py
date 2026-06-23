@@ -14,6 +14,7 @@ from langgraph.types import Command
 from materials_triage.agent.orchestrator import (
     HypothesisProvider,
     LiteratureRetriever,
+    RankingCritic,
     SynthesisProvider,
     build_orchestrator,
 )
@@ -30,6 +31,7 @@ def triage(
     provider: HypothesisProvider | None = None,
     synthesis_provider: SynthesisProvider | None = None,
     rag: LiteratureRetriever | None = None,
+    critic: RankingCritic | None = None,
     top_k: int = DEFAULT_TOP_K,
     runs_dir: str | None = None,
     thread_id: str = "cli",
@@ -48,6 +50,7 @@ def triage(
         provider=provider,
         rag=rag,
         synthesis_provider=synthesis_provider,
+        critic=critic,
         top_k=top_k,
     )
     config = {"configurable": {"thread_id": thread_id}}
@@ -109,6 +112,7 @@ def main(argv: list[str] | None = None) -> None:
     # Concrete seams imported lazily so importing this module (and the offline
     # ``triage`` tests) never pulls in langchain/requests.
     from materials_triage.agent.llm import HypothesisProvider as BedrockHypothesisProvider
+    from materials_triage.agent.llm import RankingCritic as BedrockRankingCritic
     from materials_triage.agent.llm import SynthesisProvider as BedrockSynthesisProvider
     from materials_triage.retrieval.rag import LiteratureRAG, OpenAlexFetcher
     from materials_triage.sources.materials_project import MaterialsProjectAdapter
@@ -119,6 +123,7 @@ def main(argv: list[str] | None = None) -> None:
         provider=BedrockHypothesisProvider(),
         synthesis_provider=BedrockSynthesisProvider(),
         rag=LiteratureRAG(OpenAlexFetcher()),
+        critic=BedrockRankingCritic(),
         top_k=args.top_k,
         runs_dir=args.runs_dir,
         thread_id=args.thread_id,

@@ -10,8 +10,14 @@ import sys
 
 import pytest
 
-from materials_triage.agent.llm import HypothesisProvider, SynthesisProvider, _role_messages
+from materials_triage.agent.llm import (
+    HypothesisProvider,
+    RankingCritic,
+    SynthesisProvider,
+    _role_messages,
+)
 from materials_triage.agent.prompts import ROLE_SYSTEM_PROMPT
+from materials_triage.core.critique import RankingCritique, TargetVerdict
 from materials_triage.core.hypothesis import ConstraintProposal, Hypothesis
 from materials_triage.core.schema import Constraint
 from materials_triage.core.synthesis import Synthesis
@@ -110,6 +116,29 @@ def test_synthesis_provider_constructs_offline_without_importing_bedrock():
     """Like the hypothesis provider, the synthesis provider builds its Bedrock seam
     lazily — construction needs no langchain_aws or AWS credentials."""
     SynthesisProvider()
+
+    assert "langchain_aws" not in sys.modules
+
+
+def test_ranking_critic_returns_the_critique_the_seam_produced():
+    """The ranking critic delegates to its injected seam and hands back the
+    RankingCritique it produced, forwarding the prompt verbatim — it invents nothing."""
+    canned = RankingCritique(
+        verdicts=(TargetVerdict(property_name="band_gap", keep=True, reason="core"),)
+    )
+    seen = []
+    critic = RankingCritic(critique=lambda prompt: (seen.append(prompt), canned)[1])
+
+    result = critic.critique("RENDERED critique prompt")
+
+    assert result is canned
+    assert seen == ["RENDERED critique prompt"]
+
+
+def test_ranking_critic_constructs_offline_without_importing_bedrock():
+    """Like the other providers, the critic builds its Bedrock seam lazily —
+    construction needs no langchain_aws or AWS credentials."""
+    RankingCritic()
 
     assert "langchain_aws" not in sys.modules
 
