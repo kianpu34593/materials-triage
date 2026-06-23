@@ -28,6 +28,7 @@ def triage(
     synthesis_provider,
     rag=None,
     query_provider=None,
+    ranking_critic=None,
     runs_dir=None,
     thread_id="cli",
 ):
@@ -45,6 +46,7 @@ def triage(
         synthesis_provider=synthesis_provider,
         rag=rag,
         query_provider=query_provider,
+        ranking_critic=ranking_critic,
     )
     config = {"configurable": {"thread_id": thread_id}}
     state = orchestrator.invoke({"goal": goal, "run_id": thread_id}, config)
@@ -99,6 +101,7 @@ def main(argv=None) -> int:
     from materials_triage.agent.llm import (
         HypothesisProvider,
         QueryProvider,
+        RankingCriticProvider,
         SynthesisProvider,
     )
     from materials_triage.retrieval.rag import LiteratureRAG, OpenAlexFetcher
@@ -112,6 +115,7 @@ def main(argv=None) -> int:
             synthesis_provider=SynthesisProvider(),
             rag=LiteratureRAG(OpenAlexFetcher()),
             query_provider=QueryProvider(),
+            ranking_critic=RankingCriticProvider(),
             view=args.view,
             runs_dir=args.runs_dir,
         )

@@ -74,6 +74,7 @@ def build_seams():
     from materials_triage.agent.llm import (
         HypothesisProvider,
         QueryProvider,
+        RankingCriticProvider,
         SynthesisProvider,
     )
     from materials_triage.retrieval.rag import LiteratureRAG, OpenAlexFetcher
@@ -85,6 +86,7 @@ def build_seams():
         "synthesis_provider": SynthesisProvider(),
         "rag": LiteratureRAG(OpenAlexFetcher()),
         "query_provider": QueryProvider(),
+        "ranking_critic": RankingCriticProvider(),
     }
 
 

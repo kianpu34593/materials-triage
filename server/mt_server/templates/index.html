@@ -47,7 +47,10 @@
     .psg .meta { font-size: .75rem; color: #8898; font-family: ui-monospace, monospace; }
     .psg .snip { font-size: .85rem; margin-top: .2rem; }
     .prop { font: 13px/1.4 ui-monospace, monospace; margin: .25rem 0; }
+    .prop.dropped { opacity: .55; text-decoration: line-through; }
     .prop .cite { color: #2e9e4f; }
+    .verdict-keep { color: #2e9e4f; font-weight: 600; }
+    .verdict-drop { color: #e74c3c; font-weight: 600; }
     details.prompt summary { cursor: pointer; font-size: .85rem; color: #8898; }
     details.prompt pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: #8881; padding: .6rem; border-radius: 4px; }
   </style>
@@ -148,17 +151,35 @@
       ps.appendChild(det);
       box.appendChild(ps);
 
+      const dropped = new Set(
+        (t.critique || []).filter((v) => !v.keep).map((v) => v.property_name)
+      );
       const propWrap = el("div");
       t.proposals.forEach((pr) => {
-        const line = el("div", "prop", pr.kind + ": " + pr.summary + "  ");
+        const isDropped = [...dropped].some((n) => pr.summary.includes(n));
+        const line = el("div", "prop" + (isDropped ? " dropped" : ""), pr.kind + ": " + pr.summary + "  ");
         if (pr.citations.length) {
           line.appendChild(el("span", "cite", "[cites " + pr.citations.join(", ") + "]"));
         } else {
           line.appendChild(el("span", "pill verbatim", "uncited"));
         }
+        if (isDropped) line.appendChild(el("span", "pill miss", "pruned by critic"));
         propWrap.appendChild(line);
       });
       stage("5 · LLM proposals (grounded + cited)", propWrap);
+
+      // 6 · critic review (the second agent's keep/drop verdicts).
+      if (t.critique && t.critique.length) {
+        const cw = el("div");
+        t.critique.forEach((v) => {
+          const line = el("div", "prop");
+          line.appendChild(el("span", v.keep ? "verdict-keep" : "verdict-drop",
+            (v.keep ? "✓ kept " : "✗ dropped ") + v.property_name));
+          line.appendChild(document.createTextNode(" — " + v.reason));
+          cw.appendChild(line);
+        });
+        stage("6 · critic review (off-goal objectives pruned)", cw);
+      }
 
       ragtrace.replaceChildren(box);
     };

@@ -26,6 +26,7 @@ from langgraph.types import interrupt
 from pydantic import ValidationError
 
 from materials_triage.agent.validator import validate_output
+from materials_triage.core.critique import RankingCritique, prune_ranking_proposals
 from materials_triage.core.fidelity import reconcile_spec
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
 from materials_triage.core.ranking import rank
@@ -72,6 +73,14 @@ class QueryProvider(Protocol):
     query before RAG: a rendered prompt in, a plain-text query out."""
 
     def rewrite_query(self, prompt: str) -> str: ...
+
+
+class RankingCritic(Protocol):
+    """The second-agent seam: reviews the proposed ranking objectives and the
+    reasons given for them against the goal, returning a keep/drop verdict per
+    target so off-goal objectives the hypothesis invented can be pruned."""
+
+    def critique(self, prompt: str) -> RankingCritique: ...
 
 
 class InputRefused(RuntimeError):
@@ -195,7 +204,11 @@ _BOUND_GUIDANCE = (
     "When the goal implies a target range rather than an extreme (e.g. a "
     "semiconductor wants a moderate band gap, not the widest possible), set BOTH "
     "a min and a max to express that window, and leave ranking to express "
-    "'as high/low as possible' preferences."
+    "'as high/low as possible' preferences.\n\n"
+    "Propose a ranking target ONLY for a property the goal explicitly asks to "
+    "optimize; do not add objectives the user did not request. For each ranking "
+    "target, the rationale MUST name the specific phrase in the goal that motivates "
+    "it (a target you cannot tie to a goal phrase should not be proposed)."
 )
 
 
@@ -352,11 +365,58 @@ def _build_rag_trace(
     }
 
 
+def _critic_prompt(goal: str, ranking_proposals) -> str:
+    """Render the critic prompt: the goal (untrusted DATA) plus each proposed
+    ranking objective with its weight, citation status, and the reason given,
+    asking for a keep/drop verdict judged strictly against the goal."""
+    wrapped = wrap_untrusted(goal, label="user query", nonce=secrets.token_hex(8))
+    lines = []
+    for p in ranking_proposals:
+        t = p.ranking_target
+        cited = "cited" if p.citations else "uncited"
+        lines.append(
+            f"- {t.property_name} ({t.direction}, weight {t.weight:.2f}, {cited}): {p.rationale}"
+        )
+    return (
+        "A prior agent proposed the ranking objectives below for the materials-triage "
+        "goal in the data block. For EACH objective decide keep=true only if the goal "
+        "genuinely asks for or implies optimizing that property; keep=false if it is an "
+        "objective the user did not request (however reasonable it seems). Give a "
+        "one-sentence reason per objective, judged only against the stated goal — not "
+        "general materials desirability.\n"
+        + wrapped
+        + "\n\nProposed ranking objectives:\n"
+        + "\n".join(lines)
+    )
+
+
+def _apply_ranking_critic(
+    ranking_critic: "RankingCritic | None", goal: str, hypothesis: Hypothesis
+) -> tuple[Hypothesis, list[dict] | None]:
+    """Have the critic vote on the hypothesis's ranking targets and prune the
+    rejected ones. Returns the (possibly pruned) hypothesis and the critic's
+    verdicts as JSON-safe dicts for the trace (None if no critic / no targets).
+    Soft-degrades: a critic error leaves the hypothesis untouched."""
+    ranking_props = [p for p in hypothesis.proposals if p.kind == "ranking_target"]
+    if ranking_critic is None or not ranking_props:
+        return hypothesis, None
+    try:
+        critique = ranking_critic.critique(_critic_prompt(goal, ranking_props))
+    except Exception:  # noqa: BLE001 — the critic is best-effort; keep the hypothesis as-is
+        return hypothesis, None
+    kept, dropped = prune_ranking_proposals(hypothesis.proposals, critique)
+    verdicts = [v.model_dump() for v in critique.verdicts]
+    if not dropped:
+        return hypothesis, verdicts
+    return Hypothesis(proposals=kept, mechanism=hypothesis.mechanism), verdicts
+
+
 def _make_hypothesis_node(
     provider: HypothesisProvider | None,
     vocabulary: Mapping[str, str] | None = None,
     rag: "LiteratureRetriever | None" = None,
     query_provider: "QueryProvider | None" = None,
+    ranking_critic: "RankingCritic | None" = None,
     max_attempts: int = DEFAULT_MAX_HYPOTHESIS_ATTEMPTS,
 ):
     """The hypothesis step: the LLM proposes the cited spec-bridges. Structured
@@ -371,9 +431,11 @@ def _make_hypothesis_node(
     abstracts; None — or a retrieval that errors — degrades to an ungrounded
     hypothesis rather than failing the run (RAG is grounding, not ground-truth).
     ``query_provider`` rewrites the goal into a focused search query before RAG;
-    None falls back to searching with the goal verbatim. The node records the full
-    goal -> query -> RAG -> passages -> prompt -> proposals interaction on the
-    ``rag_trace`` channel for the audit view and the live GUI panel."""
+    None falls back to searching with the goal verbatim. ``ranking_critic`` is the
+    second agent that reviews the proposed ranking objectives against the goal and
+    prunes the off-goal ones. The node records the full goal -> query -> RAG ->
+    passages -> prompt -> proposals -> critique interaction on the ``rag_trace``
+    channel for the audit view and the live GUI panel."""
     vocabulary = vocabulary or {}
 
     def hypothesis(state: OrchestratorState) -> dict:
@@ -392,8 +454,13 @@ def _make_hypothesis_node(
             except ValidationError as exc:
                 last_exc = exc
                 continue
+            # The trace shows the LLM's *original* proposals; the critic then prunes
+            # the off-goal ranking targets from what flows downstream.
             trace = _build_rag_trace(goal, search_query, query_generated, passages, prompt, result)
-            return {"hypothesis": result, "rag_trace": trace}
+            final, verdicts = _apply_ranking_critic(ranking_critic, goal, result)
+            if verdicts is not None:
+                trace["critique"] = verdicts
+            return {"hypothesis": final, "rag_trace": trace}
         raise HypothesisConformanceError(
             f"LLM did not produce a schema-valid Hypothesis in {max_attempts} attempts"
         ) from last_exc
@@ -635,6 +702,7 @@ def build_orchestrator(
     synthesis_provider: SynthesisProvider | None = None,
     rag: "LiteratureRetriever | None" = None,
     query_provider: "QueryProvider | None" = None,
+    ranking_critic: "RankingCritic | None" = None,
     checkpointer: MemorySaver | None = None,
 ) -> CompiledStateGraph:
     """Build and compile the triage orchestrator graph.
@@ -653,7 +721,9 @@ def build_orchestrator(
     vocabulary = adapter.property_vocabulary() if adapter is not None else {}
     nodes = {
         "gate": _gate_node,
-        "hypothesis": _make_hypothesis_node(provider, vocabulary, rag, query_provider),
+        "hypothesis": _make_hypothesis_node(
+            provider, vocabulary, rag, query_provider, ranking_critic
+        ),
         "spec_build": _spec_build_node,
         "retrieve": _make_retrieve_node(adapter),
         "filter": _filter_node,

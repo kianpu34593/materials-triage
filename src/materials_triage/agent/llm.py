@@ -11,6 +11,7 @@ MaterialsProjectAdapter's ``http_get`` seam.
 from collections.abc import Callable
 
 from materials_triage.agent.prompts import ROLE_SYSTEM_PROMPT
+from materials_triage.core.critique import RankingCritique
 from materials_triage.core.hypothesis import Hypothesis
 from materials_triage.core.synthesis import Synthesis
 
@@ -20,6 +21,8 @@ Complete = Callable[[str], Hypothesis]
 CompleteSynthesis = Callable[[str], Synthesis]
 #: A completion seam: a rendered prompt string -> a plain text response.
 CompleteText = Callable[[str], str]
+#: A completion seam: a rendered prompt string -> a validated RankingCritique.
+CompleteCritique = Callable[[str], RankingCritique]
 
 
 def _role_messages(prompt: str) -> list[tuple[str, str]]:
@@ -85,6 +88,23 @@ class QueryProvider:
         self._complete = complete or _bedrock_text(model_id, region)
 
     def rewrite_query(self, prompt: str) -> str:
+        return self._complete(prompt)
+
+
+class RankingCriticProvider:
+    """The critic agent: reviews the proposed ranking objectives against the goal
+    and returns a keep/drop verdict per target, via an injected Bedrock seam
+    structured to :class:`RankingCritique`."""
+
+    def __init__(
+        self,
+        complete: CompleteCritique | None = None,
+        model_id: str = DEFAULT_MODEL_ID,
+        region: str = DEFAULT_REGION,
+    ) -> None:
+        self._complete = complete or _bedrock_structured(model_id, region, RankingCritique)
+
+    def critique(self, prompt: str) -> RankingCritique:
         return self._complete(prompt)
 
 
