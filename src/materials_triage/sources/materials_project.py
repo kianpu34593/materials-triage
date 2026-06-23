@@ -96,7 +96,16 @@ class MaterialsProjectAdapter(SourceAdapter):
             for b in spec.boolean_constraints
             if b.property_name in FIELD_UNITS and b.property_name not in PUSHABLE_PARAMS
         )
-        return PredicateRouting(local_booleans=local_booleans)
+        # Composition is retrievable (`elements` comes back), but only `all`/`none` map
+        # to query params (`elements`/`exclude_elements`); `any` has no MP OR-param, so
+        # it's the exclusive set — enforced locally.
+        local_element_predicates = tuple(
+            p for p in spec.element_predicates if p.quantifier == "any"
+        )
+        return PredicateRouting(
+            local_booleans=local_booleans,
+            local_element_predicates=local_element_predicates,
+        )
 
 
 #: Identity fields always requested alongside the spec's properties.

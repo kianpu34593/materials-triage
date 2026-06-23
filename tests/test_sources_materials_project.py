@@ -427,6 +427,24 @@ def test_classify_routes_an_unqueryable_boolean_to_local():
     assert BooleanConstraint(property_name="is_stable", required=True) not in routing.local_booleans
 
 
+def test_classify_routes_an_any_predicate_to_local_but_not_all_or_none():
+    """Composition is retrievable (`elements` comes back), but MP has no OR-membership
+    query param, so an `any` predicate is the exclusive set → local. `all` (`elements`)
+    and `none` (`exclude_elements`) are queryable, so they stay the server's job."""
+    spec = TriageSpec(
+        element_predicates=(
+            ElementPredicate(quantifier="any", members=frozenset({"Fe", "Co"})),
+            ElementPredicate(quantifier="all", members=frozenset({"O"})),
+            ElementPredicate(quantifier="none", members=frozenset({"Pb"})),
+        ),
+    )
+
+    routing = MaterialsProjectAdapter(http_get=lambda *a: {}).classify_predicates(spec)
+
+    quantifiers = {p.quantifier for p in routing.local_element_predicates}
+    assert quantifiers == {"any"}
+
+
 def test_retrieve_excludes_forbidden_elements_server_side():
     """A "none"-quantifier ElementPredicate scopes the pool server-side via MP's
     `exclude_elements` param (sorted, comma-joined) — the mirror of `elements`."""

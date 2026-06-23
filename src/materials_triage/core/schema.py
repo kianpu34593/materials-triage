@@ -288,6 +288,7 @@ class PredicateRouting(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     local_booleans: tuple[BooleanConstraint, ...] = ()
+    local_element_predicates: tuple[ElementPredicate, ...] = ()
 
 
 class ScoredCandidate(BaseModel):
