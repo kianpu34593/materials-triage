@@ -35,6 +35,15 @@ notebook = [
 llm = [
     "langchain-aws>=0.2",
 ]
+# Optional: the throwaway local web GUI (server/mt_server/app.py). Edge-only,
+# lazy-imported; the pure core never depends on it. Launch with:
+#   uvicorn mt_server.app:app --reload --app-dir server
+gui = [
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+    "jinja2>=3",
+    "python-dotenv>=1",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

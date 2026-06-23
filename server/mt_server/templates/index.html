@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Materials-Triage</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 820px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; }
+    textarea { width: 100%; box-sizing: border-box; padding: .6rem; font: inherit; }
+    fieldset { border: 1px solid #8884; border-radius: 6px; margin: 1rem 0; }
+    button { font: inherit; padding: .5rem 1.2rem; cursor: pointer; }
+    .hint { color: #8888; font-size: .85rem; }
+    .result { background: #8881; border-radius: 6px; padding: 1rem; overflow-x: auto; white-space: pre; font: 14px/1.45 ui-monospace, monospace; }
+    .banner { border-radius: 6px; padding: .8rem 1rem; margin: 1rem 0; }
+    .banner.refusal { background: #f5a6231a; border: 1px solid #f5a623; }
+    .banner.error { background: #e74c3c1a; border: 1px solid #e74c3c; }
+  </style>
+</head>
+<body>
+  <h1>Materials-Triage <span class="hint">— local demo</span></h1>
+  <form method="post" action="/triage">
+    <label for="goal"><strong>Request</strong> (natural language)</label>
+    <textarea id="goal" name="goal" rows="4" placeholder="e.g. Find me a few stable, low-density oxides with a wide band gap.">{{ goal or "" }}</textarea>
+    <fieldset>
+      <legend>View</legend>
+      <label><input type="radio" name="view" value="pi" {{ "checked" if view != "audit" else "" }}> PI summary</label>
+      <label><input type="radio" name="view" value="audit" {{ "checked" if view == "audit" else "" }}> Audit trace</label>
+    </fieldset>
+    <button type="submit">Run triage</button>
+    <p class="hint">Runs live against AWS Bedrock + Materials Project; a request can take 10&ndash;60s.</p>
+  </form>
+
+  {% if refusal %}
+  <div class="banner refusal">
+    <strong>Refused [{{ refusal.category }}]</strong>: {{ refusal.reason }}
+  </div>
+  {% endif %}
+  {% if error %}
+  <div class="banner error">
+    <strong>Error</strong>: {{ error }}
+  </div>
+  {% endif %}
+  {% if result_md %}
+  <h2>Result <span class="hint">({{ view }} view)</span></h2>
+  <div class="result">{{ result_md }}</div>
+  {% endif %}
+</body>
+</html>
