@@ -1,4 +1,4 @@
-# Session Handoff - 2026-06-23 11:29
+# Session Handoff - 2026-06-23 12:01
 
 > Single living handoff, git-tracked at `docs/handoff.md`. Keep it **lean** — deep per-session
 > history lives in [`docs/handoff-archive.md`](handoff-archive.md); recurring gotchas live in
@@ -102,13 +102,10 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
   pass-through; future #25–#27). Data is captured in `TriageRun.caveats`; the views read it when built.
 - **Pairs with 2b's "bounded + loud" caveat** (cap-hit) — same `caveats` channel, same honesty rationale.
 
-**2b · 🆕 Pagination in `retrieve()`** — ✅ **BUILT, committed on `feat/retrieve-pagination` (9ab2bd7); PR pending** (no-mistakes review step blocked on a transient `API Error: 529 Overloaded` 2026-06-23 — code is fine, just retry `no-mistakes rerun` when the API recovers). *Sibling to #38; together they = "retrieve the complete filtered candidate set." Not part of #38 (#38 is the pure `_query_params` transform; this is the I/O loop).*
-- [x] page MP's `_skip`/`_limit` to exhaust the (filtered) result set, accumulating candidates
-- **AS BUILT (TDD, vertical slices).** `_paginate(http_get, params, headers, ceiling)` loops `_skip` by `_limit`, accumulates docs, stops on a **short page** (fewer than `_limit` rows ⇒ set exhausted) or the **`_MAX_CANDIDATES=10000` ceiling**; returns `(docs, capped)`. **Page size `_DEFAULT_LIMIT` bumped 100 → 1000** (MP's schema-documented `_limit` max — "Limited to 1000" in `mp_summary_schema.json` — chosen to minimize HTTP calls / blacklist risk per Kian). Ceiling hit ⇒ a **loud caveat** ("result set capped at 10000…; ranking over a subset"), never a silent bigger truncation.
-- **Contract change (Kian-approved): `retrieve(spec) -> RetrievalResult(candidates, caveats)`** (was `list[Candidate]`). New frozen model in `core/schema.py`. The I/O loop reports an incomplete set as a *first-class output*, not hidden state / a side channel. `SourceAdapter` base + deferred stubs adopt it.
-- **Orchestrator wiring:** retrieve node splits the result into the `candidates` channel + a **new single-writer `retrieval_caveats` channel** (preserves the single-writer-per-stage invariant). `export_run` **unions** `retrieval_caveats + caveats` into `TriageRun.caveats` — mirrors how `result.excluded` unions the two exclusion channels at the presentation boundary (NOT a filter-node read+merge). [memory: orchestrator-exclusions-two-sources]
-- **The three requirements met:** (1) **filter-first** — depends on #38 (merged ✅), which shrinks N to a pageable set. (2) **bounded + loud** — ceiling + caveat, same `caveats` honesty channel as 2b's cap notice + 2c. (3) **adapter-owned** — `_skip`/`_limit` stay inside `retrieve`; contract is still `retrieve(spec) -> complete set` (now wrapped in `RetrievalResult`).
-- **Coverage caveat:** multi-page behavior at *real* settings (1000/page) isn't exercised offline (would need 1000+ fixture docs); `_paginate` unit tests drive the loop with small `_limit`, the cap-caveat test monkeypatches the ceiling low, and a `live` run would exercise the real cadence.
+**2b · 🆕 Pagination in `retrieve()`** — *sibling to #38; together they = "retrieve the complete filtered candidate set." Not part of #38 (#38 is the pure `_query_params` transform; this is the I/O loop).*
+- [ ] page MP's `_skip`/`_limit` to exhaust the (filtered) result set, accumulating candidates
+- **Why it's needed, separately from #38:** today `retrieve()` fetches ONE page (`_limit=100`) and stops, so any query matching >100 materials *silently truncates* and the ranker only ever sees an arbitrary 100. #38 fixes *which* 100 (quality of the page); it does **not** fix the cap. Our composite weighted-average rank can't be pushed server-side (MP sorts by a single field), so the ranker must see the complete filtered set locally.
+- **Three things it must get right:** (1) **filter-first** — pagination depends on #38 landing, or you page an unfiltered subset (tens of thousands of rows, infeasible); #38 shrinks N to something pageable. (2) **bounded + loud** — page up to a declared ceiling and, if hit, record a caveat in the trace ("result set capped at N; ranking over a subset"); a silent bigger cap is the same bug with a bigger number. (3) **adapter-owned** — `_skip`/`_limit` are MP I/O detail, stay inside `retrieve()`; the `SourceAdapter` contract (`retrieve(spec) -> complete candidate list`) is unchanged.
 
 > **H₂O is not fixed here.** "Metal oxides" must compile to `all={O}` AND `any={metallic elements}` so water
 > (has O, no metal) drops at the hard-filter stage. That needs the *set* of metals — **#37 area B
@@ -116,19 +113,10 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
 > It is a spec-expressiveness + LLM-comprehension problem: not #38, and **not** synthesis (synthesis narrates
 > the ranked shortlist and may not silently reorder/drop). See the leverage-order note under Discoveries.
 
-**3 · Synthesis & validation primitives** (port from reference) — ✅ **PRIMITIVES BUILT on
-`feat/synthesis-primitives`** (additive, pure, pagination-/orchestrator-independent; the synthesis
-NODE wiring itself is deferred to #34).
-- [x] **#20** output validator — `agent/validator.py` `validate_output(result, synthesis, retrieved_ids)`
-  raises `UngroundedOutputError` unless every presented candidate (ranked AND excluded) and every
-  narrative citation resolves to retrieved provenance; returns `None` on a clean output.
-- [x] **#35** synthesis — `core/synthesis.py` `GroundedClaim`/`Synthesis` (frozen) +
-  `ungrounded_record_ids(synthesis, valid_ids)` (order-preserving, de-duplicated cited ids that don't
-  resolve to a retrieved candidate — the grounding check the validator and the synthesis retry loop share).
-- [x] **#22** synthesis prompt — `agent/prompts.py` `build_synthesis_prompt(goal, result, snippets, *, nonce)`:
-  the citable ranked shortlist (id+formula+score) is TRUSTED instruction text, while the user goal and the
-  RAG `LiteraturePassage` snippets are UNTRUSTED DATA fenced via `wrap_untrusted` with the call's nonce.
-  (Hypothesis-prompt binding still pending → #34.)
+**3 · Synthesis & validation primitives** (port from reference)
+- [ ] **#20** output validator — every referenced ID + citation must resolve to retrieved provenance
+- [ ] **#35** synthesis — grounded narrative + mechanistic "why," each claim cited, no invented numbers
+- [ ] **#22** prompt templates — hypothesis + synthesis
 
 **4 · #34 — Wire the orchestrator** *(replace the four PASS-THROUGH nodes)*
 - [ ] gate node · [ ] hypothesis node · [ ] synthesis node · [ ] output_validate node
@@ -142,12 +130,34 @@ NODE wiring itself is deferred to #34).
 - [ ] **#40** RAG→synthesis (citations + caveats + ordering-fidelity) — unblocks after #35 + #20
 
 **Out of scope for the CLI:** #28 (eval), #29/#30/#36 (docs), #31 (drop reasons), all HB* hosting tasks,
-#37 area B (element-class constants) + area C (ranking) — both **deferred** (low priority).
+#37 area B (element-class constants) — **deferred**. (#37 area C "ranking beyond weighted-sum" is **partly
+shipped** by #66 — the geometric-mean desirability ranker — see "Ranking" below.)
+
+**Ranking — selectable arithmetic/geometric-mean rankers — ✅ MERGED (#66, 2026-06-23).** A second
+deterministic ranker now sits alongside the preserved weighted-sum, selected per run by
+`TriageSpec.ranking_method` (recorded → traceable/replayable). `arithmetic_mean` (default, unchanged
+behavior) is the old `rank()` renamed; `geometric_mean` is the non-compensatory weighted geometric mean of
+per-target **Derringer–Suich desirability curves** (`maximize`/`minimize`/`target` "moderate-is-best" shapes
++ a curvature exponent). The contract is fail-fast at spec construction (no silent wrong answers):
+- **anchors/curvature are geometric-only** — rejected under `arithmetic_mean` (it scores via pool-relative
+  `normalize`, which would silently ignore them); a `target` direction *requires* `geometric_mean`.
+- **`geometric_mean` requires announced absolute bounds on every target** (no pool fallback) — so a `0`
+  desirability means a genuine acceptability-floor failure, not merely pool-worst (which the geometric mean
+  would catastrophically zero). Per direction: maximize→`lower`+`target`, minimize→`target`+`upper`,
+  target→all three; strictly ascending; the unused monotonic anchor must be omitted.
+- **`arithmetic_mean` keeps pool fallback** (additive, no catastrophic zero).
+- **Default stays `arithmetic_mean`** (zero-setup). Flipping the default to `geometric_mean` is **deferred to
+  the #34/#22 PR** — because a default-geometric spec forces every target to announce bounds, which nothing
+  upstream provides until the hypothesis prompt does. **The bounds announcement is the #34/#22 hypothesis
+  responsibility** (the ranking step only enforces via the schema → LLM retry). [memory:
+  desirability-ranking-bounds-same-source]
 
 ## What's merged on `main` (the foundation to build on)
 - **Core:** `core/schema.py` (all frozen models; `Provenance` now carries required `method` + optional
   `xc_functional`), `core/elements.py`, `core/scoring.py` (`apply_hard_filters`/`on_missing`),
-  `core/ranking.py` (weighted-average), `core/hypothesis.py` (models + `compile_spec`, `kind`-discriminated
+  `core/ranking.py` (**two selectable rankers**: `rank_arithmetic_mean` weighted-average + `rank_geometric_mean`
+  desirability, #66), `core/scoring.py` also carries the desirability primitives (`desirability_curve`,
+  `resolve_bounds`, `score_desirability`), `core/hypothesis.py` (models + `compile_spec`, `kind`-discriminated
   union). #37 spec expressiveness areas **A** (BooleanConstraint / ElementPredicate all·any·none /
   CountConstraint) + **D** (trust metadata) shipped.
 - **Retrieval:** `sources/base.py` + `stubs.py` + `materials_project.py` — MP adapter does a **two-call**
@@ -167,6 +177,12 @@ NODE wiring itself is deferred to #34).
   (R∩¬Q → local, ¬R∩¬Q → caveat). `core/scoring.py` `apply_local_filters` enforces local booleans
   (`boolean_mismatch`) + element `any` (`element_mismatch`); `Candidate.elements` + retrieve request-back;
   orchestrator `_make_filter_node(adapter)` runs both filters + writes `TriageRun.caveats`. Live-verified.
+- **Selectable rankers (merged #66):** `core/ranking.py` `rank_arithmetic_mean` (was `rank()`) +
+  `rank_geometric_mean`; desirability primitives in `core/scoring.py`; `TriageSpec.ranking_method`
+  (`arithmetic_mean` default | `geometric_mean`) dispatched in `orchestrator._rank_node` via `_RANKERS`.
+  `RankingTarget` gains `direction="target"` + `lower/target/upper/curvature`; `TriageSpec`/`RankingTarget`
+  validators enforce the geometric-only + announced-bounds + strict-ascending contract (see "Ranking" above).
+  CLAUDE.md step 6 + the demo notebook were synced by the PR. [memory: desirability-ranking-bounds-same-source]
 - **Agent:** `agent/llm.py` Bedrock `HypothesisProvider` (injected `complete` seam; `us.*` inference-profile
   model id). `agent/prompts.py` `ROLE_SYSTEM_PROMPT` + `build_chat_messages`. `agent/orchestrator.py`
   LangGraph graph with per-stage exclusion channels + retry + spec-build HITL gate; `core/run_trace.py`
@@ -184,22 +200,25 @@ NODE wiring itself is deferred to #34).
   assumption-not-verified bug is exactly how #61's review caught a crash. [memory: verify-against-main-not-reference-impl])
 
 ## Status
-- **`main` @ `d2d4074`** (handoff-sync #65 merged on top of #63/#64). Pagination (2b) is **committed on
-  `feat/retrieve-pagination` @ `9ab2bd7`, NOT yet on `main`** — PR pending.
-- **2b pagination BUILT this session** (TDD): `_paginate` + `retrieve() -> RetrievalResult(candidates,
-  caveats)` + page size 1000 + 10k ceiling/loud cap-caveat + orchestrator `retrieval_caveats` channel +
-  `export_run` caveat union. **246 tests pass** (10 `live` deselected), ruff clean, signed commit.
-- **⏸ no-mistakes BLOCKED on a transient `API Error: 529 Overloaded`** at the *review* step (3 attempts, all
-  529 — not a code/finding issue). Branch is bootstrapped on the proxy; just `no-mistakes rerun` when the API
-  recovers (no re-push needed). Local gate is green.
-- **#38 + 2c done** (#63 server-side push, #64 exclusive-set local filter): full filtering architecture on
-  `main` — **server-side primary (PUSHABLE_PARAMS) + deterministic local filter for the exclusive set (R∩¬Q)
-  + loud caveats (¬R∩¬Q → TriageRun.caveats)**. `is_magnetic` and element `any` enforced end-to-end; live-verified.
+- **`main` @ `a40ef46`**, clean. **284 tests pass** (10 `live` deselected, incl. the MP filter-contract suite).
+- **Selectable rankers merged (#66):** arithmetic/geometric-mean rankers on `main` via
+  `TriageSpec.ranking_method`; the desirability contract (geometric-only anchors, geometric-requires-announced-
+  bounds, same-source/strict-ascending) is fail-fast at spec construction. Default stays `arithmetic_mean`;
+  geometric-as-default deferred to the #34/#22 PR (needs upstream bounds announcement). [memory:
+  desirability-ranking-bounds-same-source]
+- **#38 + 2c done** (#63 server-side push, #64 exclusive-set local filter): the full filtering architecture is
+  on `main` — **server-side primary (PUSHABLE_PARAMS) + deterministic local filter for the exclusive set
+  (R∩¬Q) + loud caveats (¬R∩¬Q → TriageRun.caveats)**. `is_magnetic` and element `any` enforced end-to-end;
+  live-verified.
 - **#39 supply side done** (merged #61). Increment 4 (prompt binding) → **#34**.
-- **#37 done** (A #51 + D #55; B + C deferred).
-- **Parallel work in flight:** `feat/desirability-ranker` (selectable geometric-mean desirability ranker) had
-  its own no-mistakes run running this session — independent, untouched by 2b. Leave it alone.
+- **#37 done** (A #51 + D #55; B deferred; **C "ranking beyond weighted-sum" partly shipped by #66**).
+- **Parallel sessions:** the other worktrees are on `feat/retrieve-pagination` (2b, PR pending — was 529-blocked)
+  and `feat/synthesis-primitives`. Independent of this handoff; do not touch their branches.
 - **Known issues / loose ends:**
+  - **2 informational no-ops from #66's review** (intentional): (1) `rank_geometric_mean` stores raw `dᵢ` in
+    `ScoredCandidate.contributions` (multiplicative, do NOT sum to score) vs `rank_arithmetic_mean`'s additive
+    shares — a future audit renderer must not assume additivity. (2) `docs/ultimate-design.md` §C3 still frames
+    geometric-mean desirability as "future" — left as roadmap; reclassify when convenient.
   - **4 informational nits from #64's review** to fix opportunistically (next time touching the files):
     (1) `classify_predicates` comment oversells — the ¬R caveat is *additive* (explains the empty result),
     NOT *protective*; `apply_hard_filters` still drops the candidates as `missing_data`. (2) `classify_predicates`
@@ -242,14 +261,6 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
   value (`bulk_modulus=1.0`) hid the real `{voigt,reuss,vrh}`-dict crash — fixtures for object-typed fields
   must use the **real payload shape**, and verify a ported helper exists on `main` before citing it (the
   no-mistakes review's grep caught the missing `_scalar`). [memory: verify-against-main-not-reference-impl]
-- **Pagination (2b): MP `_limit` caps at 1000** ("Limited to 1000." in the vendored `mp_summary_schema.json`)
-  — a *bigger* page size means *fewer* HTTP calls for the same set, so 1000 is the gentlest-on-the-API choice
-  (counter-intuitively: larger page ≠ more blacklist risk). The composite weighted-average rank **can't** be
-  pushed (MP sorts on one field), so the ranker must see the whole filtered set locally → pagination is
-  mandatory, not optional. Default-arg gotcha: `_paginate(ceiling=_MAX_CANDIDATES)` binds 10000 at def time,
-  so `retrieve` passes the ceiling **explicitly** (else `monkeypatch.setattr(mp, "_MAX_CANDIDATES", …)` in a
-  test wouldn't reach it). Caveats split by stage like exclusions: `retrieval_caveats` (retrieve node) +
-  `caveats` (filter node), unioned in `export_run`. [memory: orchestrator-exclusions-two-sources]
 - **Pushability ≠ retrievability (#38).** What a field *returns* and what it can be *filtered on* are two
   surfaces. The `/summary` GET endpoint declares **124 query params** (≠ the 39 retrievable fields):
   `is_magnetic` is retrievable but not queryable (pushing it **400s**), and the moduli filter via
@@ -267,6 +278,16 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
   adapter); functional lives in the task doc, varies per-property. [memory: materials-project-api, dft-xc-functional-comparability-v2]
 - **no-mistakes:** bootstrap from the **main repo** (not a worktree); `git push no-mistakes <branch>` → `axi
   abort` → `axi run --intent`; verify locally with `PYTHONPATH="$PWD/src" pytest`. [memory: no-mistakes-run-bootstrap]
+  *#66 corollary:* runs are per-branch and coexist concurrently (multiple sessions ran in parallel fine); a
+  worktree can drive `respond`/`rerun`, only the bootstrap *push* must come from the main repo. Transient
+  `529 Overloaded` API errors crash the no-mistakes Claude agents (review/fix/lint) → just `rerun`.
+- **Desirability/geometric ranker (#66): min-max normalization + a non-compensatory geometric mean is a trap.**
+  Pool-relative `d=0` (worst-in-pool) under `Π dᵢ^wᵢ` zeros a candidate's whole score for being last on *one*
+  axis — so the geometric ranker must use **absolute announced bounds** where `0` means a real floor failure,
+  never pool fallback. Mixing one announced + one pooled anchor also flips a ramp's sign (maximize → minimize)
+  → the **same-source rule**. The fix family is all fail-fast spec validation ("no silent wrong answers"): same
+  theme as H₂O. Announcing the bounds is an **upstream/hypothesis** duty (#34/#22). [memory:
+  desirability-ranking-bounds-same-source]
 
 ## Design direction (v2+): XC-functional-FIRST retrieval, not canonical-value acceptance
 *Raised by Kian 2026-06-23 while tracing #38's per-property functional handling. Important; likely **not v1**.*
@@ -311,16 +332,16 @@ property/material class *before* retrieval:
   this is the *consumption* — choose + fetch + flag/restrict ranking by functional).
 
 ## Context for Next Session
-- **Branch:** `feat/retrieve-pagination` @ `9ab2bd7` (2b, committed, signed) — **finish shipping first:**
-  `no-mistakes rerun` once the API recovers (review step was 529-blocked), then merge via GitHub UI +
-  `/sync-main`. `main` is at `d2d4074`. Build the next increment in a worktree (`PYTHONPATH="$PWD/src" pytest`).
-- **Verify 2b branch:** `PYTHONPATH="$PWD/src" python -m pytest -q` (246 pass, 10 deselected); `ruff check .`.
-  Live (needs creds): `pytest -m live`.
-- **Next up after 2b merges (pick one):** (a) **#34** wire the pass-through nodes
-  (gate/hypothesis/synthesis/output_validate) + bind the vocabulary into the hypothesis prompt; (b) **views /
-  render** (#25–#27) — also unblocks 2c's *and* 2b's caveat rendering (both feed `TriageRun.caveats`). The
-  deterministic filtering + retrieval core is now complete, so the remaining v1 gaps are the LLM nodes (#34)
-  and presentation (views).
+- **Branch:** `main` @ `a40ef46`, clean. Build the next increment in a worktree (run pytest with
+  `PYTHONPATH="$PWD/src" pytest`). Port from `feat/fast-track-wire-guardrails`.
+- **Verify merged state:** `python -m pytest -q` (284 pass, 10 deselected); `ruff check .`. Live (needs
+  creds): `pytest -m live`.
+- **Next up (pick one):** (a) **pagination** (2b — page `_skip`/`_limit` to exhaust the filtered set; the
+  natural sibling now that #38 makes the page filterable; reuses the `caveats` channel for the "capped at N"
+  notice); (b) **#34** wire the pass-through nodes (gate/hypothesis/synthesis/output_validate) + bind the
+  vocabulary into the hypothesis prompt; (c) **views / render** (#25–#27) — also unblocks 2c's caveat
+  rendering. The deterministic filtering core is now complete, so the remaining v1 gaps are I/O (pagination),
+  the LLM nodes (#34), and presentation (views).
 - **Credentials:** `X_API_KEY` (MP), `OPENALEX_MAILTO` (optional polite pool), AWS creds for Bedrock
   (prefer `~/.aws/credentials`; conftest `load_dotenv`s `.env`; AWS keys in `.env` must be UPPERCASE).
   **Never read/print the AWS creds or `X_API_KEY`.**
@@ -329,14 +350,12 @@ property/material class *before* retrieval:
   abort a commit → re-add + re-commit.
 - **Collaboration rules (CLAUDE.md):** ask before choosing between approaches; one function at a time then
   stop for approval; TDD via the `tdd` skill (never batch tests); **don't start coding until told.**
-- **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~, ~~2b pagination (built, PR pending)~~,
-  ~~#20/#35/#22 synthesis & validation primitives (built on `feat/synthesis-primitives`)~~ → **#34** ←
-  suggested next, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32,
-  #33, #37, **#39 (supply side; binding → #34)**, **#38 server-side push (#63)**, **2c exclusive-set local
-  filter (#64)**, **2b pagination (built on `feat/retrieve-pagination`, PR pending 529-retry)**,
-  **#20/#35/#22 synthesis & validation primitives (built on `feat/synthesis-primitives`; node wiring → #34)**.
-  Open within
-  2c + 2b: render caveats in views (blocked on the view layer #25–#27; both feed `TriageRun.caveats`). Deferred: #37 area
-  B/C (area B on the critical path for "metal oxides"); the **multi-source filter abstraction** (universal
-  local / filter_capability / residual — "see how it goes"); **v2 XC-functional-first retrieval** (design note
+- **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~, ~~ranking #66~~ → **pagination (2b, in flight on
+  `feat/retrieve-pagination`)**, #34, #20, #35, #22, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21,
+  #23, #24, #32, #33, #37, **#39 (supply side; binding → #34)**, **#38 server-side push (#63)**, **2c
+  exclusive-set local filter (#64)**, **selectable rankers (#66)**. Open within 2c: render caveats in views
+  (blocked on the view layer #25–#27). **#34/#22 now also owns:** bind the source vocabulary into the
+  hypothesis prompt AND have the LLM announce desirability bounds for `geometric_mean` targets (prerequisite to
+  flipping the default to `geometric_mean`). Deferred: #37 area B (on the critical path for "metal oxides"); the
+  **multi-source filter abstraction** ("see how it goes"); **v2 XC-functional-first retrieval** (design note
   above). Hosting = HB1–HB10.
