@@ -8,6 +8,8 @@ retrieval, LLM, and RAG seams are injected so the driver is fully offline-testab
 """
 
 import argparse
+import os
+import sys
 
 from langgraph.types import Command
 
@@ -101,9 +103,18 @@ def _load_env() -> None:
     load_dotenv()
 
 
-def main(argv: list[str] | None = None) -> None:
-    """CLI entry point: parse args, wire the real Bedrock / Materials Project /
-    OpenAlex seams, run the triage, and print the requested view to stdout."""
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point. ``materials-triage doctor`` runs the environment self-check
+    (and returns its exit code); otherwise the argument is a triage goal — wire the
+    real Bedrock / Materials Project / OpenAlex seams, run the triage, and print the
+    requested view to stdout. Returns a process exit code."""
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "doctor":
+        from materials_triage.doctor import run_doctor
+
+        _load_env()
+        return run_doctor(os.environ)
+
     args = _parse_args(argv)
     _load_env()
     # Concrete seams imported lazily so importing this module (and the offline
@@ -124,3 +135,4 @@ def main(argv: list[str] | None = None) -> None:
         thread_id=args.thread_id,
     )
     print(render_run(run, view=args.view, top_k=args.top_k))
+    return 0
