@@ -51,6 +51,21 @@ def test_vocabulary_names_only_properties_retrieve_can_populate():
     assert set(vocab) <= set(candidate.properties)  # every published name got populated
 
 
+def test_property_vocabulary_exposes_the_full_generated_surface():
+    """The adapter publishes the whole schema-derived surface (the generated table),
+    not just the original hand-pinned six -- efermi, total_magnetization, the
+    refractive index. A genuinely dimensionless field carries unit=None."""
+    adapter = MaterialsProjectAdapter(
+        http_get=lambda url, params, headers: pytest.fail("vocabulary must not hit the network")
+    )
+
+    vocab = adapter.property_vocabulary()
+
+    assert {"efermi", "total_magnetization", "n"} <= set(vocab)  # fields the old 6 lacked
+    assert vocab["band_gap"] == "eV"  # a pinned unit still resolves
+    assert vocab["n"] is None  # refractive index: dimensionless
+
+
 def test_origin_task_ids_indexes_task_ids_by_origin_name():
     """MP's origins list (one entry per computed property doc) collapses to a
     name -> task_id lookup, the first step in tracing each value to its run."""
@@ -78,15 +93,15 @@ def test_field_task_id_resolves_a_field_through_its_origin():
 
 
 def test_field_task_id_is_none_when_the_origin_is_absent():
-    """A field whose origin doc wasn't computed for this material (e.g. no
-    elasticity run) has no traceable task — its functional stays unknown."""
-    assert _field_task_id("bulk_modulus", {"energy": "t-energy"}) is None
+    """A field whose origin doc wasn't computed for this material (band_gap needs an
+    electronic_structure run, absent here) has no traceable task — functional unknown."""
+    assert _field_task_id("band_gap", {"energy": "t-energy"}) is None
 
 
 def test_field_task_id_is_none_for_a_field_with_no_origin_mapping():
-    """A field outside _FIELD_ORIGIN (not task-derived, e.g. a structural count)
-    has no functional to trace."""
-    assert _field_task_id("nsites", {"structure": "t-struct"}) is None
+    """A field outside _FIELD_ORIGIN (functional-independent, e.g. the element count
+    nelements) has no origin and so no functional to trace."""
+    assert _field_task_id("nelements", {"structure": "t-struct"}) is None
 
 
 def test_fetch_run_types_batches_task_ids_into_one_call():

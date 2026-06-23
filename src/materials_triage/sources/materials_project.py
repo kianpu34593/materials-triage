@@ -17,6 +17,7 @@ import os
 from collections.abc import Callable, Mapping
 
 from materials_triage.core.schema import Candidate, PropertyValue, Provenance, TriageSpec
+from materials_triage.sources._mp_fields import MP_FIELDS
 from materials_triage.sources.base import SourceAdapter
 
 #: A transport: ``(url, params, headers) -> parsed JSON envelope (dict)``.
@@ -25,31 +26,22 @@ HttpGet = Callable[[str, Mapping[str, str], Mapping[str, str]], dict]
 SOURCE_NAME = "Materials Project"
 DEFAULT_BASE_URL = "https://api.materialsproject.org"
 
-#: SummaryDoc field → pinned unit. The payload carries no units, so the adapter
-#: is the single place this tribal knowledge lives. Keys double as the canonical
-#: property names used by the constraint/ranking stages — no rename layer.
-FIELD_UNITS: Mapping[str, str] = {
-    "band_gap": "eV",
-    "energy_above_hull": "eV/atom",
-    "formation_energy_per_atom": "eV/atom",
-    "density": "g/cm³",
-    "bulk_modulus": "GPa",
-    "shear_modulus": "GPa",
-}
+#: SummaryDoc field → pinned unit (``None`` = dimensionless/count). The payload
+#: carries no units, so this tribal knowledge is pinned out-of-band. Derived from the
+#: generated MP_FIELDS table (built from the vendored schema by tools/gen_mp_vocab.py),
+#: so the surface stays in lockstep with what the schema exposes — no hand drift. Keys
+#: double as the canonical property names used by the constraint/ranking stages.
+FIELD_UNITS: Mapping[str, str | None] = {name: meta["unit"] for name, meta in MP_FIELDS.items()}
 
 #: SummaryDoc field → the name of the MP "origin" (computed property doc) whose
-#: calculation produced it. ``origins`` is keyed by these internal doc names, not
-#: by our field names, so this table is the bridge used to trace each value back
-#: to its task (and thence its XC functional). Vendor knowledge, hence here in the
-#: adapter and not the source-neutral core. A field with no matching origin in a
-#: given doc simply has no traceable task → its functional stays unknown.
+#: calculation produced it. ``origins`` is keyed by these internal doc names, not by
+#: our field names, so this is the bridge used to trace each value back to its task
+#: (and thence its XC functional). Only fields with a *traceable* origin appear —
+#: derived from MP_FIELDS, dropping the ``origin: None`` fields (elasticity has no
+#: origins[] entry, surface energies only method-named ones), so a value with no
+#: traceable task simply has no entry and its functional stays unknown.
 _FIELD_ORIGIN: Mapping[str, str] = {
-    "band_gap": "electronic_structure",
-    "formation_energy_per_atom": "energy",
-    "energy_above_hull": "energy",
-    "density": "structure",
-    "bulk_modulus": "elasticity",
-    "shear_modulus": "elasticity",
+    name: meta["origin"] for name, meta in MP_FIELDS.items() if meta["origin"] is not None
 }
 
 
@@ -76,12 +68,12 @@ class MaterialsProjectAdapter(SourceAdapter):
         run_types = _fetch_run_types(self._http_get, headers, _page_task_ids(docs))
         return [_doc_to_candidate(doc, run_types) for doc in docs]
 
-    def property_vocabulary(self) -> Mapping[str, str]:
+    def property_vocabulary(self) -> Mapping[str, str | None]:
         """The summary-API properties this adapter can populate, mapped to their
-        units — exactly the keys ``_doc_to_candidate`` parses, so a hypothesis
-        built from this vocabulary names only properties ``retrieve`` returns. The
-        table is committed static data (generated from the MP schema), never a
-        live fetch, keeping every run replayable."""
+        units (``None`` = dimensionless) — exactly the keys ``_doc_to_candidate``
+        parses, so a hypothesis built from this vocabulary names only properties
+        ``retrieve`` returns. The table is committed static data (generated from the
+        MP schema), never a live fetch, keeping every run replayable."""
         return FIELD_UNITS
 
 
@@ -216,6 +208,6 @@ def _doc_to_candidate(doc: dict, run_types: Mapping[str, str]) -> Candidate:
     return Candidate(identifier=material_id, formula=doc["formula_pretty"], properties=properties)
 
 
-def _property_value(raw: float | None, unit: str, provenance: Provenance) -> PropertyValue:
+def _property_value(raw: float | None, unit: str | None, provenance: Provenance) -> PropertyValue:
     """Wrap a raw payload number as a PropertyValue; a null becomes flagged-missing."""
     return PropertyValue(value=raw, unit=unit, missing=raw is None, provenance=provenance)

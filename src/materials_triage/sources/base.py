@@ -28,10 +28,11 @@ class SourceAdapter(abc.ABC):
         """Return the candidates this source offers for ``spec``, each property
         carrying its :class:`~materials_triage.core.schema.Provenance`."""
 
-    def property_vocabulary(self) -> Mapping[str, str]:
+    def property_vocabulary(self) -> Mapping[str, str | None]:
         """The canonical retrievable property names this source exposes, mapped to
-        their units (e.g. ``{"band_gap": "eV"}``). The spec-building prompt hands
-        these to the LLM so a hypothesis names only properties ``retrieve`` will
-        actually populate. The default is empty (a source that declares no
-        vocabulary constrains nothing); a real source overrides it."""
+        their units (e.g. ``{"band_gap": "eV"}``; ``None`` = dimensionless). The
+        spec-building prompt hands these to the LLM so a hypothesis names only
+        properties ``retrieve`` will actually populate. The default is empty (a
+        source that declares no vocabulary constrains nothing); a real source
+        overrides it."""
         return {}
