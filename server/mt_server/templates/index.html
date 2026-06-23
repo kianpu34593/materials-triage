@@ -23,6 +23,9 @@
     .step.running .mark { animation: pulse 1s ease-in-out infinite; }
     .step.done { color: #2e9e4f; }
     @keyframes pulse { 50% { opacity: .3; } }
+    #gate { border: 1px solid #6cf4; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+    #gate textarea { width: 100%; box-sizing: border-box; min-height: 16rem; font: 13px/1.45 ui-monospace, monospace; }
+    #gate .actions { margin-top: .6rem; display: flex; gap: .5rem; }
   </style>
 </head>
 <body>
@@ -41,6 +44,7 @@
 
   <!-- Live, JS-driven panes (filled by the SSE stream). -->
   <div id="progress"></div>
+  <div id="gate"></div>
   <div id="result"></div>
 
   <!-- No-JS fallback: full-page POST render. Hidden once JS takes over. -->
@@ -65,7 +69,9 @@
     const STEPS = {{ steps_json|safe }};
     const form = document.querySelector("form");
     const progress = document.getElementById("progress");
+    const gate = document.getElementById("gate");
     const result = document.getElementById("result");
+    let lastGoal = "", lastView = "pi", lastGate = null;
 
     const setState = (name, state) => {
       const el = document.getElementById("step-" + name);
@@ -75,32 +81,70 @@
         state === "done" ? "✓" : state === "running" ? "…" : "○";
     };
 
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const goal = form.goal.value.trim();
-      if (!goal) return;
-      const view = form.querySelector("input[name=view]:checked").value;
+    const banner = (cls, strong, text) => {
+      const b = document.createElement("div");
+      b.className = "banner " + cls;
+      if (strong) {
+        const s = document.createElement("strong");
+        s.textContent = strong;
+        b.append(s, document.createTextNode(": "));
+      }
+      b.appendChild(document.createTextNode(text));
+      return b;
+    };
 
-      result.innerHTML = "";
-      progress.innerHTML =
-        "<h2>Running…</h2>" +
-        STEPS.map((s) =>
-          `<div class="step pending" id="step-${s.name}"><span class="mark">○</span> ${s.label}</div>`
-        ).join("");
-      if (STEPS[0]) setState(STEPS[0].name, "running");
+    // Render the spec-approval gate: editable JSON + Proceed / Regenerate.
+    const showGate = (msg) => {
+      lastGate = msg;
+      setState("spec_build", "running");
+      gate.replaceChildren();
+      const h = document.createElement("h2");
+      h.textContent = "Review the compiled spec";
+      const note = document.createElement("p");
+      note.className = "hint";
+      note.textContent =
+        (msg.note || "Approve the compiled spec, edit it, or regenerate.") +
+        (msg.weights_were_normalized ? " (ranking weights were rescaled to sum to 1)" : "");
+      const ta = document.createElement("textarea");
+      ta.spellcheck = false;
+      ta.value = JSON.stringify(msg.spec, null, 2);
+      const proceed = document.createElement("button");
+      proceed.type = "button";
+      proceed.textContent = "Proceed with this spec";
+      proceed.onclick = () => {
+        try { JSON.parse(ta.value); } catch (err) {
+          gate.appendChild(banner("error", "Invalid JSON", String(err)));
+          return;
+        }
+        gate.replaceChildren();
+        runStream("/triage/resume?thread_id=" + encodeURIComponent(msg.thread_id) +
+                  "&view=" + encodeURIComponent(lastView) +
+                  "&spec=" + encodeURIComponent(ta.value));
+      };
+      const regen = document.createElement("button");
+      regen.type = "button";
+      regen.textContent = "Regenerate";
+      regen.onclick = () => startRun(lastGoal, lastView);
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      actions.append(proceed, regen);
+      gate.append(h, note, ta, actions);
+    };
 
-      const url = "/triage/stream?goal=" + encodeURIComponent(goal) +
-                  "&view=" + encodeURIComponent(view);
+    const runStream = (url) => {
       const es = new EventSource(url);
-
       es.onmessage = (ev) => {
         const msg = JSON.parse(ev.data);
         if (msg.type === "step") {
           setState(msg.name, "done");
           const i = STEPS.findIndex((s) => s.name === msg.name);
           if (STEPS[i + 1]) setState(STEPS[i + 1].name, "running");
+        } else if (msg.type === "spec_gate") {
+          es.close();
+          showGate(msg);
         } else if (msg.type === "done") {
-          progress.querySelector("h2").textContent = "Done";
+          const hd = progress.querySelector("h2");
+          if (hd) hd.textContent = "Done";
           const h = document.createElement("h2");
           h.textContent = "Result (" + msg.view + " view)";
           const pane = document.createElement("div");
@@ -109,29 +153,40 @@
           result.replaceChildren(h, pane);
           es.close();
         } else if (msg.type === "refused") {
-          const b = document.createElement("div");
-          b.className = "banner refusal";
-          b.innerHTML = "<strong>Refused [" + msg.category + "]</strong>: ";
-          b.appendChild(document.createTextNode(msg.reason));
-          progress.replaceChildren(b);
+          progress.replaceChildren(banner("refusal", "Refused [" + msg.category + "]", msg.reason));
           es.close();
         } else if (msg.type === "error") {
-          const b = document.createElement("div");
-          b.className = "banner error";
-          b.innerHTML = "<strong>Error</strong>: ";
-          b.appendChild(document.createTextNode(msg.message));
-          progress.appendChild(b);
           es.close();
+          progress.appendChild(banner("error", "Error", msg.message));
+          if (msg.retry && lastGate) showGate(lastGate);  // bad edit — let them fix it
         }
       };
       es.onerror = () => {
         if (es.readyState === EventSource.CLOSED) return;
         es.close();
-        const b = document.createElement("div");
-        b.className = "banner error";
-        b.textContent = "Connection lost before the run finished.";
-        progress.appendChild(b);
+        progress.appendChild(banner("error", null, "Connection lost before the run finished."));
       };
+    };
+
+    const startRun = (goal, view) => {
+      lastGoal = goal; lastView = view; lastGate = null;
+      result.replaceChildren();
+      gate.replaceChildren();
+      progress.innerHTML =
+        "<h2>Running…</h2>" +
+        STEPS.map((s) =>
+          `<div class="step pending" id="step-${s.name}"><span class="mark">○</span> ${s.label}</div>`
+        ).join("");
+      if (STEPS[0]) setState(STEPS[0].name, "running");
+      runStream("/triage/stream?goal=" + encodeURIComponent(goal) +
+                "&view=" + encodeURIComponent(view));
+    };
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const goal = form.goal.value.trim();
+      if (!goal) return;
+      startRun(goal, form.querySelector("input[name=view]:checked").value);
     });
   </script>
 </body>
