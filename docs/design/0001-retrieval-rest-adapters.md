@@ -45,9 +45,16 @@ unwraps the transport envelope, pins units the payload omits, attaches provenanc
   adapter never silently filters. *(#38, later refinement — partly reversed: the adapter now
   pushes every hard filter MP can express, gated on the schema-derived `PUSHABLE_PARAMS`, and is
   the **single authority** for those pushed filters — there is no redundant local re-check.
-  `apply_hard_filters` stays the authority only for the DB-inexpressible complement, e.g. element
-  `any`. Correctness of the pushed filters is guaranteed by a `live`-marked contract suite, not a
-  local backstop.)*
+  Correctness of the pushed filters is guaranteed by a `live`-marked contract suite, not a
+  local backstop.)* The DB-inexpressible complement — the **exclusive set** of predicates a source
+  can return data for but not query server-side (retrievable ∩ ¬queryable, e.g. MP's `is_magnetic`
+  or an element `any`) — is enforced by a separate `apply_local_filters` stage, fed by the
+  adapter's `classify_predicates(spec) -> PredicateRouting` (the adapter owns its retrievable
+  `FIELD_UNITS` and queryable `PUSHABLE_PARAMS` surfaces, so it routes each predicate; numeric
+  `Constraint`s stay `apply_hard_filters`' job). Predicates the source can neither push nor return
+  data for (¬retrievable ∩ ¬queryable) are recorded as loud run-level `caveats` rather than
+  silently ignored. This keeps multi-source free — each adapter's own R/Q gives its own exclusive
+  set, with no hand-maintained capability declaration.
 - **Network reality** — latency, rate limits, pagination. Mitigated by the step-cache (re-runs
   reuse retrieval) and a `_limit` cap; live calls sit behind a deselected `live` test marker.
 - **API drift** — a source changing its schema breaks one adapter; the per-source field→unit

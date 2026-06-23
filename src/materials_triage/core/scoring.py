@@ -11,6 +11,7 @@ from materials_triage.core.schema import (
     Candidate,
     Constraint,
     ExcludedCandidate,
+    PredicateRouting,
     RankingTarget,
 )
 
@@ -75,6 +76,57 @@ def apply_hard_filters(
                     bound=constraint.max,
                 )
                 break
+        if drop is not None:
+            excluded.append(drop)
+        else:
+            survivors.append(candidate)
+    return survivors, excluded
+
+
+def apply_local_filters(
+    candidates: list[Candidate], routing: PredicateRouting
+) -> tuple[list[Candidate], list[ExcludedCandidate]]:
+    """Enforce a source's *exclusive set* — the hard predicates it could neither push
+    server-side nor express numerically, so the deterministic layer must apply them.
+
+    Currently the local booleans (a retrievable-but-not-queryable flag like
+    ``is_magnetic``, stored as ``1.0``/``0.0``). A candidate whose value is absent is
+    dropped ``missing_data``; one whose flag disagrees with ``required`` is dropped
+    ``boolean_mismatch``. Numeric ``Constraint``s remain :func:`apply_hard_filters`'
+    job; this is the complement.
+    """
+    survivors: list[Candidate] = []
+    excluded: list[ExcludedCandidate] = []
+    for candidate in candidates:
+        drop: ExcludedCandidate | None = None
+        for boolean in routing.local_booleans:
+            prop = candidate.properties.get(boolean.property_name)
+            value = prop.value if prop is not None else None
+            if value is None:
+                drop = ExcludedCandidate(
+                    candidate=candidate,
+                    property_name=boolean.property_name,
+                    reason="missing_data",
+                )
+                break
+            if bool(value) != boolean.required:
+                drop = ExcludedCandidate(
+                    candidate=candidate,
+                    property_name=boolean.property_name,
+                    reason="boolean_mismatch",
+                )
+                break
+        if drop is None:
+            # Only "any" is routed here (no MP OR-param). It holds when the candidate
+            # shares at least one required member with its composition.
+            for predicate in routing.local_element_predicates:
+                if not (candidate.elements & predicate.members):
+                    drop = ExcludedCandidate(
+                        candidate=candidate,
+                        property_name="elements",
+                        reason="element_mismatch",
+                    )
+                    break
         if drop is not None:
             excluded.append(drop)
         else:

@@ -70,6 +70,10 @@ class Candidate(BaseModel):
     identifier: str = Field(min_length=1)
     formula: str = Field(min_length=1)
     properties: Mapping[str, PropertyValue] = Field(default_factory=dict)
+    #: The distinct element symbols in the composition — populated when retrieval asks
+    #: for it, so the deterministic filter can enforce element predicates a source
+    #: can't push (e.g. an ``any`` membership). Empty when composition wasn't fetched.
+    elements: frozenset[str] = frozenset()
 
     @model_validator(mode="after")
     def _freeze_properties(self) -> Self:
@@ -273,6 +277,25 @@ class TriageSpec(BaseModel):
         return self
 
 
+class PredicateRouting(BaseModel):
+    """How a source routes a spec's hard predicates between server-side push and
+    local enforcement.
+
+    The ``local`` buckets are the *exclusive set* — predicates the source can return
+    data for but cannot filter server-side (retrievable but not queryable, e.g. MP's
+    ``is_magnetic`` or an element ``any``) — which the deterministic filter must
+    enforce. ``caveats`` name predicates the source can neither push nor return data
+    for, so they go unenforced and must be surfaced loudly. Predicates the source
+    pushes server-side appear in no bucket (already handled by retrieval).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    local_booleans: tuple[BooleanConstraint, ...] = ()
+    local_element_predicates: tuple[ElementPredicate, ...] = ()
+    caveats: tuple[str, ...] = ()
+
+
 class ScoredCandidate(BaseModel):
     """A survivor of the hard filters, paired with the composite score it earned
     and the per-target contributions that produced it, so the audit view can
@@ -311,17 +334,21 @@ class ExcludedCandidate(BaseModel):
 
     candidate: Candidate
     property_name: str = Field(min_length=1)
-    reason: Literal["below_min", "above_max", "missing_data"]
+    reason: Literal[
+        "below_min", "above_max", "missing_data", "boolean_mismatch", "element_mismatch"
+    ]
     value: float | None = None
     bound: float | None = None
 
     @model_validator(mode="after")
     def _reason_agrees_with_evidence(self) -> Self:
-        if self.reason == "missing_data":
-            # The constrained property had no value to check, so there is no
-            # number to record; a value here would contradict the reason.
+        if self.reason in ("missing_data", "boolean_mismatch", "element_mismatch"):
+            # No numeric bound to record: the property was absent (missing_data), a
+            # boolean that didn't match the required flag (boolean_mismatch), or a
+            # composition that failed an element predicate (element_mismatch); a value
+            # here would contradict the reason.
             if self.value is not None:
-                raise ValueError("a 'missing_data' exclusion cannot carry a value")
+                raise ValueError(f"a {self.reason!r} exclusion cannot carry a value")
             return self
         if self.value is None or self.bound is None:
             raise ValueError(

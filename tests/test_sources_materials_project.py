@@ -409,6 +409,116 @@ def test_retrieve_omits_elements_when_spec_has_no_required_elements():
     assert "elements" not in captured["params"]
 
 
+def test_retrieve_requests_back_the_local_bucket_fields():
+    """retrieve asks for the fields it must enforce locally (the exclusive set), so the
+    candidate carries the data: the unqueryable boolean's own field, and `elements`
+    when there's a local `any` predicate. 'Request back what you filter on.'"""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(
+        boolean_constraints=(BooleanConstraint(property_name="is_magnetic", required=True),),
+        element_predicates=(ElementPredicate(quantifier="any", members=frozenset({"Fe", "Co"})),),
+    )
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    fields = set(captured["params"]["_fields"].split(","))
+    assert "is_magnetic" in fields
+    assert "elements" in fields
+
+
+def test_retrieve_carries_composition_for_local_element_filtering():
+    """retrieve parses the `elements` list onto the candidate, so the deterministic
+    filter has the composition it needs to enforce an element predicate locally (the
+    data MP returns even though the `any` operator can't be pushed)."""
+    env = {
+        "data": [{"material_id": "mp-1", "formula_pretty": "Fe2O3", "elements": ["Fe", "O"]}],
+        "meta": {},
+    }
+    adapter = MaterialsProjectAdapter(
+        http_get=lambda url, p, h: env if url == "/materials/summary/" else {"data": []}
+    )
+
+    candidate = adapter.retrieve(_spec())[0]
+
+    assert candidate.elements == frozenset({"Fe", "O"})
+
+
+def test_classify_routes_an_unqueryable_boolean_to_local():
+    """The exclusive set: `is_magnetic` is retrievable (in FIELD_UNITS) but not
+    queryable (not in PUSHABLE_PARAMS), so the adapter routes it to the local
+    bucket — the deterministic filter must enforce it. A queryable boolean
+    (`is_stable`) is the server's job and stays out of the local bucket."""
+    spec = TriageSpec(
+        boolean_constraints=(
+            BooleanConstraint(property_name="is_stable", required=True),
+            BooleanConstraint(property_name="is_magnetic", required=True),
+        ),
+    )
+
+    routing = MaterialsProjectAdapter(http_get=lambda *a: {}).classify_predicates(spec)
+
+    assert BooleanConstraint(property_name="is_magnetic", required=True) in routing.local_booleans
+    assert BooleanConstraint(property_name="is_stable", required=True) not in routing.local_booleans
+
+
+def test_classify_routes_an_any_predicate_to_local_but_not_all_or_none():
+    """Composition is retrievable (`elements` comes back), but MP has no OR-membership
+    query param, so an `any` predicate is the exclusive set → local. `all` (`elements`)
+    and `none` (`exclude_elements`) are queryable, so they stay the server's job."""
+    spec = TriageSpec(
+        element_predicates=(
+            ElementPredicate(quantifier="any", members=frozenset({"Fe", "Co"})),
+            ElementPredicate(quantifier="all", members=frozenset({"O"})),
+            ElementPredicate(quantifier="none", members=frozenset({"Pb"})),
+        ),
+    )
+
+    routing = MaterialsProjectAdapter(http_get=lambda *a: {}).classify_predicates(spec)
+
+    quantifiers = {p.quantifier for p in routing.local_element_predicates}
+    assert quantifiers == {"any"}
+
+
+def test_classify_caveats_a_constraint_on_an_unsupported_field():
+    """A constraint on a field MP can neither return nor filter (¬R∩¬Q — e.g. an
+    LLM-emitted `toxicity`) can't be enforced at all, so it's routed to a caveat. The
+    run surfaces it loudly instead of silently dropping every candidate as
+    missing-data. A supported field (`band_gap`) produces no caveat."""
+    spec = TriageSpec(
+        constraints=(
+            Constraint(property_name="band_gap", min=1.0),
+            Constraint(property_name="toxicity", max=0.5),
+        ),
+    )
+
+    routing = MaterialsProjectAdapter(http_get=lambda *a: {}).classify_predicates(spec)
+
+    assert any("toxicity" in c for c in routing.caveats)
+    assert not any("band_gap" in c for c in routing.caveats)
+
+
+def test_classify_caveats_a_boolean_on_an_unsupported_field():
+    """A boolean constraint on a field MP can't return (e.g. `is_toxic`) can be
+    neither pushed nor enforced locally, so it's caveated rather than silently
+    vanishing from the routing. A real boolean field (`is_stable`) is not caveated."""
+    spec = TriageSpec(
+        boolean_constraints=(
+            BooleanConstraint(property_name="is_stable", required=True),
+            BooleanConstraint(property_name="is_toxic", required=True),
+        ),
+    )
+
+    routing = MaterialsProjectAdapter(http_get=lambda *a: {}).classify_predicates(spec)
+
+    assert any("is_toxic" in c for c in routing.caveats)
+    assert not any("is_stable" in c for c in routing.caveats)
+
+
 def test_retrieve_excludes_forbidden_elements_server_side():
     """A "none"-quantifier ElementPredicate scopes the pool server-side via MP's
     `exclude_elements` param (sorted, comma-joined) — the mirror of `elements`."""

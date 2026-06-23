@@ -16,7 +16,13 @@ network.
 import os
 from collections.abc import Callable, Mapping
 
-from materials_triage.core.schema import Candidate, PropertyValue, Provenance, TriageSpec
+from materials_triage.core.schema import (
+    Candidate,
+    PredicateRouting,
+    PropertyValue,
+    Provenance,
+    TriageSpec,
+)
 from materials_triage.sources._mp_fields import MP_FIELDS, PUSHABLE_PARAMS
 from materials_triage.sources.base import SourceAdapter
 
@@ -62,7 +68,8 @@ class MaterialsProjectAdapter(SourceAdapter):
 
     def retrieve(self, spec: TriageSpec) -> list[Candidate]:
         headers = {"X-API-KEY": self._api_key}
-        docs = self._http_get("/materials/summary/", _query_params(spec), headers)["data"]
+        params = _request_local_fields(_query_params(spec), self.classify_predicates(spec))
+        docs = self._http_get("/materials/summary/", params, headers)["data"]
         # The functional isn't in the summary; resolve every retrieved value's task
         # and read its run_type in one batched call, then stamp each provenance.
         run_types = _fetch_run_types(self._http_get, headers, _page_task_ids(docs))
@@ -75,6 +82,45 @@ class MaterialsProjectAdapter(SourceAdapter):
         ``retrieve`` returns. The table is committed static data (generated from the
         MP schema), never a live fetch, keeping every run replayable."""
         return FIELD_UNITS
+
+    def classify_predicates(self, spec: TriageSpec) -> PredicateRouting:
+        """Route the spec's hard predicates against this source's two committed
+        surfaces — retrievable (``FIELD_UNITS``) and queryable (``PUSHABLE_PARAMS``).
+
+        A predicate the source can push (retrievable ∩ queryable) is the server's
+        job and appears in no bucket. A predicate that is retrievable but *not*
+        queryable — the exclusive set — goes to a ``local`` bucket for the
+        deterministic filter to enforce (e.g. ``is_magnetic``: returnable, but not a
+        query param, so it can't be pushed yet its value comes back to check)."""
+        local_booleans = tuple(
+            b
+            for b in spec.boolean_constraints
+            if b.property_name in FIELD_UNITS and b.property_name not in PUSHABLE_PARAMS
+        )
+        # Composition is retrievable (`elements` comes back), but only `all`/`none` map
+        # to query params (`elements`/`exclude_elements`); `any` has no MP OR-param, so
+        # it's the exclusive set — enforced locally.
+        local_element_predicates = tuple(
+            p for p in spec.element_predicates if p.quantifier == "any"
+        )
+        # A constraint on a field MP can't return (not retrievable) can be neither
+        # pushed nor enforced locally — record a loud caveat so the run doesn't silently
+        # drop every candidate as missing-data (numeric) or quietly ignore it (boolean).
+        unsupported = [
+            c.property_name for c in spec.constraints if c.property_name not in FIELD_UNITS
+        ] + [
+            b.property_name for b in spec.boolean_constraints if b.property_name not in FIELD_UNITS
+        ]
+        caveats = tuple(
+            f"constraint on '{name}' was not applied: "
+            f"{SOURCE_NAME} provides no data or filter for it"
+            for name in unsupported
+        )
+        return PredicateRouting(
+            local_booleans=local_booleans,
+            local_element_predicates=local_element_predicates,
+            caveats=caveats,
+        )
 
 
 #: Identity fields always requested alongside the spec's properties.
@@ -143,6 +189,21 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
             params["nelements_min"] = str(spec.count.min)
         if spec.count.max is not None and "nelements_max" in PUSHABLE_PARAMS:
             params["nelements_max"] = str(spec.count.max)
+    return params
+
+
+def _request_local_fields(params: dict[str, str], routing: PredicateRouting) -> dict[str, str]:
+    """Add to ``_fields`` the columns the deterministic filter needs to enforce the
+    routing's local bucket — the exclusive set that couldn't be pushed. The local
+    boolean's own field, plus ``elements`` when a local element predicate is present.
+    Without this the candidate wouldn't carry the data to check (request what you
+    filter on)."""
+    extra = [b.property_name for b in routing.local_booleans]
+    if routing.local_element_predicates:
+        extra.append("elements")
+    if extra:
+        present = params["_fields"].split(",")
+        params["_fields"] = ",".join(present + [f for f in extra if f not in present])
     return params
 
 
@@ -247,7 +308,12 @@ def _doc_to_candidate(doc: dict, run_types: Mapping[str, str]) -> Candidate:
             xc_functional=run_types.get(task_id),
         )
         properties[name] = _property_value(doc[name], unit, provenance)
-    return Candidate(identifier=material_id, formula=doc["formula_pretty"], properties=properties)
+    return Candidate(
+        identifier=material_id,
+        formula=doc["formula_pretty"],
+        properties=properties,
+        elements=frozenset(doc.get("elements") or ()),
+    )
 
 
 def _property_value(

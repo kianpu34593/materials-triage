@@ -26,9 +26,11 @@ from materials_triage.core.hypothesis import (
     RankingProposal,
 )
 from materials_triage.core.schema import (
+    BooleanConstraint,
     Candidate,
     Constraint,
     ExcludedCandidate,
+    PredicateRouting,
     PropertyValue,
     Provenance,
     RankingTarget,
@@ -152,11 +154,15 @@ class _FakeAdapter(SourceAdapter):
     """An offline retrieval seam: returns a fixed candidate list, ignoring the
     spec, so the deterministic core can be exercised without any network."""
 
-    def __init__(self, candidates):
+    def __init__(self, candidates, routing=None):
         self._candidates = candidates
+        self._routing = routing or PredicateRouting()
 
     def retrieve(self, spec):
         return list(self._candidates)
+
+    def classify_predicates(self, spec):
+        return self._routing
 
 
 def _candidate(identifier, band_gap):
@@ -200,6 +206,60 @@ def test_deterministic_core_runs_retrieve_filter_rank_end_to_end():
     # The hard-filter drop is carried in the result with its reason.
     drops = {ex.candidate.identifier: ex.reason for ex in result.excluded}
     assert drops == {"mp-drop": "below_min"}
+
+
+def test_filter_node_records_routing_caveats_in_state():
+    """Make it loud: the filter node surfaces the routing's caveats — predicates the
+    source could neither push nor enforce locally (¬R∩¬Q) — into a `caveats` channel,
+    so the run records that a constraint went unapplied instead of silently dropping
+    everything or ignoring it."""
+    routing = PredicateRouting(
+        caveats=("constraint on 'toxicity' was not applied: Materials Project provides no data",)
+    )
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)], routing=routing)
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=1.0),))
+
+    final = build_orchestrator(adapter=adapter).invoke(
+        {"goal": "nontoxic oxide", "spec": spec}, {"configurable": {"thread_id": "caveats"}}
+    )
+
+    assert any("toxicity" in c for c in final["caveats"])
+
+
+def test_filter_node_enforces_the_adapters_local_bucket():
+    """The filter node enforces the source's exclusive set (predicates it couldn't
+    push), not just numeric constraints: a candidate failing a routed-local boolean
+    (`is_magnetic`) is dropped with `boolean_mismatch`, in the same `filter_excluded`
+    channel as numeric drops."""
+    prov = Provenance(source="Materials Project", record_id="x", method="computational")
+
+    def candidate(identifier, is_magnetic):
+        return Candidate(
+            identifier=identifier,
+            formula="Fe2O3",
+            properties={
+                "is_magnetic": PropertyValue(value=is_magnetic, unit=None, provenance=prov)
+            },
+        )
+
+    magnetic = candidate("mp-mag", 1.0)
+    nonmagnetic = candidate("mp-non", 0.0)
+    spec = TriageSpec(
+        boolean_constraints=(BooleanConstraint(property_name="is_magnetic", required=True),)
+    )
+    routing = PredicateRouting(
+        local_booleans=(BooleanConstraint(property_name="is_magnetic", required=True),)
+    )
+    adapter = _FakeAdapter([magnetic, nonmagnetic], routing=routing)
+
+    final = build_orchestrator(adapter=adapter).invoke(
+        {"goal": "magnetic oxide", "spec": spec}, {"configurable": {"thread_id": "local-filter"}}
+    )
+
+    survivors = {c.identifier for c in final["survivors"]}
+    filter_drops = {ex.candidate.identifier: ex.reason for ex in final["filter_excluded"]}
+    assert survivors == {"mp-mag"}
+    assert filter_drops == {"mp-non": "boolean_mismatch"}
 
 
 def test_filter_and_ranking_exclusions_live_in_separate_authoritative_channels():

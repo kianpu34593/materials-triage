@@ -3,14 +3,18 @@
 import pytest
 
 from materials_triage.core.schema import (
+    BooleanConstraint,
     Candidate,
     Constraint,
+    ElementPredicate,
+    PredicateRouting,
     PropertyValue,
     Provenance,
     RankingTarget,
 )
 from materials_triage.core.scoring import (
     apply_hard_filters,
+    apply_local_filters,
     drop_missing_excluded,
     normalize,
     score_target,
@@ -33,6 +37,42 @@ def _candidate(identifier: str, formula: str, **props: float) -> Candidate:
             for name, value in props.items()
         },
     )
+
+
+def test_apply_local_filters_drops_a_candidate_failing_a_local_boolean():
+    """The exclusive-set filter enforces a routing's local boolean: a candidate whose
+    is_magnetic value doesn't match the required flag is excluded, the matching one
+    survives. (Booleans store as 1.0/0.0.)"""
+    magnetic = _candidate("mp-mag", "Fe", is_magnetic=1.0)
+    nonmagnetic = _candidate("mp-non", "Cu", is_magnetic=0.0)
+    routing = PredicateRouting(
+        local_booleans=(BooleanConstraint(property_name="is_magnetic", required=True),)
+    )
+
+    survivors, excluded = apply_local_filters([magnetic, nonmagnetic], routing)
+
+    assert [c.identifier for c in survivors] == ["mp-mag"]
+    assert excluded[0].candidate.identifier == "mp-non"
+    assert excluded[0].property_name == "is_magnetic"
+
+
+def test_apply_local_filters_drops_a_candidate_failing_a_local_any_predicate():
+    """A local 'any' element predicate: a candidate sharing at least one required
+    member survives; one sharing none is excluded (element_mismatch). Uses the
+    composition on the candidate, which the source returned but couldn't push."""
+    has_fe = Candidate(identifier="mp-fe", formula="FeO", elements=frozenset({"Fe", "O"}))
+    no_match = Candidate(identifier="mp-cu", formula="CuO", elements=frozenset({"Cu", "O"}))
+    routing = PredicateRouting(
+        local_element_predicates=(
+            ElementPredicate(quantifier="any", members=frozenset({"Fe", "Co"})),
+        )
+    )
+
+    survivors, excluded = apply_local_filters([has_fe, no_match], routing)
+
+    assert [c.identifier for c in survivors] == ["mp-fe"]
+    assert excluded[0].candidate.identifier == "mp-cu"
+    assert excluded[0].reason == "element_mismatch"
 
 
 def test_normalize_maximize_maps_highest_value_to_one():
