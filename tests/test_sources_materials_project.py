@@ -445,6 +445,24 @@ def test_classify_routes_an_any_predicate_to_local_but_not_all_or_none():
     assert quantifiers == {"any"}
 
 
+def test_classify_caveats_a_constraint_on_an_unsupported_field():
+    """A constraint on a field MP can neither return nor filter (¬R∩¬Q — e.g. an
+    LLM-emitted `toxicity`) can't be enforced at all, so it's routed to a caveat. The
+    run surfaces it loudly instead of silently dropping every candidate as
+    missing-data. A supported field (`band_gap`) produces no caveat."""
+    spec = TriageSpec(
+        constraints=(
+            Constraint(property_name="band_gap", min=1.0),
+            Constraint(property_name="toxicity", max=0.5),
+        ),
+    )
+
+    routing = MaterialsProjectAdapter(http_get=lambda *a: {}).classify_predicates(spec)
+
+    assert any("toxicity" in c for c in routing.caveats)
+    assert not any("band_gap" in c for c in routing.caveats)
+
+
 def test_retrieve_excludes_forbidden_elements_server_side():
     """A "none"-quantifier ElementPredicate scopes the pool server-side via MP's
     `exclude_elements` param (sorted, comma-joined) — the mirror of `elements`."""

@@ -289,6 +289,7 @@ class PredicateRouting(BaseModel):
 
     local_booleans: tuple[BooleanConstraint, ...] = ()
     local_element_predicates: tuple[ElementPredicate, ...] = ()
+    caveats: tuple[str, ...] = ()
 
 
 class ScoredCandidate(BaseModel):

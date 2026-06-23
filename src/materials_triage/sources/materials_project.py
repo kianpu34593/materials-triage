@@ -102,9 +102,19 @@ class MaterialsProjectAdapter(SourceAdapter):
         local_element_predicates = tuple(
             p for p in spec.element_predicates if p.quantifier == "any"
         )
+        # A numeric constraint on a field MP can't return (not retrievable) can be
+        # neither pushed nor enforced locally — record a loud caveat so the run doesn't
+        # silently drop every candidate as missing-data.
+        caveats = tuple(
+            f"constraint on '{c.property_name}' was not applied: "
+            f"{SOURCE_NAME} provides no data or filter for it"
+            for c in spec.constraints
+            if c.property_name not in FIELD_UNITS
+        )
         return PredicateRouting(
             local_booleans=local_booleans,
             local_element_predicates=local_element_predicates,
+            caveats=caveats,
         )
 
 
