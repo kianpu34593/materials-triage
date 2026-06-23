@@ -210,9 +210,17 @@ class RankingTarget(BaseModel):
     def _target_direction_needs_a_sweet_spot(self) -> Self:
         if self.direction == "target" and self.target is None:
             raise ValueError("a 'target' direction must set the target value it scores toward")
-        # Desirability rises from lower to the target peak and falls to upper, so
-        # whichever anchors are supplied must ascend in that order.
-        anchors = (("lower", self.lower), ("target", self.target), ("upper", self.upper))
+        # Each direction consumes only some anchors (see ``resolve_bounds``):
+        # ``maximize`` ramps lower->target, ``minimize`` ramps target->upper, and
+        # ``target`` spans lower->target->upper. Enforce ascending order on just
+        # the anchors that direction actually uses; an irrelevant anchor a spec
+        # also supplies is accepted but ignored (it never affects scoring).
+        if self.direction == "maximize":
+            anchors = (("lower", self.lower), ("target", self.target))
+        elif self.direction == "minimize":
+            anchors = (("target", self.target), ("upper", self.upper))
+        else:
+            anchors = (("lower", self.lower), ("target", self.target), ("upper", self.upper))
         present = [(name, v) for name, v in anchors if v is not None]
         for (lo_name, lo), (hi_name, hi) in zip(present, present[1:], strict=False):
             if lo > hi:
