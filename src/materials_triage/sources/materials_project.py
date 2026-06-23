@@ -76,6 +76,14 @@ class MaterialsProjectAdapter(SourceAdapter):
         run_types = _fetch_run_types(self._http_get, headers, _page_task_ids(docs))
         return [_doc_to_candidate(doc, run_types) for doc in docs]
 
+    def property_vocabulary(self) -> Mapping[str, str]:
+        """The summary-API properties this adapter can populate, mapped to their
+        units — exactly the keys ``_doc_to_candidate`` parses, so a hypothesis
+        built from this vocabulary names only properties ``retrieve`` returns. The
+        table is committed static data (generated from the MP schema), never a
+        live fetch, keeping every run replayable."""
+        return FIELD_UNITS
+
 
 #: Identity fields always requested alongside the spec's properties.
 _IDENTITY_FIELDS = ("material_id", "formula_pretty")

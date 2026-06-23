@@ -33,6 +33,24 @@ def _fixed(envelope: dict) -> MaterialsProjectAdapter:
     return MaterialsProjectAdapter(http_get=lambda url, params, headers: envelope)
 
 
+def test_vocabulary_names_only_properties_retrieve_can_populate():
+    """The contract #39 protects: every name the adapter publishes is one retrieve
+    actually fills -- so a hypothesis built from the vocabulary never asks for a
+    property that silently comes back empty. And the vocabulary needs no network."""
+    adapter = MaterialsProjectAdapter(
+        http_get=lambda url, params, headers: pytest.fail("vocabulary must not hit the network")
+    )
+
+    vocab = adapter.property_vocabulary()
+
+    # a SummaryDoc carrying a value for every published field
+    doc = {"material_id": "mp-1", "formula_pretty": "Si", **{name: 1.0 for name in vocab}}
+    candidate = _two_endpoint({"data": [doc]}, {"data": []}).retrieve(_spec())[0]
+
+    assert vocab  # non-empty: the source declares a surface
+    assert set(vocab) <= set(candidate.properties)  # every published name got populated
+
+
 def test_origin_task_ids_indexes_task_ids_by_origin_name():
     """MP's origins list (one entry per computed property doc) collapses to a
     name -> task_id lookup, the first step in tracing each value to its run."""
