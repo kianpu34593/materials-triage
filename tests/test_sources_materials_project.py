@@ -10,6 +10,7 @@ import pytest
 
 from materials_triage.core.ranking import rank
 from materials_triage.core.schema import (
+    BooleanConstraint,
     Constraint,
     ElementPredicate,
     RankingTarget,
@@ -423,6 +424,46 @@ def test_retrieve_excludes_forbidden_elements_server_side():
     MaterialsProjectAdapter(http_get=spy).retrieve(spec)
 
     assert captured["params"]["exclude_elements"] == "Cd,Pb"
+
+
+def test_retrieve_does_not_push_an_any_element_predicate():
+    """MP has no OR-membership query param, so an "any"-quantifier predicate is
+    honoured only by the deterministic filter — the adapter must not leak its
+    members into `elements`/`exclude_elements`, which would wrongly over-restrict
+    (AND) or exclude the pool server-side."""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        element_predicates=(ElementPredicate(quantifier="any", members=frozenset({"Fe", "Co"})),),
+    )
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    assert "elements" not in captured["params"]
+    assert "exclude_elements" not in captured["params"]
+
+
+def test_retrieve_pushes_a_boolean_constraint_in_the_vocabulary():
+    """A BooleanConstraint on a field the adapter publishes (`is_stable`) is pushed
+    as MP's same-named exact-match query param, lowercase `true`/`false`."""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(
+        boolean_constraints=(BooleanConstraint(property_name="is_stable", required=True),),
+    )
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    assert captured["params"]["is_stable"] == "true"
 
 
 def test_retrieve_sends_the_api_key_header():

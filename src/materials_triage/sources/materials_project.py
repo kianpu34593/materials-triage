@@ -106,6 +106,12 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
     )
     if must_lack:
         params["exclude_elements"] = ",".join(must_lack)
+    # Boolean facts the API exposes as same-named exact-match params. Gate on the
+    # published vocabulary so a field this adapter can't answer stays a purely local
+    # filter rather than a silently-ignored query param.
+    for b in spec.boolean_constraints:
+        if b.property_name in FIELD_UNITS:
+            params[b.property_name] = "true" if b.required else "false"
     return params
 
 
