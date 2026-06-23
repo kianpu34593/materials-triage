@@ -147,6 +147,27 @@
   across live runs (prompt cut invention to 1/5; critic dropped the straggler), no
   false drops.
 
+### H′. Critic extended to redundancy (#7) and bound sanity (#6)
+
+- **Reuse/extend the existing critic rather than hardcoded tables — chose approach
+  C over committed `PROPERTY_RANGES`/`PROXY_GROUPS`.** → A static physical-range or
+  proxy-group table smuggles *invented domain facts* into the deterministic layer —
+  the exact thing the architecture forbids. Redundancy ("are these two the same
+  thing?") and bound sanity are *reasoning* judgments, the critic's wheelhouse.
+- **#7 redundancy folds into the existing keep/drop mechanism.** → "Redundant with a
+  kept objective measuring the same property" is just another reason to drop; prune +
+  `compile_spec` renormalize already handle it. One sentence added to the prompt.
+- **#6 bound sanity is flag-only (advisory), never auto-applied.** → Judging a bound
+  "too loose" requires physical-range knowledge the LLM only *approximates* — a mild
+  fact-recall risk. Quarantine it: the critic emits `BoundFlag`s surfaced to the
+  human, but auto-changes stay reasoning-only (ranking drops). A hallucinated flag is
+  then harmless (a note, not a silent rewrite).
+- **Implementation:** `RankingCritique` gains `bound_flags: tuple[BoundFlag, ...]`;
+  the critic prompt now shows constraints too and asks for (relevance + redundancy)
+  verdicts plus bound flags; flags ride `rag_trace.bound_flags` and render in the GUI
+  "critic review" stage. Verified live: dropped a redundant stability proxy and
+  flagged a loose 12 eV band-gap ceiling, both with sound reasons.
+
 ## Cross-cutting
 
 - **Every new LLM/RAG component is an injected seam (provider pattern).** →
@@ -169,8 +190,8 @@
 | 2 | "simple compositions" dropped (no `max_nelements`) | ✅ Fixed | fidelity gate seeds + `apply_element_filters` (`592227a`) |
 | 5 | invented ranking target (`bulk_modulus`) | ✅ Fixed | prompt + critic agent → 0/5 off-goal (`9dfa505`) |
 | 9 | toxic list arbitrary & non-deterministic | ✅ Fixed | committed RoHS/REACH set + caveat (`592227a`) |
+| 7 | redundant stability proxies | ✅ Fixed | critic drops the duplicate proxy (relevance/redundancy verdict), renormalized |
+| 6 | loose/meaningless thresholds (`band_gap` max 12) | 🟡 Addressed (advisory) | critic emits advisory `bound_flags` at the gate; flag-only by design (no silent rewrite of physics) |
 | 4 | citation theater (hypothesis citations unverified) | 🟡 Partial | critic uses cited/uncited signal; **no hard validation** of hypothesis citations yet |
 | 8 | query-gen lossy | 🟡 Partial | query-gen added + stable; dropped facets now covered by the fidelity gate; **multi-query not built** |
 | 3 | RAG off-topic (perovskite-PV flood) | ❌ Open | needs multi-query + domain-filter + relevance-gate |
-| 6 | loose/meaningless thresholds (`band_gap` max 12) | ❌ Open | needs physical-range clamps / domain priors |
-| 7 | redundant stability proxies | ❌ Open | needs deterministic dedup in `compile_spec` |

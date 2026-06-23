@@ -365,50 +365,74 @@ def _build_rag_trace(
     }
 
 
-def _critic_prompt(goal: str, ranking_proposals) -> str:
-    """Render the critic prompt: the goal (untrusted DATA) plus each proposed
-    ranking objective with its weight, citation status, and the reason given,
-    asking for a keep/drop verdict judged strictly against the goal."""
+def _critic_prompt(goal: str, ranking_proposals, constraint_proposals) -> str:
+    """Render the critic prompt: the goal (untrusted DATA) plus the proposed hard
+    constraints and ranking objectives, asking the critic to (1) keep/drop each
+    objective on relevance and redundancy, and (2) advise on any suspect constraint
+    bound — all judged strictly against the goal."""
     wrapped = wrap_untrusted(goal, label="user query", nonce=secrets.token_hex(8))
-    lines = []
+    rank_lines = []
     for p in ranking_proposals:
         t = p.ranking_target
         cited = "cited" if p.citations else "uncited"
-        lines.append(
+        rank_lines.append(
             f"- {t.property_name} ({t.direction}, weight {t.weight:.2f}, {cited}): {p.rationale}"
         )
+    con_lines = []
+    for p in constraint_proposals:
+        c = p.constraint
+        bound = " and ".join(
+            b
+            for b in (
+                (f">= {c.min}" if c.min is not None else ""),
+                (f"<= {c.max}" if c.max is not None else ""),
+            )
+            if b
+        )
+        con_lines.append(f"- {c.property_name} {bound or '(no bound)'}: {p.rationale}")
     return (
-        "A prior agent proposed the ranking objectives below for the materials-triage "
-        "goal in the data block. For EACH objective decide keep=true only if the goal "
-        "genuinely asks for or implies optimizing that property; keep=false if it is an "
-        "objective the user did not request (however reasonable it seems). Give a "
-        "one-sentence reason per objective, judged only against the stated goal — not "
-        "general materials desirability.\n"
+        "Review the spec a prior agent proposed for the materials-triage goal in the "
+        "data block. Judge ONLY against the stated goal, not general desirability.\n\n"
+        "1. For EACH ranking objective, keep=true only if the goal asks for or implies "
+        "optimizing it; keep=false if the user did not request it, OR if it is redundant "
+        "with another kept objective measuring the same property (keep the most "
+        "appropriate one, drop the duplicate). One-sentence reason each.\n"
+        "2. For EACH hard constraint, add a bound flag ONLY if its bound looks inactive "
+        "(so loose it would exclude nothing), impossible (so tight it would exclude "
+        "everything), or contrary to the goal — with a one-sentence concern. Do not "
+        "flag reasonable bounds.\n"
         + wrapped
-        + "\n\nProposed ranking objectives:\n"
-        + "\n".join(lines)
+        + "\n\nHard constraints:\n"
+        + ("\n".join(con_lines) or "(none)")
+        + "\n\nRanking objectives:\n"
+        + ("\n".join(rank_lines) or "(none)")
     )
 
 
 def _apply_ranking_critic(
     ranking_critic: "RankingCritic | None", goal: str, hypothesis: Hypothesis
-) -> tuple[Hypothesis, list[dict] | None]:
-    """Have the critic vote on the hypothesis's ranking targets and prune the
-    rejected ones. Returns the (possibly pruned) hypothesis and the critic's
-    verdicts as JSON-safe dicts for the trace (None if no critic / no targets).
-    Soft-degrades: a critic error leaves the hypothesis untouched."""
+) -> tuple[Hypothesis, dict | None]:
+    """Have the critic review the spec: prune the ranking targets it rejects
+    (off-goal or redundant — auto-applied) and collect its advisory bound flags
+    (surfaced, not applied). Returns the (possibly pruned) hypothesis and a
+    JSON-safe ``{"verdicts": [...], "bound_flags": [...]}`` for the trace (None if
+    no critic / no targets). Soft-degrades: a critic error leaves it untouched."""
     ranking_props = [p for p in hypothesis.proposals if p.kind == "ranking_target"]
+    constraint_props = [p for p in hypothesis.proposals if p.kind == "constraint"]
     if ranking_critic is None or not ranking_props:
         return hypothesis, None
     try:
-        critique = ranking_critic.critique(_critic_prompt(goal, ranking_props))
+        critique = ranking_critic.critique(_critic_prompt(goal, ranking_props, constraint_props))
     except Exception:  # noqa: BLE001 — the critic is best-effort; keep the hypothesis as-is
         return hypothesis, None
+    info = {
+        "verdicts": [v.model_dump() for v in critique.verdicts],
+        "bound_flags": [b.model_dump() for b in critique.bound_flags],
+    }
     kept, dropped = prune_ranking_proposals(hypothesis.proposals, critique)
-    verdicts = [v.model_dump() for v in critique.verdicts]
     if not dropped:
-        return hypothesis, verdicts
-    return Hypothesis(proposals=kept, mechanism=hypothesis.mechanism), verdicts
+        return hypothesis, info
+    return Hypothesis(proposals=kept, mechanism=hypothesis.mechanism), info
 
 
 def _make_hypothesis_node(
@@ -457,9 +481,11 @@ def _make_hypothesis_node(
             # The trace shows the LLM's *original* proposals; the critic then prunes
             # the off-goal ranking targets from what flows downstream.
             trace = _build_rag_trace(goal, search_query, query_generated, passages, prompt, result)
-            final, verdicts = _apply_ranking_critic(ranking_critic, goal, result)
-            if verdicts is not None:
-                trace["critique"] = verdicts
+            final, critique = _apply_ranking_critic(ranking_critic, goal, result)
+            if critique is not None:
+                trace["critique"] = critique["verdicts"]
+                if critique["bound_flags"]:
+                    trace["bound_flags"] = critique["bound_flags"]
             return {"hypothesis": final, "rag_trace": trace}
         raise HypothesisConformanceError(
             f"LLM did not produce a schema-valid Hypothesis in {max_attempts} attempts"

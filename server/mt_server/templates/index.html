@@ -168,17 +168,24 @@
       });
       stage("5 · LLM proposals (grounded + cited)", propWrap);
 
-      // 6 · critic review (the second agent's keep/drop verdicts).
-      if (t.critique && t.critique.length) {
+      // 6 · critic review: keep/drop verdicts (auto-applied) + advisory bound flags.
+      const hasCritic = (t.critique && t.critique.length) || (t.bound_flags && t.bound_flags.length);
+      if (hasCritic) {
         const cw = el("div");
-        t.critique.forEach((v) => {
+        (t.critique || []).forEach((v) => {
           const line = el("div", "prop");
           line.appendChild(el("span", v.keep ? "verdict-keep" : "verdict-drop",
             (v.keep ? "✓ kept " : "✗ dropped ") + v.property_name));
           line.appendChild(document.createTextNode(" — " + v.reason));
           cw.appendChild(line);
         });
-        stage("6 · critic review (off-goal objectives pruned)", cw);
+        (t.bound_flags || []).forEach((b) => {
+          const line = el("div", "prop");
+          line.appendChild(el("span", "pill miss", "⚑ bound flag"));
+          line.appendChild(document.createTextNode(" " + b.property_name + " — " + b.concern));
+          cw.appendChild(line);
+        });
+        stage("6 · critic review (objectives pruned · advisory bound flags)", cw);
       }
 
       ragtrace.replaceChildren(box);

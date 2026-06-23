@@ -24,12 +24,28 @@ class TargetVerdict(BaseModel):
     reason: str
 
 
+class BoundFlag(BaseModel):
+    """An *advisory* concern the critic raised about a hard-constraint bound —
+    one that looks inactive (excludes nothing), impossible (excludes everything),
+    or counter to the goal. Surfaced to the human, never auto-applied: judging a
+    bound needs physical-range knowledge, which the LLM only approximates, so its
+    opinion is a flag, not a correction."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    property_name: str
+    concern: str
+
+
 class RankingCritique(BaseModel):
-    """The critic agent's whole emission: one verdict per ranking target it saw."""
+    """The critic agent's whole emission: a keep/drop verdict per ranking target
+    (relevance and redundancy, auto-applied) plus advisory flags on constraint
+    bounds (surfaced, not applied)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     verdicts: tuple[TargetVerdict, ...]
+    bound_flags: tuple[BoundFlag, ...] = ()
 
 
 def prune_ranking_proposals(
