@@ -58,6 +58,52 @@ Because every run is recorded, you can **replay it**, **tweak one setting and
 resume from that step**, and the helper **remembers** past wish lists for next
 time.
 
+## Run it (Docker)
+
+Docker is the easiest way to run on any OS — no local Python toolchain needed.
+
+**1. Get credentials**
+
+- **Materials Project** `X_API_KEY` — the public numeric source (required).
+- **AWS Bedrock** credentials — the LLM backend (required for live runs): an IAM
+  user/role with `bedrock:InvokeModel`, as `AWS_ACCESS_KEY_ID` /
+  `AWS_SECRET_ACCESS_KEY` / `AWS_REGION`.
+- **OpenAlex** `OPENALEX_MAILTO` — optional; enables the faster literature pool.
+
+```bash
+cp .env.example .env      # then fill in the values
+```
+
+**2. Check the setup**
+
+```bash
+docker compose run --rm triage doctor
+```
+
+Prints a ✓/✗ checklist and exits non-zero if a required credential is missing.
+
+**3. Run a triage**
+
+```bash
+docker compose run --rm triage \
+  "find stable oxide dielectrics for thin films" \
+  --runs-dir /data/runs --view audit
+```
+
+Run traces are written to `./runs/<run_id>.json` on the host (the `/data/runs`
+volume), so you can replay them later.
+
+**Pre-built image.** Pushes to `main` and version tags (`v*`) publish an image to
+the GitHub Container Registry, so you can skip the local build:
+
+```bash
+docker run --rm --env-file .env -v "$PWD/runs:/data/runs" \
+  ghcr.io/kianpu34593/materials-triage:latest doctor
+```
+
+> Running without Docker? Install the package (`pip install -e ".[llm]"`) and use
+> the `materials-triage` command directly — e.g. `materials-triage doctor`.
+
 ## Agent-coding setup
 
 This repo was built with Claude Code, and the `.claude/` directory is configured to showcase that workflow — custom slash commands, skills, a status line, and permission settings.
