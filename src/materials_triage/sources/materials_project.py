@@ -132,6 +132,11 @@ def _fetch_run_types(
     ``run_type``. All task_ids for a page are fetched in a single request. With no
     task_ids to trace, no call is made. A task that returns no run_type is omitted,
     so the caller treats its functional as unknown.
+
+    This is best-effort enrichment layered on an already-complete summary result:
+    if the tasks call fails (network error, non-200, malformed envelope) the map
+    degrades to empty — every functional becomes unknown — rather than aborting an
+    otherwise-valid retrieval.
     """
     unique = sorted(set(task_ids))
     if not unique:
@@ -141,8 +146,11 @@ def _fetch_run_types(
         "_fields": "task_id,run_type",
         "_limit": str(len(unique)),
     }
-    envelope = http_get("/materials/tasks/", params, headers)
-    return {d["task_id"]: d["run_type"] for d in envelope["data"] if d.get("run_type")}
+    try:
+        envelope = http_get("/materials/tasks/", params, headers)
+        return {d["task_id"]: d["run_type"] for d in envelope["data"] if d.get("run_type")}
+    except Exception:
+        return {}
 
 
 def _field_task_id(field: str, origin_index: Mapping[str, str]) -> str | None:
@@ -188,7 +196,7 @@ def _doc_to_candidate(doc: dict, run_types: Mapping[str, str]) -> Candidate:
             source=SOURCE_NAME,
             record_id=material_id,
             method="computational",
-            xc_functional=run_types.get(task_id) if task_id else None,
+            xc_functional=run_types.get(task_id),
         )
         properties[name] = _property_value(doc[name], unit, provenance)
     return Candidate(identifier=material_id, formula=doc["formula_pretty"], properties=properties)

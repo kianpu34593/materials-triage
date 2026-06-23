@@ -94,6 +94,17 @@ def test_fetch_run_types_batches_task_ids_into_one_call():
     assert set(captured["params"]["task_ids"].split(",")) == {"t-bands", "t-energy"}
 
 
+def test_fetch_run_types_degrades_to_empty_when_the_tasks_call_fails():
+    """The functional is best-effort enrichment on an already-complete summary
+    result: a failed tasks call yields an empty map (all functionals unknown)
+    rather than aborting the retrieval."""
+
+    def transport(url, params, headers):
+        raise RuntimeError("tasks endpoint unavailable")
+
+    assert _fetch_run_types(transport, {"X-API-KEY": "k"}, ["t-bands"]) == {}
+
+
 def test_fetch_run_types_skips_the_call_when_there_are_no_task_ids():
     """With nothing to trace (no task-derived fields / no origins) the adapter
     makes no second network call at all."""
