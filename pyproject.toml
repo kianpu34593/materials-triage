@@ -15,6 +15,9 @@ dependencies = [
     "requests>=2",
 ]
 
+[project.scripts]
+materials-triage = "materials_triage.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
