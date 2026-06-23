@@ -1,0 +1,15 @@
+# Convenience wrapper for the Materials-Triage CLI image.
+#
+# One-shot runs (the CLI is not a long-running server):
+#   docker compose run --rm triage doctor
+#   docker compose run --rm triage "find stable oxide dielectrics" --runs-dir /data/runs --view audit
+#
+# Credentials come from .env (copy .env.example -> .env first); run traces
+# land in ./runs on the host via the mounted volume.
+services:
+  triage:
+    build: .
+    image: ghcr.io/kianpu34593/materials-triage:latest
+    env_file: .env
+    volumes:
+      - ./runs:/data/runs

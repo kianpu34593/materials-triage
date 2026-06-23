@@ -38,6 +38,9 @@ htmlcov/
 .env.*
 !.env.example
 
+# Local run traces (the Docker compose volume mounts ./runs)
+runs/
+
 # Editors
 .vscode/
 .idea/
