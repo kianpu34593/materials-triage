@@ -1,4 +1,4 @@
-# Session Handoff - 2026-06-23 11:29
+# Session Handoff - 2026-06-23 13:10
 
 > Single living handoff, git-tracked at `docs/handoff.md`. Keep it **lean** — deep per-session
 > history lives in [`docs/handoff-archive.md`](handoff-archive.md); recurring gotchas live in
@@ -102,13 +102,14 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
   pass-through; future #25–#27). Data is captured in `TriageRun.caveats`; the views read it when built.
 - **Pairs with 2b's "bounded + loud" caveat** (cap-hit) — same `caveats` channel, same honesty rationale.
 
-**2b · 🆕 Pagination in `retrieve()`** — ✅ **BUILT, committed on `feat/retrieve-pagination` (9ab2bd7); PR pending** (no-mistakes review step blocked on a transient `API Error: 529 Overloaded` 2026-06-23 — code is fine, just retry `no-mistakes rerun` when the API recovers). *Sibling to #38; together they = "retrieve the complete filtered candidate set." Not part of #38 (#38 is the pure `_query_params` transform; this is the I/O loop).*
+**2b · 🆕 Pagination in `retrieve()`** — ✅ **MERGED (#68, 2026-06-23)**. *Sibling to #38; together they = "retrieve the complete filtered candidate set." Not part of #38 (#38 is the pure `_query_params` transform; this is the I/O loop).*
 - [x] page MP's `_skip`/`_limit` to exhaust the (filtered) result set, accumulating candidates
 - **AS BUILT (TDD, vertical slices).** `_paginate(http_get, params, headers, ceiling)` loops `_skip` by `_limit`, accumulates docs, stops on a **short page** (fewer than `_limit` rows ⇒ set exhausted) or the **`_MAX_CANDIDATES=10000` ceiling**; returns `(docs, capped)`. **Page size `_DEFAULT_LIMIT` bumped 100 → 1000** (MP's schema-documented `_limit` max — "Limited to 1000" in `mp_summary_schema.json` — chosen to minimize HTTP calls / blacklist risk per Kian). Ceiling hit ⇒ a **loud caveat** ("result set capped at 10000…; ranking over a subset"), never a silent bigger truncation.
 - **Contract change (Kian-approved): `retrieve(spec) -> RetrievalResult(candidates, caveats)`** (was `list[Candidate]`). New frozen model in `core/schema.py`. The I/O loop reports an incomplete set as a *first-class output*, not hidden state / a side channel. `SourceAdapter` base + deferred stubs adopt it.
 - **Orchestrator wiring:** retrieve node splits the result into the `candidates` channel + a **new single-writer `retrieval_caveats` channel** (preserves the single-writer-per-stage invariant). `export_run` **unions** `retrieval_caveats + caveats` into `TriageRun.caveats` — mirrors how `result.excluded` unions the two exclusion channels at the presentation boundary (NOT a filter-node read+merge). [memory: orchestrator-exclusions-two-sources]
 - **The three requirements met:** (1) **filter-first** — depends on #38 (merged ✅), which shrinks N to a pageable set. (2) **bounded + loud** — ceiling + caveat, same `caveats` honesty channel as 2b's cap notice + 2c. (3) **adapter-owned** — `_skip`/`_limit` stay inside `retrieve`; contract is still `retrieve(spec) -> complete set` (now wrapped in `RetrievalResult`).
 - **Coverage caveat:** multi-page behavior at *real* settings (1000/page) isn't exercised offline (would need 1000+ fixture docs); `_paginate` unit tests drive the loop with small `_limit`, the cap-caveat test monkeypatches the ceiling low, and a `live` run would exercise the real cadence.
+- **Review-fix (merged in #68):** `_paginate` checks **exhaustion before the ceiling** — a complete set whose final short page lands exactly on the ceiling is no longer falsely flagged `capped` (it fails loud, but misreporting a complete set is still wrong). no-mistakes review caught it.
 
 > **H₂O is not fixed here.** "Metal oxides" must compile to `all={O}` AND `any={metallic elements}` so water
 > (has O, no metal) drops at the hard-filter stage. That needs the *set* of metals — **#37 area B
@@ -116,9 +117,8 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
 > It is a spec-expressiveness + LLM-comprehension problem: not #38, and **not** synthesis (synthesis narrates
 > the ranked shortlist and may not silently reorder/drop). See the leverage-order note under Discoveries.
 
-**3 · Synthesis & validation primitives** (port from reference) — ✅ **PRIMITIVES BUILT on
-`feat/synthesis-primitives`** (additive, pure, pagination-/orchestrator-independent; the synthesis
-NODE wiring itself is deferred to #34).
+**3 · Synthesis & validation primitives** — ✅ **MERGED (#69, 2026-06-23)** (additive, pure,
+pagination-/orchestrator-independent; the synthesis NODE wiring itself is deferred to #34).
 - [x] **#20** output validator — `agent/validator.py` `validate_output(result, synthesis, retrieved_ids)`
   raises `UngroundedOutputError` unless every presented candidate (ranked AND excluded) and every
   narrative citation resolves to retrieved provenance; returns `None` on a clean output.
@@ -130,8 +130,31 @@ NODE wiring itself is deferred to #34).
   RAG `LiteraturePassage` snippets are UNTRUSTED DATA fenced via `wrap_untrusted` with the call's nonce.
   (Hypothesis-prompt binding still pending → #34.)
 
-**4 · #34 — Wire the orchestrator** *(replace the four PASS-THROUGH nodes)*
-- [ ] gate node · [ ] hypothesis node · [ ] synthesis node · [ ] output_validate node
+**3b · 🆕 Geometric-mean ranker = the agent default + schema surfaced to the LLM** — ✅ **MERGED (#70,
+2026-06-23)**. *Follow-up to #66 (which added the selectable geometric ranker). Direction set by Kian.*
+- [x] `compile_spec(proposals, *, ranking_method="geometric_mean")` — the agent now defaults to the
+  non-compensatory weighted geometric mean (a single unacceptable property zeros a candidate). DECISION:
+  defaulted in `compile_spec` (the agent path), NOT the `TriageSpec` field default (which stays
+  `arithmetic_mean`) — small blast radius, raw construction stays flexible; arithmetic reachable via the kwarg.
+- [x] **Schema surfaced — structured half:** `Field(description=...)` on `RankingTarget`
+  direction/lower/target/upper/curvature/weight/on_missing, so the `with_structured_output(Hypothesis)` JSON
+  schema tells the LLM the ramp anchors are *required* by the geometric ranker.
+- [x] **Schema surfaced — prose half:** `prompts.RANKING_TARGET_GUIDANCE` wired into the hypothesis prompt
+  (first attempt AND retry), instructing the LLM to announce explicit ramp bounds per direction (no pool fallback).
+- [x] **Terminal-failure fix (review-driven, #70):** because the geometric ranker requires every target to
+  carry ramp bounds but `RankingTarget` leaves anchors optional, a bounds-less hypothesis passes the
+  `Hypothesis` structured-output schema, then *used to* die one stage later in `spec_build`'s `compile_spec` as
+  a non-retried, feedback-less `SpecCompilationError`. Fix: the hypothesis node now **trial-compiles** each
+  shape-valid candidate via `compile_spec` *inside its retry loop*, so a compile `ValidationError` (missing
+  bounds, duplicate constraint, contradiction) is fed back to the LLM and self-corrects. `spec_build`'s
+  `SpecCompilationError` wrapper remains the backstop for a hypothesis seeded directly into state (resume/bypass).
+
+**4 · #34 — Wire the orchestrator** *(replace the remaining PASS-THROUGH nodes)*
+- [ ] gate node · [ ] synthesis node · [ ] output_validate node
+- [~] hypothesis node — already a real node (LLM + retry); #70 added the **trial-compile-in-retry** so it
+  guarantees a *compilable* hypothesis. Still TODO under #34: bind the source **vocabulary** into the
+  hypothesis prompt ("use ONLY these names"); wire `build_synthesis_prompt` + `validate_output` into the
+  synthesis/output_validate nodes.
 
 **5 · Renderers → CLI** *(render BOTH views from ONE `TriageRun`)*
 - [ ] **#25** PI renderer (`view=pi`) · [ ] **#26** audit renderer (`view=audit`)
@@ -167,11 +190,21 @@ NODE wiring itself is deferred to #34).
   (R∩¬Q → local, ¬R∩¬Q → caveat). `core/scoring.py` `apply_local_filters` enforces local booleans
   (`boolean_mismatch`) + element `any` (`element_mismatch`); `Candidate.elements` + retrieve request-back;
   orchestrator `_make_filter_node(adapter)` runs both filters + writes `TriageRun.caveats`. Live-verified.
+- **2b pagination (merged #68):** `_paginate` (loops `_skip`/`_limit`, short-page/ceiling stop, `(docs, capped)`),
+  `retrieve() -> RetrievalResult(candidates, caveats)`, `_DEFAULT_LIMIT=1000`/`_MAX_CANDIDATES=10000` + loud
+  cap-caveat; orchestrator `retrieval_caveats` channel; `export_run` unions retrieval + filter caveats.
+- **#69 synthesis & validation primitives (merged #69):** `core/synthesis.py` (`GroundedClaim`, `Synthesis`,
+  `ungrounded_record_ids`), `agent/validator.py` (`validate_output`, `UngroundedOutputError`),
+  `agent/prompts.py` `build_synthesis_prompt`. Pure/additive; synthesis NODE wiring is #34.
+- **3b geometric default + schema surfacing (merged #70):** `compile_spec(..., ranking_method="geometric_mean")`
+  default; `RankingTarget` `Field(description=...)`; `prompts.RANKING_TARGET_GUIDANCE` in the hypothesis prompt;
+  hypothesis node **trial-compiles in its retry loop** so non-compiling proposals self-correct.
 - **Agent:** `agent/llm.py` Bedrock `HypothesisProvider` (injected `complete` seam; `us.*` inference-profile
-  model id). `agent/prompts.py` `ROLE_SYSTEM_PROMPT` + `build_chat_messages`. `agent/orchestrator.py`
-  LangGraph graph with per-stage exclusion channels + retry + spec-build HITL gate; `core/run_trace.py`
-  audit export + `memory/store.py` `BaseStore`. **⚠️ gate / hypothesis / synthesis / output_validate nodes
-  are still PASS-THROUGHS** — wiring them is #34.
+  model id). `agent/prompts.py` `ROLE_SYSTEM_PROMPT` + `build_chat_messages` + `build_synthesis_prompt` +
+  `RANKING_TARGET_GUIDANCE`. `agent/orchestrator.py` LangGraph graph with per-stage exclusion/caveat channels +
+  hypothesis retry (shape + trial-compile) + spec-build HITL gate; `core/run_trace.py` audit export +
+  `memory/store.py` `BaseStore`. **⚠️ gate / synthesis / output_validate nodes are still PASS-THROUGHS**
+  (hypothesis + spec_build + retrieve + filter + rank are real) — wiring the rest is #34.
 - **Guardrails:** `policy/guardrails.py` `check_input` + `wrap_untrusted` + `_scrub`.
 - **Server (net-new, outside v1 deep-plan):** `server/mt_server/policy.py` `resolve_model` (#52); `server/`
   wired into pytest. See the hosting task list below.
@@ -184,22 +217,23 @@ NODE wiring itself is deferred to #34).
   assumption-not-verified bug is exactly how #61's review caught a crash. [memory: verify-against-main-not-reference-impl])
 
 ## Status
-- **`main` @ `d2d4074`** (handoff-sync #65 merged on top of #63/#64). Pagination (2b) is **committed on
-  `feat/retrieve-pagination` @ `9ab2bd7`, NOT yet on `main`** — PR pending.
-- **2b pagination BUILT this session** (TDD): `_paginate` + `retrieve() -> RetrievalResult(candidates,
-  caveats)` + page size 1000 + 10k ceiling/loud cap-caveat + orchestrator `retrieval_caveats` channel +
-  `export_run` caveat union. **246 tests pass** (10 `live` deselected), ruff clean, signed commit.
-- **⏸ no-mistakes BLOCKED on a transient `API Error: 529 Overloaded`** at the *review* step (3 attempts, all
-  529 — not a code/finding issue). Branch is bootstrapped on the proxy; just `no-mistakes rerun` when the API
-  recovers (no re-push needed). Local gate is green.
-- **#38 + 2c done** (#63 server-side push, #64 exclusive-set local filter): full filtering architecture on
-  `main` — **server-side primary (PUSHABLE_PARAMS) + deterministic local filter for the exclusive set (R∩¬Q)
-  + loud caveats (¬R∩¬Q → TriageRun.caveats)**. `is_magnetic` and element `any` enforced end-to-end; live-verified.
-- **#39 supply side done** (merged #61). Increment 4 (prompt binding) → **#34**.
-- **#37 done** (A #51 + D #55; B + C deferred).
-- **Parallel work in flight:** `feat/desirability-ranker` (selectable geometric-mean desirability ranker) had
-  its own no-mistakes run running this session — independent, untouched by 2b. Leave it alone.
+- **`main` @ `de097e0`**, clean, **296 tests pass** (10 `live` deselected), ruff clean. Three features
+  merged this session via no-mistakes: **#68 pagination (2b)**, **#69 synthesis primitives (#20/#35/#22)**,
+  **#70 geometric-mean default + schema surfacing + trial-compile fix (3b)**. (#66 selectable ranker landed
+  too, the predecessor of 3b.)
+- **The deterministic + retrieval + LLM-input layers are now complete.** What's left for v1 is the remaining
+  LLM NODE wiring (#34: gate/synthesis/output_validate + vocabulary binding) and presentation (views #25–#27).
+- **no-mistakes note:** the pipeline this session **merged the PRs itself** (outcome `passed`, not just
+  `checks-passed`) and **auto-resolved the rebase conflict** (#70's `prompts.py`/`test_prompts.py` overlap with
+  #69) — no manual UI merge needed those rounds. Earlier #68 attempts hit transient `529 Overloaded` at the
+  review step (retry cleared it). [memory: no-mistakes-run-bootstrap]
+- **#38 + 2c done** (#63/#64): full filtering architecture on `main` — server-side primary (PUSHABLE_PARAMS) +
+  local exclusive-set filter (R∩¬Q) + loud caveats (¬R∩¬Q → TriageRun.caveats). #39 supply side (#61), #37
+  (A #51 + D #55) done.
 - **Known issues / loose ends:**
+  - **Geometric-default asymmetry (info, #70 review, no-op):** `compile_spec` defaults `geometric_mean` while
+    the `TriageSpec` model field default stays `arithmetic_mean`. Deliberate + documented, but raw
+    `TriageSpec(...)` and the agent path disagree on the default ranker — a latent gotcha.
   - **4 informational nits from #64's review** to fix opportunistically (next time touching the files):
     (1) `classify_predicates` comment oversells — the ¬R caveat is *additive* (explains the empty result),
     NOT *protective*; `apply_hard_filters` still drops the candidates as `missing_data`. (2) `classify_predicates`
@@ -250,6 +284,16 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
   so `retrieve` passes the ceiling **explicitly** (else `monkeypatch.setattr(mp, "_MAX_CANDIDATES", …)` in a
   test wouldn't reach it). Caveats split by stage like exclusions: `retrieval_caveats` (retrieve node) +
   `caveats` (filter node), unioned in `export_run`. [memory: orchestrator-exclusions-two-sources]
+- **Geometric default (3b): a shape-valid hypothesis can still fail to *compile*.** The geometric ranker
+  requires every `RankingTarget` to carry ramp bounds, but anchors are optional on `RankingTarget`, so a
+  bounds-less hypothesis passes `Hypothesis` structured-output validation and only fails later in
+  `spec_build`'s `compile_spec`. The retry loop that re-prompts the LLM lives in the **hypothesis node**, so the
+  fix is to **trial-compile inside that loop** (catch the compile `ValidationError` there, feed it back) —
+  otherwise the error is terminal and feedback-less. General lesson: any retry-worthy LLM-output failure must be
+  detected where the retry+re-prompt happens, not a stage later. Surfacing the schema to the LLM has two halves:
+  pydantic `Field(description=...)` (structured, reaches Bedrock via `with_structured_output`) AND prose in the
+  prompt; conditional requirements (bounds-iff-geometric) can't be expressed in JSON schema, so they ride a
+  `model_validator` + the retry seam. [memory: llm-structured-output-flakiness, two-model-categories-strictness]
 - **Pushability ≠ retrievability (#38).** What a field *returns* and what it can be *filtered on* are two
   surfaces. The `/summary` GET endpoint declares **124 query params** (≠ the 39 retrievable fields):
   `is_magnetic` is retrievable but not queryable (pushing it **400s**), and the moduli filter via
@@ -311,16 +355,18 @@ property/material class *before* retrieval:
   this is the *consumption* — choose + fetch + flag/restrict ranking by functional).
 
 ## Context for Next Session
-- **Branch:** `feat/retrieve-pagination` @ `9ab2bd7` (2b, committed, signed) — **finish shipping first:**
-  `no-mistakes rerun` once the API recovers (review step was 529-blocked), then merge via GitHub UI +
-  `/sync-main`. `main` is at `d2d4074`. Build the next increment in a worktree (`PYTHONPATH="$PWD/src" pytest`).
-- **Verify 2b branch:** `PYTHONPATH="$PWD/src" python -m pytest -q` (246 pass, 10 deselected); `ruff check .`.
+- **Branch:** `main` @ `de097e0`, clean. Build the next increment in a **worktree** off `main`
+  (`PYTHONPATH="$PWD/src" pytest`; no-mistakes bootstrap must run from the **main repo**, not the worktree —
+  remove the worktree + checkout the branch in the main repo to ship). Other branches: `feat/fast-track-wire-guardrails`
+  (reference impl, keep), `docs/handoff-66` (a stale handoff branch, not ours — ignore).
+- **Verify merged state:** `PYTHONPATH="$PWD/src" python -m pytest -q` (296 pass, 10 deselected); `ruff check .`.
   Live (needs creds): `pytest -m live`.
-- **Next up after 2b merges (pick one):** (a) **#34** wire the pass-through nodes
-  (gate/hypothesis/synthesis/output_validate) + bind the vocabulary into the hypothesis prompt; (b) **views /
-  render** (#25–#27) — also unblocks 2c's *and* 2b's caveat rendering (both feed `TriageRun.caveats`). The
-  deterministic filtering + retrieval core is now complete, so the remaining v1 gaps are the LLM nodes (#34)
-  and presentation (views).
+- **Next up (pick one):** (a) **#34** — wire the remaining pass-through nodes (gate / synthesis via
+  `build_synthesis_prompt` / output_validate via `validate_output`) + bind the source **vocabulary** into the
+  hypothesis prompt (the last #39 increment). The synthesis/validator primitives (#69) are ready to wire in.
+  (b) **views / render** (#25–#27) — unblocks 2c's *and* 2b's caveat rendering (both feed `TriageRun.caveats`)
+  plus the synthesis narrative. Deterministic + retrieval + LLM-input layers are complete; the v1 gaps are the
+  LLM node wiring (#34) and presentation (views).
 - **Credentials:** `X_API_KEY` (MP), `OPENALEX_MAILTO` (optional polite pool), AWS creds for Bedrock
   (prefer `~/.aws/credentials`; conftest `load_dotenv`s `.env`; AWS keys in `.env` must be UPPERCASE).
   **Never read/print the AWS creds or `X_API_KEY`.**
@@ -329,14 +375,12 @@ property/material class *before* retrieval:
   abort a commit → re-add + re-commit.
 - **Collaboration rules (CLAUDE.md):** ask before choosing between approaches; one function at a time then
   stop for approval; TDD via the `tdd` skill (never batch tests); **don't start coding until told.**
-- **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~, ~~2b pagination (built, PR pending)~~,
-  ~~#20/#35/#22 synthesis & validation primitives (built on `feat/synthesis-primitives`)~~ → **#34** ←
-  suggested next, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32,
-  #33, #37, **#39 (supply side; binding → #34)**, **#38 server-side push (#63)**, **2c exclusive-set local
-  filter (#64)**, **2b pagination (built on `feat/retrieve-pagination`, PR pending 529-retry)**,
-  **#20/#35/#22 synthesis & validation primitives (built on `feat/synthesis-primitives`; node wiring → #34)**.
-  Open within
-  2c + 2b: render caveats in views (blocked on the view layer #25–#27; both feed `TriageRun.caveats`). Deferred: #37 area
-  B/C (area B on the critical path for "metal oxides"); the **multi-source filter abstraction** (universal
-  local / filter_capability / residual — "see how it goes"); **v2 XC-functional-first retrieval** (design note
-  above). Hosting = HB1–HB10.
+- **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~, ~~2b pagination (#68)~~, ~~#20/#35/#22 synthesis &
+  validation primitives (#69)~~, ~~3b geometric default + schema surfacing (#70)~~ → **#34** ← suggested next,
+  then #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32, #33, #37, #39 (supply side;
+  vocabulary binding → #34), **#38 (#63)**, **2c (#64)**, **2b pagination (#68)**, **#20/#35/#22 primitives
+  (#69; node wiring → #34)**, **#66 selectable ranker + 3b geometric default/schema/trial-compile (#70)**.
+  Open within 2c + 2b: render caveats in views (blocked on the view layer #25–#27; both feed `TriageRun.caveats`).
+  Deferred: #37 area B/C (area B on the critical path for "metal oxides"); the **multi-source filter abstraction**
+  (universal local / filter_capability / residual — "see how it goes"); **v2 XC-functional-first retrieval**
+  (design note above). Hosting = HB1–HB10.
