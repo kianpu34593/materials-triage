@@ -24,10 +24,19 @@ One function at a time, stop for approval after each.
 Port every increment from the reference impl on `feat/fast-track-wire-guardrails`.
 
 **1 · #39 — Source vocabulary binding** *(foundational: kills "vocab drift → empty results", expands past
-today's 6 fields; owns the `FIELD_UNITS`/`_FIELD_ORIGIN` lockstep invariant)*
-- [ ] `property_vocabulary()` on the MP adapter — derive queryable name surface from the published API schema
-- [ ] grow `FIELD_UNITS` + `_FIELD_ORIGIN` in lockstep with the new surface
-- [ ] bind the vocabulary into the hypothesis prompt ("use ONLY these names")
+today's 6 fields; owns the `FIELD_UNITS`/`_FIELD_ORIGIN` lockstep invariant)* — **supply side DONE**
+(branch `feat/source-vocabulary`, PR open): schema-derived vocabulary via `tools/gen_mp_vocab.py` parsing
+the vendored MP OpenAPI → committed `_mp_fields.py` (39 fields, units + xc origins); adapter derives
+`FIELD_UNITS`/`_FIELD_ORIGIN` from it; `property_vocabulary()` exposes all 39; `PropertyValue.unit` relaxed
+to `str | None` for dimensionless. Live-smoked.
+- [x] `property_vocabulary()` on the MP adapter — derive queryable name surface from the published API schema
+- [x] grow `FIELD_UNITS` + `_FIELD_ORIGIN` in lockstep with the new surface
+- [ ] bind the vocabulary into the hypothesis prompt ("use ONLY these names") — **moved to #34** (hypothesis
+  node is a pass-through on `main`; fast-track's `_vocabulary_clause`/`_hypothesis_prompt` port lands there)
+
+  Findings: elasticity has no `origins[]` entry (moduli `origin=None`, retiring the dead `"elasticity"` map);
+  MP WAFs the `Python-urllib` UA (use `requests`/a UA). [memory: vocab-prebuilt-not-runtime,
+  two-model-categories-strictness, materials-project-api]
 
 **2 · #38 — Push #37 predicates server-side** (`_query_params` only) *(execution-location optimization, NOT
 the H₂O fix — it changes WHERE a predicate runs, not WHETHER the spec carries one. Real justification: MP
