@@ -26,6 +26,11 @@
     #gate { border: 1px solid #6cf4; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
     #gate textarea { width: 100%; box-sizing: border-box; min-height: 16rem; font: 13px/1.45 ui-monospace, monospace; }
     #gate .actions { margin-top: .6rem; display: flex; gap: .5rem; }
+    .fidelity { background: #2e9e4f14; border: 1px solid #2e9e4f88; border-radius: 6px; padding: .6rem .9rem; margin: .6rem 0; }
+    .fidelity ul { margin: .4rem 0 0; padding-left: 1.2rem; }
+    .fidelity li { margin: .25rem 0; font-size: .9rem; }
+    .fidelity code { background: #8882; padding: .05rem .3rem; border-radius: 3px; }
+    .fidelity .caveat-note { font-size: .78rem; color: #c8860088; margin-top: .15rem; }
     .rag { border: 1px solid #8884; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
     .rag h3 { margin: 0 0 .8rem; font-size: 1.05rem; }
     .stage { margin: .5rem 0; padding-left: 1.6rem; position: relative; }
@@ -190,6 +195,24 @@
       note.textContent =
         (msg.note || "Approve the compiled spec, edit it, or regenerate.") +
         (msg.weights_were_normalized ? " (ranking weights were rescaled to sum to 1)" : "");
+
+      // Fidelity gate: requirements code auto-added to match the request.
+      const seeded = (msg.fidelity || []).filter((f) => f.action === "seeded");
+      let fidelityBox = null;
+      if (seeded.length) {
+        fidelityBox = el("div", "fidelity");
+        fidelityBox.appendChild(el("strong", null, "Auto-added to match your request:"));
+        const ul = el("ul");
+        seeded.forEach((f) => {
+          const li = el("li");
+          li.appendChild(el("code", null, f.detail));
+          li.appendChild(document.createTextNode("  — from “" + f.cue + "”"));
+          if (f.caveat) li.appendChild(el("div", "caveat-note", "⚠ " + f.caveat));
+          ul.appendChild(li);
+        });
+        fidelityBox.appendChild(ul);
+      }
+
       const ta = document.createElement("textarea");
       ta.spellcheck = false;
       ta.value = JSON.stringify(msg.spec, null, 2);
@@ -213,7 +236,9 @@
       const actions = document.createElement("div");
       actions.className = "actions";
       actions.append(proceed, regen);
-      gate.append(h, note, ta, actions);
+      gate.append(h, note);
+      if (fidelityBox) gate.append(fidelityBox);
+      gate.append(ta, actions);
     };
 
     const runStream = (url) => {

@@ -154,6 +154,7 @@ def _drive(orchestrator, config, next_input, view, thread_id):
                 "thread_id": thread_id,
                 "note": gate.get("note", ""),
                 "weights_were_normalized": gate.get("weights_were_normalized", False),
+                "fidelity": gate.get("fidelity_findings", []),
                 "spec": gate["recommended_spec"].model_dump(mode="json"),
             }
         )

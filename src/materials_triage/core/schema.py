@@ -215,17 +215,20 @@ class ExcludedCandidate(BaseModel):
 
     candidate: Candidate
     property_name: str = Field(min_length=1)
-    reason: Literal["below_min", "above_max", "missing_data"]
+    reason: Literal[
+        "below_min", "above_max", "missing_data", "excluded_element", "too_many_elements"
+    ]
     value: float | None = None
     bound: float | None = None
 
     @model_validator(mode="after")
     def _reason_agrees_with_evidence(self) -> Self:
-        if self.reason == "missing_data":
-            # The constrained property had no value to check, so there is no
-            # number to record; a value here would contradict the reason.
+        if self.reason in ("missing_data", "excluded_element"):
+            # No number to record: a missing property has no value, and an
+            # excluded element is a set-membership fact (the offending element is
+            # carried in property_name), not a numeric bound violation.
             if self.value is not None:
-                raise ValueError("a 'missing_data' exclusion cannot carry a value")
+                raise ValueError(f"a {self.reason!r} exclusion cannot carry a value")
             return self
         if self.value is None or self.bound is None:
             raise ValueError(
@@ -235,9 +238,10 @@ class ExcludedCandidate(BaseModel):
             raise ValueError(
                 f"'below_min' requires value < bound, got {self.value} >= {self.bound}"
             )
-        if self.reason == "above_max" and not self.value > self.bound:
+        # above_max and too_many_elements both mean "value exceeded the cap".
+        if self.reason in ("above_max", "too_many_elements") and not self.value > self.bound:
             raise ValueError(
-                f"'above_max' requires value > bound, got {self.value} <= {self.bound}"
+                f"{self.reason!r} requires value > bound, got {self.value} <= {self.bound}"
             )
         return self
 

@@ -5,6 +5,7 @@ data model. Normalisation maps a property's values onto a comparable [0, 1]
 scale so the weighted average can sum unlike units.
 """
 
+import re
 from typing import Literal
 
 from materials_triage.core.schema import (
@@ -13,6 +14,9 @@ from materials_triage.core.schema import (
     ExcludedCandidate,
     RankingTarget,
 )
+
+#: A chemical-formula element token: a capital letter and an optional lowercase one.
+_ELEMENT_RE = re.compile(r"[A-Z][a-z]?")
 
 
 def normalize(values: list[float], direction: Literal["maximize", "minimize"]) -> list[float]:
@@ -79,6 +83,53 @@ def apply_hard_filters(
             excluded.append(drop)
         else:
             survivors.append(candidate)
+    return survivors, excluded
+
+
+def formula_elements(formula: str) -> frozenset[str]:
+    """The distinct element symbols in a formula string ("BaTiO3" -> {Ba, Ti, O}).
+
+    Coarse but sufficient for the clean formulas Materials Project returns: it
+    matches capital+optional-lowercase tokens and ignores subscripts, parentheses,
+    and hydration dots."""
+    return frozenset(_ELEMENT_RE.findall(formula))
+
+
+def apply_element_filters(
+    candidates: list[Candidate],
+    excluded_elements: frozenset[str],
+    max_nelements: int | None,
+) -> tuple[list[Candidate], list[ExcludedCandidate]]:
+    """Drop candidates carrying an excluded element or exceeding ``max_nelements``.
+
+    The composition-level enforcement of the spec's element/count rules, recorded
+    with structured reasons so nothing is silently dropped. ``required_elements``
+    is enforced server-side at retrieval, so it is not re-checked here. A candidate
+    is dropped on the first rule it violates (exclusion before count)."""
+    survivors: list[Candidate] = []
+    excluded: list[ExcludedCandidate] = []
+    for candidate in candidates:
+        elements = formula_elements(candidate.formula)
+        offending = sorted(elements & excluded_elements)
+        if offending:
+            excluded.append(
+                ExcludedCandidate(
+                    candidate=candidate, property_name=offending[0], reason="excluded_element"
+                )
+            )
+            continue
+        if max_nelements is not None and len(elements) > max_nelements:
+            excluded.append(
+                ExcludedCandidate(
+                    candidate=candidate,
+                    property_name="nelements",
+                    reason="too_many_elements",
+                    value=float(len(elements)),
+                    bound=float(max_nelements),
+                )
+            )
+            continue
+        survivors.append(candidate)
     return survivors, excluded
 
 

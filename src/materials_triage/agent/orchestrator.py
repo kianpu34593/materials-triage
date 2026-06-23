@@ -26,6 +26,7 @@ from langgraph.types import interrupt
 from pydantic import ValidationError
 
 from materials_triage.agent.validator import validate_output
+from materials_triage.core.fidelity import reconcile_spec
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
 from materials_triage.core.ranking import rank
 from materials_triage.core.schema import (
@@ -34,7 +35,7 @@ from materials_triage.core.schema import (
     TriageResult,
     TriageSpec,
 )
-from materials_triage.core.scoring import apply_hard_filters
+from materials_triage.core.scoring import apply_element_filters, apply_hard_filters
 from materials_triage.core.synthesis import Synthesis, ungrounded_record_ids
 from materials_triage.policy.guardrails import GateDecision, check_input, wrap_untrusted
 from materials_triage.sources.base import SourceAdapter
@@ -157,6 +158,9 @@ class OrchestratorState(TypedDict, total=False):
     # The goal -> search query -> RAG -> passages -> prompt -> proposals record
     # the hypothesis node builds, for the audit view and the live GUI panel.
     rag_trace: dict
+    # The fidelity gate's findings: which goal facets were seeded into the spec
+    # (oxide -> require O, non-toxic, simple composition) vs already covered.
+    fidelity: list[dict]
 
 
 def _passthrough(state: OrchestratorState) -> dict:
@@ -434,6 +438,12 @@ def _spec_build_node(state: OrchestratorState) -> dict:
             "the hypothesis proposals did not compile to a coherent TriageSpec"
         ) from exc
 
+    # Fidelity gate: deterministically seed goal facets the LLM dropped
+    # (oxide -> require O, non-toxic, simple composition) before the human sees it.
+    recommended, findings = reconcile_spec(state["goal"], recommended)
+    fidelity = [f.model_dump() for f in findings]
+    seeded = [f for f in findings if f.action == "seeded"]
+
     proposed_weights = [
         p.ranking_target.weight for p in hypothesis.proposals if p.kind == "ranking_target"
     ]
@@ -446,15 +456,17 @@ def _spec_build_node(state: OrchestratorState) -> dict:
         "(echo to accept, or send an edited one)."
     )
     if weights_were_normalized:
+        note = "Ranking weights were rescaled to sum to 1. " + note
+    if seeded:
         note = (
-            "Ranking weights were rescaled to sum to 1. "
-            "Confirm the recommended spec; resume with the approved TriageSpec "
-            "(echo to accept, or send an edited one)."
+            f"{len(seeded)} requirement(s) from your request were auto-added to the spec "
+            f"({', '.join(f.facet for f in seeded)}); review them below. " + note
         )
     approved_spec = interrupt(
         {
             "recommended_spec": recommended,
             "weights_were_normalized": weights_were_normalized,
+            "fidelity_findings": fidelity,
             "note": note,
         }
     )
@@ -466,7 +478,7 @@ def _spec_build_node(state: OrchestratorState) -> dict:
             "the resumed spec-build decision must be a TriageSpec, "
             f"got {type(approved_spec).__name__}"
         )
-    return {"spec": approved_spec}
+    return {"spec": approved_spec, "fidelity": fidelity}
 
 
 def _make_retrieve_node(adapter: SourceAdapter | None):
@@ -483,12 +495,19 @@ def _make_retrieve_node(adapter: SourceAdapter | None):
 
 
 def _filter_node(state: OrchestratorState) -> dict:
-    """The hard-filter step: partition retrieved candidates into survivors and
-    the stage's own structured exclusions against the spec's constraints."""
-    survivors, excluded = apply_hard_filters(
-        list(state.get("candidates", ())), state["spec"].constraints
+    """The hard-filter step: partition retrieved candidates into survivors and the
+    stage's own structured exclusions. Numeric constraints are checked first, then
+    the spec's composition rules (excluded elements, max element count) — the local
+    enforcement of the element/count facets the fidelity gate seeds."""
+    spec = state["spec"]
+    survivors, excluded = apply_hard_filters(list(state.get("candidates", ())), spec.constraints)
+    survivors, element_excluded = apply_element_filters(
+        survivors, spec.excluded_elements, spec.max_nelements
     )
-    return {"survivors": tuple(survivors), "filter_excluded": tuple(excluded)}
+    return {
+        "survivors": tuple(survivors),
+        "filter_excluded": tuple(excluded) + tuple(element_excluded),
+    }
 
 
 def _rank_node(state: OrchestratorState) -> dict:
