@@ -6,7 +6,7 @@ keeps user text structurally out of the instruction channel: the role occupies t
 *system* slot and the (wrapped) query is confined to the *human* slot.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from materials_triage.core.schema import TriageResult
 from materials_triage.policy.guardrails import wrap_untrusted
@@ -57,6 +57,29 @@ inferred from the candidate pool:
 `upper` window, peaking at `target`.
 Optionally set `curvature` (>1 strict, <1 lenient; default 1 linear). Weights are \
 proportional shares; they are renormalized to sum to 1."""
+
+
+def build_property_vocabulary_guidance(vocabulary: Mapping[str, str | None]) -> str:
+    """Render the source's retrievable property vocabulary as hypothesis-prompt guidance.
+
+    The spec's quality ceiling is the schema/source surface, not the prompt — but a
+    hypothesis that names a property the source won't return causes silent missing-data
+    wipeout downstream. So we hand the LLM the exact retrievable names (with units;
+    dimensionless ones marked) and tell it to propose ONLY these. An empty vocabulary
+    yields an empty string (a source that declares nothing constrains nothing — adding
+    a "use only these (none)" line would be actively misleading)."""
+    if not vocabulary:
+        return ""
+    lines = "\n".join(
+        f"- {name} ({unit if unit is not None else 'dimensionless'})"
+        for name, unit in vocabulary.items()
+    )
+    return (
+        "Retrievable properties: propose constraints and ranking targets using ONLY the "
+        "property names below (with their units) — the data source will not return any "
+        "other property, so naming one elsewhere yields missing data, not a match:\n"
+        f"{lines}"
+    )
 
 
 def build_chat_messages(query: str, *, nonce: str) -> list[tuple[str, str]]:

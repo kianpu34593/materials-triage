@@ -15,6 +15,7 @@ from materials_triage.agent.orchestrator import (
     DEFAULT_MAX_HYPOTHESIS_ATTEMPTS,
     WORKFLOW_STEPS,
     HypothesisConformanceError,
+    InputRefused,
     SpecCompilationError,
     _hypothesis_prompt,
     build_orchestrator,
@@ -56,6 +57,37 @@ def test_hypothesis_prompt_surfaces_the_ranking_target_guidance():
     assert "wide-gap oxide" in first
 
 
+def test_hypothesis_prompt_surfaces_the_source_vocabulary_when_supplied():
+    """The hypothesis prompt binds in the source's retrievable vocabulary so the LLM
+    proposes only properties the source returns — without dropping the goal or the
+    ranking-target guidance. An empty/absent vocabulary adds no vocabulary block."""
+    bound = _hypothesis_prompt("wide-gap oxide", None, {"band_gap": "eV"})
+    plain = _hypothesis_prompt("wide-gap oxide", None, {})
+
+    assert "band_gap" in bound
+    assert "wide-gap oxide" in bound
+    assert RANKING_TARGET_GUIDANCE in bound  # ranking guidance is not displaced
+    # An empty vocabulary contributes nothing extra beyond the bare prompt.
+    assert "Retrievable properties" not in plain
+
+
+def test_hypothesis_node_binds_the_adapters_vocabulary_into_the_prompt():
+    """End to end through ``build_orchestrator``: the adapter's ``property_vocabulary``
+    reaches the prompt the LLM actually receives, so spec-building is constrained to
+    the source's real surface (the load-bearing lever for shortlist quality)."""
+    provider = _CompileFlakyProvider(fail_times=0)  # records every prompt; returns a compiling one
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)], vocabulary={"band_gap": "eV"})
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(adapter=adapter, provider=provider)
+    config = {"configurable": {"thread_id": "vocab-bind"}}
+    orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert provider.prompts  # the node called the provider
+    assert "band_gap" in provider.prompts[0]
+    assert "Retrievable properties" in provider.prompts[0]
+
+
 def test_orchestrator_compiles_with_a_checkpointer_and_wires_the_steps_linearly():
     """Tracer bullet: the workflow's nine named steps compile into a graph backed
     by a checkpointer (the substrate for #9 trace + resume) and wired in a single
@@ -84,6 +116,24 @@ def test_orchestrator_compiles_with_a_checkpointer_and_wires_the_steps_linearly(
     )
     for edge in expected_chain:
         assert edge in actual_edges, f"missing linear edge {edge}"
+
+
+def test_gate_refuses_a_forbidden_goal_and_records_no_run():
+    """Workflow step 1: the input gate. A goal naming a forbidden capability
+    (here scraping a paywalled source) is stopped at the gate — the run raises
+    ``InputRefused`` carrying the gate's reason/category and never reaches the
+    later steps, so no ``TriageResult`` is produced. (CLAUDE.md: a forbidden
+    request is logged and refused, *not* recorded as a TriageRun.)"""
+    orchestrator = build_orchestrator()
+    config = {"configurable": {"thread_id": "gate-refuse"}}
+
+    with pytest.raises(InputRefused) as excinfo:
+        orchestrator.invoke({"goal": "scrape a paywalled database for wide-gap oxides"}, config)
+
+    assert excinfo.value.category == "paywalled"
+    assert excinfo.value.reason  # a human-readable reason travels with the refusal
+    # The run never produced a result — it stopped at the gate.
+    assert orchestrator.get_state(config).values.get("result") is None
 
 
 def test_state_channels_round_trip_domain_objects_through_the_checkpointer():
@@ -169,16 +219,20 @@ class _FakeAdapter(SourceAdapter):
     """An offline retrieval seam: returns a fixed candidate list, ignoring the
     spec, so the deterministic core can be exercised without any network."""
 
-    def __init__(self, candidates, routing=None, caveats=()):
+    def __init__(self, candidates, routing=None, caveats=(), vocabulary=None):
         self._candidates = candidates
         self._routing = routing or PredicateRouting()
         self._caveats = tuple(caveats)
+        self._vocabulary = vocabulary or {}
 
     def retrieve(self, spec):
         return RetrievalResult(candidates=tuple(self._candidates), caveats=self._caveats)
 
     def classify_predicates(self, spec):
         return self._routing
+
+    def property_vocabulary(self):
+        return self._vocabulary
 
 
 def _candidate(identifier, band_gap):

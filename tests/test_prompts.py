@@ -10,6 +10,7 @@ from materials_triage.agent.prompts import (
     RANKING_TARGET_GUIDANCE,
     ROLE_SYSTEM_PROMPT,
     build_chat_messages,
+    build_property_vocabulary_guidance,
     build_synthesis_prompt,
 )
 from materials_triage.core.schema import (
@@ -34,6 +35,31 @@ def _candidate(identifier: str, formula: str) -> Candidate:
 def _passage(title: str, text: str) -> LiteraturePassage:
     prov = Provenance(source="OpenAlex", record_id="W1", method="literature")
     return LiteraturePassage(provenance=prov, title=title, text=text)
+
+
+def test_build_property_vocabulary_guidance_lists_names_units_and_constrains_to_them():
+    """The vocabulary guidance names exactly the source's retrievable properties with
+    their units (dimensionless ones marked, not blank) and tells the LLM to propose
+    ONLY these names — so a hypothesis cannot name a property the source won't return
+    (the cause of silent missing-data wipeout downstream)."""
+    guidance = build_property_vocabulary_guidance(
+        {"band_gap": "eV", "density": "g/cm³", "is_metal": None}
+    )
+
+    assert "band_gap" in guidance
+    assert "eV" in guidance
+    assert "density" in guidance
+    assert "g/cm³" in guidance
+    assert "is_metal" in guidance  # dimensionless property still listed
+    assert "dimensionless" in guidance.lower()
+    # It must instruct the model to stay within the listed vocabulary.
+    assert "only" in guidance.lower()
+
+
+def test_build_property_vocabulary_guidance_is_empty_for_an_empty_vocabulary():
+    """A source that declares no vocabulary constrains nothing — the guidance is empty
+    so the prompt adds no misleading 'use only these (none)' instruction."""
+    assert build_property_vocabulary_guidance({}) == ""
 
 
 def test_build_synthesis_prompt_grounds_in_the_shortlist_goal_and_literature():
