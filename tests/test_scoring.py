@@ -26,7 +26,9 @@ def _candidate(identifier: str, formula: str, **props: float) -> Candidate:
             name: PropertyValue(
                 value=value,
                 unit="eV",
-                provenance=Provenance(source="Materials Project", record_id=identifier),
+                provenance=Provenance(
+                    source="Materials Project", record_id=identifier, method="computational"
+                ),
             )
             for name, value in props.items()
         },
@@ -156,7 +158,9 @@ def test_apply_hard_filters_treats_present_but_missing_value_as_missing_data():
                 value=None,
                 unit="eV",
                 missing=True,
-                provenance=Provenance(source="Materials Project", record_id="mp-flagged"),
+                provenance=Provenance(
+                    source="Materials Project", record_id="mp-flagged", method="computational"
+                ),
             )
         },
     )

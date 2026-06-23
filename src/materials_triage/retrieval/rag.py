@@ -73,6 +73,7 @@ def _parse_work(work: dict) -> LiteraturePassage:
         provenance=Provenance(
             source="openalex",
             record_id=_strip_prefix(work["id"], "https://openalex.org/"),
+            method="literature",
         ),
         title=work.get("title") or "",
         authors=[

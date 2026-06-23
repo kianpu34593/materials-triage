@@ -32,7 +32,9 @@ class _FakeAdapter(SourceAdapter):
 
 
 def _candidate(identifier, band_gap):
-    provenance = Provenance(source="Materials Project", record_id=identifier)
+    provenance = Provenance(
+        source="Materials Project", record_id=identifier, method="computational"
+    )
     return Candidate(
         identifier=identifier,
         formula="ZnO",
