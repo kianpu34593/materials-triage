@@ -468,6 +468,25 @@ def test_retrieve_pushes_a_boolean_constraint_in_the_vocabulary():
     assert captured["params"]["is_stable"] == "true"
 
 
+def test_retrieve_does_not_push_a_retrievable_but_unqueryable_boolean():
+    """`is_magnetic` is a retrievable field but NOT a /summary query param — pushing
+    it returns HTTP 400. Gating on the pushable-param surface (not the retrievable
+    vocabulary) keeps it out of the query; the deterministic filter still enforces it."""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(
+        boolean_constraints=(BooleanConstraint(property_name="is_magnetic", required=True),)
+    )
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    assert "is_magnetic" not in captured["params"]
+
+
 def test_retrieve_does_not_push_a_boolean_constraint_outside_the_vocabulary():
     """A BooleanConstraint on a field the adapter does not publish must not be sent
     as a query param — MP would silently ignore an unknown name, so pushing it would
@@ -520,6 +539,25 @@ def test_retrieve_pushes_a_numeric_constraint_as_field_bounds():
 
     assert captured["params"]["band_gap_min"] == "1.0"
     assert captured["params"]["band_gap_max"] == "3.0"
+
+
+def test_retrieve_pushes_bulk_modulus_via_the_k_vrh_param():
+    """The elastic moduli filter server-side via the Voigt-Reuss-Hill params (`k_vrh`
+    for bulk, `g_vrh` for shear), NOT `<field>_min` — `bulk_modulus_min` isn't a real
+    query param. The adapter maps the field to its VRH filter param; the local
+    `_scalar` already collapses the returned VRH dict, so both sides agree."""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(constraints=(Constraint(property_name="bulk_modulus", min=50.0),))
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    assert captured["params"]["k_vrh_min"] == "50.0"
+    assert "bulk_modulus_min" not in captured["params"]
 
 
 def test_retrieve_sends_the_api_key_header():
