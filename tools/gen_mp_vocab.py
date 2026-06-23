@@ -25,12 +25,41 @@ def _scalar_type(prop: dict) -> str | None:
     return None
 
 
+#: Scalar type categories that belong in the vocabulary — the fields a hypothesis
+#: can sensibly filter or rank on. Free-text ``string`` and ``array`` fields (and
+#: untyped identity fields the parser already drops) are excluded.
+_VOCABULARY_TYPES = frozenset({"number", "integer", "boolean"})
+
+#: Object-typed fields the adapter collapses to a single scalar, so they belong in
+#: the vocabulary despite their ``object`` type. MP returns the elastic moduli as a
+#: Voigt-Reuss-Hill dict ``{voigt, reuss, vrh}``; the adapter's ``_scalar`` takes the
+#: VRH average. The schema can't distinguish these from ``composition`` /
+#: ``composition_reduced`` (also object-of-number, but element->amount maps), so they
+#: must be named explicitly — mirroring the exact fields ``_scalar`` already handles.
+_VRH_OBJECT_FIELDS = frozenset({"bulk_modulus", "shear_modulus"})
+
+
+def vocabulary_fields(fields: dict[str, str]) -> dict[str, str]:
+    """Keep only the vocabulary-eligible fields from a parsed ``{name: type}`` map.
+
+    The vocabulary the spec-building prompt hands the LLM is the numeric/boolean
+    surface (plus the VRH-collapsible moduli); strings, arrays, composition maps,
+    and untyped identity fields can't anchor a numeric constraint or a ranking
+    target, so they're dropped here. (This selects *which property names exist* — it
+    does not build any API query; that is #38.)"""
+    return {
+        name: t
+        for name, t in fields.items()
+        if t in _VOCABULARY_TYPES or name in _VRH_OBJECT_FIELDS
+    }
+
+
 def parse_summary_fields(openapi: dict) -> dict[str, str]:
     """Map each ``SummaryDoc`` property name to its scalar type category.
 
     Walks the ``SummaryDoc`` schema in an OpenAPI document and classifies every
     field by the scalar type the generator will later filter on (numeric/boolean
-    fields make the queryable surface; strings/arrays/untyped identity fields are
+    fields make the vocabulary surface; strings/arrays/untyped identity fields are
     dropped downstream). Fields with no resolvable scalar type are omitted."""
     props = openapi["components"]["schemas"]["SummaryDoc"]["properties"]
     return {

@@ -111,6 +111,51 @@
             ],
             "title": "Possible Species",
             "description": "Possible charged species in this material."
+          },
+          "shear_modulus": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shear Modulus",
+            "description": "Voigt, Reuss, and Voigt-Reuss-Hill averages of the shear modulus in GPa."
+          },
+          "composition": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Composition",
+            "description": "Full composition for the material."
+          },
+          "composition_reduced": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reduced Composition",
+            "description": "Simplified representation of the composition."
           }
         }
       }
