@@ -18,6 +18,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
+from materials_triage.agent.prompts import RANKING_TARGET_GUIDANCE
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
 from materials_triage.core.ranking import rank_arithmetic_mean, rank_geometric_mean
 from materials_triage.core.schema import (
@@ -120,10 +121,14 @@ def _passthrough(state: OrchestratorState) -> dict:
 
 
 def _hypothesis_prompt(goal: str, prior_error: str | None) -> str:
-    """Render the prompt for the hypothesis step (a thin placeholder until the
-    real prompt module, #22). On a retry, the prior schema rejection is fed back
-    so the model can correct the specific malformation."""
-    prompt = f"Propose a materials triage hypothesis for this goal: {goal}"
+    """Render the prompt for the hypothesis step. Appends RANKING_TARGET_GUIDANCE so
+    the LLM proposes ranking targets the agent's default geometric-mean ranker can
+    score (each with explicit desirability ramp bounds) — the prose half of surfacing
+    the schema, paired with the RankingTarget field descriptions. On a retry, the prior
+    schema rejection is fed back so the model can correct the specific malformation."""
+    prompt = (
+        f"Propose a materials triage hypothesis for this goal: {goal}\n\n{RANKING_TARGET_GUIDANCE}"
+    )
     if prior_error is not None:
         prompt += (
             "\n\nYour previous response was rejected because it did not conform "

@@ -117,13 +117,23 @@ class Hypothesis(BaseModel):
     mechanism: str = ""
 
 
-def compile_spec(proposals: tuple[Proposal, ...]) -> TriageSpec:
+def compile_spec(
+    proposals: tuple[Proposal, ...],
+    *,
+    ranking_method: Literal["arithmetic_mean", "geometric_mean"] = "geometric_mean",
+) -> TriageSpec:
     """Compile accepted proposals into the frozen TriageSpec the core consumes.
 
     The deterministic seam between the LLM layer and the pipeline: dispatch each
     proposal on its kind, then construct a TriageSpec — whose own validators
     enforce cross-proposal coherence (>=1 constraint, unique properties, no
     contradictory element predicates), so this function never has to.
+
+    The agent's default ranker is the non-compensatory weighted **geometric mean**
+    (a single unacceptable property zeros a candidate, so a strong score elsewhere
+    can't compensate). ``ranking_method`` is overridable for callers that want the
+    compensatory ``arithmetic_mean``; note the geometric ranker requires every
+    ranking target to announce its desirability ramp bounds (TriageSpec enforces it).
     """
     constraints = tuple(p.constraint for p in proposals if p.kind == "constraint")
     booleans = tuple(p.boolean_constraint for p in proposals if p.kind == "boolean_constraint")
@@ -138,6 +148,7 @@ def compile_spec(proposals: tuple[Proposal, ...]) -> TriageSpec:
         ranking_targets=_normalize_weights(targets),
         element_predicates=predicates,
         count=counts[0] if counts else None,
+        ranking_method=ranking_method,
     )
 
 

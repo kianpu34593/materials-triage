@@ -199,14 +199,60 @@ class RankingTarget(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    property_name: str = Field(min_length=1)
-    direction: Literal["maximize", "minimize", "target"]
-    weight: float = Field(gt=0, le=1)
-    on_missing: Literal["exclude", "impute_medium"] = "impute_medium"
-    lower: float | None = None
-    target: float | None = None
-    upper: float | None = None
-    curvature: float = Field(default=1.0, gt=0)
+    property_name: str = Field(
+        min_length=1, description="The property to score (a retrievable name)."
+    )
+    direction: Literal["maximize", "minimize", "target"] = Field(
+        description=(
+            "Which way is better: 'maximize' (bigger is better, ramps lower->target), "
+            "'minimize' (smaller is better, ramps target->upper), or 'target' "
+            "(a moderate value is best, peaking at target across lower->target->upper)."
+        )
+    )
+    weight: float = Field(
+        gt=0,
+        le=1,
+        description="This target's proportional share in (0, 1]; weights across targets sum to 1.",
+    )
+    on_missing: Literal["exclude", "impute_medium"] = Field(
+        default="impute_medium",
+        description=(
+            "What to do when a candidate lacks this property: 'exclude' it, or "
+            "'impute_medium' (treat as a middling desirability)."
+        ),
+    )
+    lower: float | None = Field(
+        default=None,
+        description=(
+            "Lower ramp anchor (desirability 0 below it). Announce it for 'maximize' "
+            "(with target) and 'target' (with target and upper). REQUIRED by the default "
+            "geometric-mean ranker — give explicit ramp bounds, do not rely on the pool."
+        ),
+    )
+    target: float | None = Field(
+        default=None,
+        description=(
+            "The ideal value (desirability 1). The ramp's upper end for 'maximize', "
+            "lower end for 'minimize', and the peak for 'target'. REQUIRED by the "
+            "geometric-mean ranker; announce it with its partner anchor(s)."
+        ),
+    )
+    upper: float | None = Field(
+        default=None,
+        description=(
+            "Upper ramp anchor (desirability 0 above it). Announce it for 'minimize' "
+            "(with target) and 'target' (with lower and target). REQUIRED by the "
+            "geometric-mean ranker — give explicit ramp bounds, do not rely on the pool."
+        ),
+    )
+    curvature: float = Field(
+        default=1.0,
+        gt=0,
+        description=(
+            "Exponent bending the desirability ramp: 1 linear, >1 strict (credit only "
+            "near the ideal), <1 lenient. Only used by the geometric-mean ranker."
+        ),
+    )
 
     @model_validator(mode="after")
     def _anchors_share_a_source(self) -> Self:

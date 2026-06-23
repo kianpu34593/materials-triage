@@ -16,9 +16,11 @@ from materials_triage.agent.orchestrator import (
     WORKFLOW_STEPS,
     HypothesisConformanceError,
     SpecCompilationError,
+    _hypothesis_prompt,
     build_orchestrator,
     resume_run,
 )
+from materials_triage.agent.prompts import RANKING_TARGET_GUIDANCE
 from materials_triage.core.hypothesis import (
     Citation,
     ConstraintProposal,
@@ -40,6 +42,18 @@ from materials_triage.core.schema import (
     TriageSpec,
 )
 from materials_triage.sources.base import SourceAdapter
+
+
+def test_hypothesis_prompt_surfaces_the_ranking_target_guidance():
+    """The hypothesis prompt carries the ranking-target guidance so the LLM proposes
+    ramp-bounded targets the default geometric-mean ranker can score — both on the
+    first attempt and on a retry (the guidance must not be dropped on the retry path)."""
+    first = _hypothesis_prompt("wide-gap oxide", None)
+    retry = _hypothesis_prompt("wide-gap oxide", "prior schema error")
+
+    assert RANKING_TARGET_GUIDANCE in first
+    assert RANKING_TARGET_GUIDANCE in retry
+    assert "wide-gap oxide" in first
 
 
 def test_orchestrator_compiles_with_a_checkpointer_and_wires_the_steps_linearly():
@@ -480,14 +494,22 @@ def _hypothesis_with_unnormalized_weights():
             ),
             RankingProposal(
                 ranking_target=RankingTarget(
-                    property_name="band_gap", direction="maximize", weight=0.6
+                    property_name="band_gap",
+                    direction="maximize",
+                    weight=0.6,
+                    lower=1.0,
+                    target=3.0,
                 ),
                 rationale="prefer wider",
                 confidence=0.8,
             ),
             RankingProposal(
                 ranking_target=RankingTarget(
-                    property_name="density", direction="minimize", weight=0.2
+                    property_name="density",
+                    direction="minimize",
+                    weight=0.2,
+                    target=2.0,
+                    upper=8.0,
                 ),
                 rationale="prefer lighter",
                 confidence=0.8,
@@ -599,7 +621,11 @@ def test_spec_build_note_does_not_claim_rescaling_when_weights_already_sum_to_on
             ),
             RankingProposal(
                 ranking_target=RankingTarget(
-                    property_name="band_gap", direction="maximize", weight=1.0
+                    property_name="band_gap",
+                    direction="maximize",
+                    weight=1.0,
+                    lower=1.0,
+                    target=3.0,
                 ),
                 rationale="prefer wider",
                 confidence=0.8,
