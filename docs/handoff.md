@@ -29,11 +29,19 @@ today's 6 fields; owns the `FIELD_UNITS`/`_FIELD_ORIGIN` lockstep invariant)*
 - [ ] grow `FIELD_UNITS` + `_FIELD_ORIGIN` in lockstep with the new surface
 - [ ] bind the vocabulary into the hypothesis prompt ("use ONLY these names")
 
-**2 · #38 — Push #37 predicates server-side** (`_query_params` only) *(the "H₂O ranked top" fix; leverage
-order: spec expressiveness #37 ✓ → server filters #38 → prompt #22)*
+**2 · #38 — Push #37 predicates server-side** (`_query_params` only) *(execution-location optimization, NOT
+the H₂O fix — it changes WHERE a predicate runs, not WHETHER the spec carries one. Real justification: MP
+applies `_limit=100` BEFORE returning, so pushing the filters the spec already has keeps the 100-row budget
+from being spent on rows that `apply_hard_filters` will drop. That stage stays the authority on what survives.)*
 - [ ] BooleanConstraint → `_query_params`
 - [ ] ElementPredicate (all / any / none) → `_query_params`
 - [ ] CountConstraint (cap element count) → `_query_params`
+
+> **H₂O is not fixed here.** "Metal oxides" must compile to `all={O}` AND `any={metallic elements}` so water
+> (has O, no metal) drops at the hard-filter stage. That needs the *set* of metals — **#37 area B
+> (element-class constants), currently deferred** — plus the LLM choosing to emit the predicate (#39 + #22).
+> It is a spec-expressiveness + LLM-comprehension problem: not #38, and **not** synthesis (synthesis narrates
+> the ranked shortlist and may not silently reorder/drop). See the leverage-order note under Discoveries.
 
 **3 · Synthesis & validation primitives** (port from reference)
 - [ ] **#20** output validator — every referenced ID + citation must resolve to retrieved provenance
@@ -107,7 +115,11 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
 
 ## Discoveries that still bite (curated; full list in archive + MEMORY.md)
 - **Quality ceiling = spec-schema expressiveness, NOT the LLM/prompt.** Leverage order: schema (#37) >
-  server-side filters (#38) > prompt (#22). H₂O survived three prompt revisions. [memory: spec-expressiveness-quality-ceiling]
+  server-side filters (#38) > prompt (#22). H₂O survived three prompt revisions because the schema couldn't
+  express "must contain a metal" — not because the filter ran in the wrong place. So the fix is **#37 area B
+  (element-class constants, deferred)** + the LLM emitting `any={metals}` (#39/#22), NOT #38 and NOT synthesis.
+  #38 only changes *where* an existing filter runs (the `_limit=100`-before-return truncation), never *whether*
+  one exists. [memory: spec-expressiveness-quality-ceiling]
 - **Vocabulary binding (#39):** the *adapter*, not the LLM, owns the queryable name surface; publish it via
   `property_vocabulary()` and feed the prompt "use ONLY these names," or you get silent empty results.
 - **Only the live end-to-end run finds integration bugs** unit tests miss (vocab drift, PI/audit view
