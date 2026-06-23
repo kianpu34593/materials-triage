@@ -430,6 +430,26 @@ merged (#48/#49) — the real build re-implements via TDD.
 - **Open threads:** v2 hybrid LLM scope check; v2 debts (RAG tokenizer, DFT/XC comparability);
   cross-source merge (doc-only ladder in `docs/ultimate-design.md`).
 
+## Hosting build task list (ADR 0005)
+*Harness tasks #1–#10. Labeled **HB1–HB10** here to avoid colliding with the v1 task numbers
+(#1–#40) used elsewhere in this doc. "Blocked by" uses the same HB labels.*
+
+| HB | Task | Status | Blocked by |
+|----|------|--------|-----------|
+| HB1 | Scaffold monorepo `server/` + `[server]` extra | **partial** — pytest test-wiring done (#52); FastAPI `[server]` extra pending | — |
+| HB2 | Backend run API + SSE step stream | pending | HB1 |
+| HB3 | HITL spec gate over HTTP (resume) | pending | HB2 |
+| HB4 | Auth tiers + rate limit + model policy + metering | **in progress** — `resolve_model` model-policy slice done (#52); tier resolution, rate limiter, metering pending | HB1 |
+| HB5 | Durable shared checkpointer (replace `MemorySaver`) | pending | — |
+| HB6 | `source_version` on source adapters | pending | — |
+| HB7 | Content-addressed step cache (key + recursive inputs) — *lives in core, not server* | pending | HB6 |
+| HB8 | Force-fresh toggle + idempotency short-circuit | pending | HB7 |
+| HB9 | Thread/attempt storage + cross-attempt diff | pending | HB7, HB2 |
+| HB10 | Frontend `web/` chat UI + steps banner | pending | HB2 |
+
+Unblocked and ready: **HB4** (continue — tier/rate-limit/metering), **HB5**, **HB6**, and HB1's
+remaining `[server]` extra. Net-new, **outside the v1 deep-plan** — sequence vs. v1 per Kian.
+
 ## Next Steps
 *(One function at a time, stop for approval after each; see CLAUDE.md. Don't start coding until told.)*
 1. **Land this handoff PR** (`docs/handoff-server-build`) → squash-merge → `/sync-main`. Then delete
