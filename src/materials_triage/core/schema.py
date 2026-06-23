@@ -273,6 +273,23 @@ class TriageSpec(BaseModel):
         return self
 
 
+class PredicateRouting(BaseModel):
+    """How a source routes a spec's hard predicates between server-side push and
+    local enforcement.
+
+    The ``local`` buckets are the *exclusive set* — predicates the source can return
+    data for but cannot filter server-side (retrievable but not queryable, e.g. MP's
+    ``is_magnetic`` or an element ``any``) — which the deterministic filter must
+    enforce. ``caveats`` name predicates the source can neither push nor return data
+    for, so they go unenforced and must be surfaced loudly. Predicates the source
+    pushes server-side appear in no bucket (already handled by retrieval).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    local_booleans: tuple[BooleanConstraint, ...] = ()
+
+
 class ScoredCandidate(BaseModel):
     """A survivor of the hard filters, paired with the composite score it earned
     and the per-target contributions that produced it, so the audit view can

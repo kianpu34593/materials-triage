@@ -16,7 +16,13 @@ network.
 import os
 from collections.abc import Callable, Mapping
 
-from materials_triage.core.schema import Candidate, PropertyValue, Provenance, TriageSpec
+from materials_triage.core.schema import (
+    Candidate,
+    PredicateRouting,
+    PropertyValue,
+    Provenance,
+    TriageSpec,
+)
 from materials_triage.sources._mp_fields import MP_FIELDS, PUSHABLE_PARAMS
 from materials_triage.sources.base import SourceAdapter
 
@@ -75,6 +81,22 @@ class MaterialsProjectAdapter(SourceAdapter):
         ``retrieve`` returns. The table is committed static data (generated from the
         MP schema), never a live fetch, keeping every run replayable."""
         return FIELD_UNITS
+
+    def classify_predicates(self, spec: TriageSpec) -> PredicateRouting:
+        """Route the spec's hard predicates against this source's two committed
+        surfaces — retrievable (``FIELD_UNITS``) and queryable (``PUSHABLE_PARAMS``).
+
+        A predicate the source can push (retrievable ∩ queryable) is the server's
+        job and appears in no bucket. A predicate that is retrievable but *not*
+        queryable — the exclusive set — goes to a ``local`` bucket for the
+        deterministic filter to enforce (e.g. ``is_magnetic``: returnable, but not a
+        query param, so it can't be pushed yet its value comes back to check)."""
+        local_booleans = tuple(
+            b
+            for b in spec.boolean_constraints
+            if b.property_name in FIELD_UNITS and b.property_name not in PUSHABLE_PARAMS
+        )
+        return PredicateRouting(local_booleans=local_booleans)
 
 
 #: Identity fields always requested alongside the spec's properties.

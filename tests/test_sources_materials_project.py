@@ -409,6 +409,24 @@ def test_retrieve_omits_elements_when_spec_has_no_required_elements():
     assert "elements" not in captured["params"]
 
 
+def test_classify_routes_an_unqueryable_boolean_to_local():
+    """The exclusive set: `is_magnetic` is retrievable (in FIELD_UNITS) but not
+    queryable (not in PUSHABLE_PARAMS), so the adapter routes it to the local
+    bucket — the deterministic filter must enforce it. A queryable boolean
+    (`is_stable`) is the server's job and stays out of the local bucket."""
+    spec = TriageSpec(
+        boolean_constraints=(
+            BooleanConstraint(property_name="is_stable", required=True),
+            BooleanConstraint(property_name="is_magnetic", required=True),
+        ),
+    )
+
+    routing = MaterialsProjectAdapter(http_get=lambda *a: {}).classify_predicates(spec)
+
+    assert BooleanConstraint(property_name="is_magnetic", required=True) in routing.local_booleans
+    assert BooleanConstraint(property_name="is_stable", required=True) not in routing.local_booleans
+
+
 def test_retrieve_excludes_forbidden_elements_server_side():
     """A "none"-quantifier ElementPredicate scopes the pool server-side via MP's
     `exclude_elements` param (sorted, comma-joined) — the mirror of `elements`."""
