@@ -46,6 +46,19 @@ from being spent on rows that `apply_hard_filters` will drop. That stage stays t
 - [ ] ElementPredicate (all / any / none) → `_query_params`
 - [ ] CountConstraint (cap element count) → `_query_params`
 
+**#38 mechanics (per-predicate, push only what the schema supports — confirm param names against #39):**
+- `ElementPredicate all` → `elements=` (AND-membership) — *already done today.*
+- `ElementPredicate none` → `exclude_elements=` — pushable.
+- `ElementPredicate any` → **no MP OR-membership param** → **stays local** (the deterministic filter honours it).
+- `BooleanConstraint` → per-field params (`is_stable`, `is_metal`, …) — push only the booleans the schema exposes as query params.
+- `CountConstraint` → `nelements_min` / `nelements_max`.
+- **Two invariants:** (1) **`apply_hard_filters` stays the authority** — server-side params are an optimization, every pushed predicate is *also* enforced locally, so a source that can't express one still gets correct results. (2) **MP silently ignores unknown query params** — a wrong/typo'd name returns *unfiltered* rows with no error, so a `live`-marked test must assert the returned rows actually satisfy the constraint (invariant 1 hides the symptom from offline tests). Drive the pushable-param set off #39's published vocabulary; never hand-type a second param table.
+
+**2b · 🆕 Pagination in `retrieve()`** — *sibling to #38; together they = "retrieve the complete filtered candidate set." Not part of #38 (#38 is the pure `_query_params` transform; this is the I/O loop).*
+- [ ] page MP's `_skip`/`_limit` to exhaust the (filtered) result set, accumulating candidates
+- **Why it's needed, separately from #38:** today `retrieve()` fetches ONE page (`_limit=100`) and stops, so any query matching >100 materials *silently truncates* and the ranker only ever sees an arbitrary 100. #38 fixes *which* 100 (quality of the page); it does **not** fix the cap. Our composite weighted-average rank can't be pushed server-side (MP sorts by a single field), so the ranker must see the complete filtered set locally.
+- **Three things it must get right:** (1) **filter-first** — pagination depends on #38 landing, or you page an unfiltered subset (tens of thousands of rows, infeasible); #38 shrinks N to something pageable. (2) **bounded + loud** — page up to a declared ceiling and, if hit, record a caveat in the trace ("result set capped at N; ranking over a subset"); a silent bigger cap is the same bug with a bigger number. (3) **adapter-owned** — `_skip`/`_limit` are MP I/O detail, stay inside `retrieve()`; the `SourceAdapter` contract (`retrieve(spec) -> complete candidate list`) is unchanged.
+
 > **H₂O is not fixed here.** "Metal oxides" must compile to `all={O}` AND `any={metallic elements}` so water
 > (has O, no metal) drops at the hard-filter stage. That needs the *set* of metals — **#37 area B
 > (element-class constants), currently deferred** — plus the LLM choosing to emit the predicate (#39 + #22).
@@ -153,5 +166,6 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
   abort a commit → re-add + re-commit.
 - **Collaboration rules (CLAUDE.md):** ask before choosing between approaches; one function at a time then
   stop for approval; TDD via the `tdd` skill (never batch tests); **don't start coding until told.**
-- **Task tracker:** v1 path = #39, #38, #20, #35, #22, #34, #25, #26, #27, #41, #40 (see Plan). Completed:
-  #1–#19, #21, #23, #24, #32, #33, #37. Deferred: #37 area B/C. Hosting = HB1–HB10.
+- **Task tracker:** v1 path = #39, #38, **pagination (untracked sibling of #38)**, #20, #35, #22, #34, #25,
+  #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32, #33, #37. Deferred: #37 area B/C
+  (note: area B is now on the critical path for the "metal oxides" query). Hosting = HB1–HB10.
