@@ -116,10 +116,19 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
 > It is a spec-expressiveness + LLM-comprehension problem: not #38, and **not** synthesis (synthesis narrates
 > the ranked shortlist and may not silently reorder/drop). See the leverage-order note under Discoveries.
 
-**3 · Synthesis & validation primitives** (port from reference)
-- [ ] **#20** output validator — every referenced ID + citation must resolve to retrieved provenance
-- [ ] **#35** synthesis — grounded narrative + mechanistic "why," each claim cited, no invented numbers
-- [ ] **#22** prompt templates — hypothesis + synthesis
+**3 · Synthesis & validation primitives** (port from reference) — ✅ **PRIMITIVES BUILT on
+`feat/synthesis-primitives`** (additive, pure, pagination-/orchestrator-independent; the synthesis
+NODE wiring itself is deferred to #34).
+- [x] **#20** output validator — `agent/validator.py` `validate_output(result, synthesis, retrieved_ids)`
+  raises `UngroundedOutputError` unless every presented candidate (ranked AND excluded) and every
+  narrative citation resolves to retrieved provenance; returns `None` on a clean output.
+- [x] **#35** synthesis — `core/synthesis.py` `GroundedClaim`/`Synthesis` (frozen) +
+  `ungrounded_record_ids(synthesis, valid_ids)` (order-preserving, de-duplicated cited ids that don't
+  resolve to a retrieved candidate — the grounding check the validator and the synthesis retry loop share).
+- [x] **#22** synthesis prompt — `agent/prompts.py` `build_synthesis_prompt(goal, result, snippets, *, nonce)`:
+  the citable ranked shortlist (id+formula+score) is TRUSTED instruction text, while the user goal and the
+  RAG `LiteraturePassage` snippets are UNTRUSTED DATA fenced via `wrap_untrusted` with the call's nonce.
+  (Hypothesis-prompt binding still pending → #34.)
 
 **4 · #34 — Wire the orchestrator** *(replace the four PASS-THROUGH nodes)*
 - [ ] gate node · [ ] hypothesis node · [ ] synthesis node · [ ] output_validate node
@@ -320,10 +329,13 @@ property/material class *before* retrieval:
   abort a commit → re-add + re-commit.
 - **Collaboration rules (CLAUDE.md):** ask before choosing between approaches; one function at a time then
   stop for approval; TDD via the `tdd` skill (never batch tests); **don't start coding until told.**
-- **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~, ~~2b pagination (built, PR pending)~~ → **#34** ←
-  suggested next, #20, #35, #22, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32,
+- **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~, ~~2b pagination (built, PR pending)~~,
+  ~~#20/#35/#22 synthesis & validation primitives (built on `feat/synthesis-primitives`)~~ → **#34** ←
+  suggested next, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32,
   #33, #37, **#39 (supply side; binding → #34)**, **#38 server-side push (#63)**, **2c exclusive-set local
-  filter (#64)**, **2b pagination (built on `feat/retrieve-pagination`, PR pending 529-retry)**. Open within
+  filter (#64)**, **2b pagination (built on `feat/retrieve-pagination`, PR pending 529-retry)**,
+  **#20/#35/#22 synthesis & validation primitives (built on `feat/synthesis-primitives`; node wiring → #34)**.
+  Open within
   2c + 2b: render caveats in views (blocked on the view layer #25–#27; both feed `TriageRun.caveats`). Deferred: #37 area
   B/C (area B on the critical path for "metal oxides"); the **multi-source filter abstraction** (universal
   local / filter_capability / residual — "see how it goes"); **v2 XC-functional-first retrieval** (design note

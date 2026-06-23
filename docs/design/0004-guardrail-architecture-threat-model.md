@@ -161,7 +161,8 @@ false-confidence trap as a keyword gate.
 ## Consequences
 
 - `policy/guardrails.py` holds the **scope-triage** input gate (#18) **and** the trust-boundary
-  wrapper (#19); `policy/validator.py` holds the output validator (#20). The gate returns a
+  wrapper (#19); `agent/validator.py` holds the output validator (#20, `validate_output` raising
+  `UngroundedOutputError`). The gate returns a
   `GateDecision`; the orchestrator logs refusals and does **not** open a `TriageRun` for them.
 - Any future data-source tool must implement an egress allowlist + credential/host restrictions in
   code, and be bound per-node by the orchestrator (#23). This ADR is the standard such tools cite.
