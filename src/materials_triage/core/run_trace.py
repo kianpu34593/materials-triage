@@ -91,7 +91,10 @@ def export_run(orchestrator, config: dict) -> TriageRun:
         candidates=tuple(final.get("candidates", ())),
         filter_excluded=tuple(final.get("filter_excluded", ())),
         rank_excluded=tuple(final.get("rank_excluded", ())),
-        caveats=tuple(final.get("caveats", ())),
+        # Union the two single-writer caveat channels (retrieval + filter routing)
+        # into the trace's one caveats surface, the same way result.excluded unions
+        # the two exclusion channels at the presentation boundary.
+        caveats=tuple(final.get("retrieval_caveats", ())) + tuple(final.get("caveats", ())),
         result=final.get("result"),
         steps=tuple(steps),
     )

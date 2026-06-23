@@ -102,8 +102,12 @@ class OrchestratorState(TypedDict, total=False):
     # filter writes `filter_excluded`, the ranker writes `rank_excluded`.
     filter_excluded: tuple[ExcludedCandidate, ...]
     rank_excluded: tuple[ExcludedCandidate, ...]
-    # Loud, run-level notices that a hard predicate went unenforced — the source
-    # could neither push nor return data for it (¬R∩¬Q). Written by the filter node.
+    # Loud, run-level notices, split by stage so each channel has a single writer
+    # (the exporter unions them for presentation, like the two exclusion channels):
+    # `retrieval_caveats` from the retrieve node (e.g. a page-capped, incomplete set);
+    # `caveats` from the filter node (a hard predicate the source could neither push
+    # nor return data for, ¬R∩¬Q).
+    retrieval_caveats: tuple[str, ...]
     caveats: tuple[str, ...]
     result: TriageResult | None
 
@@ -218,13 +222,21 @@ def _spec_build_node(state: OrchestratorState) -> dict:
 
 def _make_retrieve_node(adapter: SourceAdapter | None):
     """The retrieve step: deterministic code, the pipeline's only source of
-    ground-truth numbers. With no adapter injected (e.g. a resume seeded with
-    pre-retrieved candidates) it leaves the ``candidates`` channel untouched."""
+    ground-truth numbers. The adapter returns a ``RetrievalResult`` — candidates
+    plus any I/O-level caveats (e.g. a page-capped, incomplete set) — which this
+    node splits into the ``candidates`` channel and the single-writer
+    ``retrieval_caveats`` channel (unioned with the filter stage's routing caveats
+    at the trace boundary). With no adapter injected (e.g. a resume seeded with
+    pre-retrieved candidates) it leaves both channels untouched."""
 
     def retrieve(state: OrchestratorState) -> dict:
         if adapter is None:
             return {}
-        return {"candidates": tuple(adapter.retrieve(state["spec"]))}
+        result = adapter.retrieve(state["spec"])
+        return {
+            "candidates": result.candidates,
+            "retrieval_caveats": result.caveats,
+        }
 
     return retrieve
 

@@ -34,6 +34,7 @@ from materials_triage.core.schema import (
     PropertyValue,
     Provenance,
     RankingTarget,
+    RetrievalResult,
     ScoredCandidate,
     TriageResult,
     TriageSpec,
@@ -154,12 +155,13 @@ class _FakeAdapter(SourceAdapter):
     """An offline retrieval seam: returns a fixed candidate list, ignoring the
     spec, so the deterministic core can be exercised without any network."""
 
-    def __init__(self, candidates, routing=None):
+    def __init__(self, candidates, routing=None, caveats=()):
         self._candidates = candidates
         self._routing = routing or PredicateRouting()
+        self._caveats = tuple(caveats)
 
     def retrieve(self, spec):
-        return list(self._candidates)
+        return RetrievalResult(candidates=tuple(self._candidates), caveats=self._caveats)
 
     def classify_predicates(self, spec):
         return self._routing
@@ -651,7 +653,7 @@ class _FlakyAdapter(SourceAdapter):
         self.calls += 1
         if self.calls == 1:
             raise RuntimeError("Materials Project transiently unavailable")
-        return [_candidate("mp-1", 4.0)]
+        return RetrievalResult(candidates=(_candidate("mp-1", 4.0),))
 
 
 def test_resume_run_recovers_from_an_infra_failure_reusing_upstream_steps():

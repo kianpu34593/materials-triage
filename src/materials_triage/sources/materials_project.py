@@ -21,6 +21,7 @@ from materials_triage.core.schema import (
     PredicateRouting,
     PropertyValue,
     Provenance,
+    RetrievalResult,
     TriageSpec,
 )
 from materials_triage.sources._mp_fields import MP_FIELDS, PUSHABLE_PARAMS
@@ -66,14 +67,27 @@ class MaterialsProjectAdapter(SourceAdapter):
         self._http_get = http_get or _requests_transport(base_url)
         self._api_key = api_key or os.environ.get("X_API_KEY", "")
 
-    def retrieve(self, spec: TriageSpec) -> list[Candidate]:
+    def retrieve(self, spec: TriageSpec) -> RetrievalResult:
         headers = {"X-API-KEY": self._api_key}
         params = _request_local_fields(_query_params(spec), self.classify_predicates(spec))
-        docs = self._http_get("/materials/summary/", params, headers)["data"]
+        # Page the whole filtered set: a composite weighted-average rank can't be
+        # pushed (MP sorts on one field), so the ranker must see every survivor.
+        docs, capped = _paginate(self._http_get, params, headers, _MAX_CANDIDATES)
         # The functional isn't in the summary; resolve every retrieved value's task
         # and read its run_type in one batched call, then stamp each provenance.
         run_types = _fetch_run_types(self._http_get, headers, _page_task_ids(docs))
-        return [_doc_to_candidate(doc, run_types) for doc in docs]
+        caveats = (
+            (
+                f"result set capped at {_MAX_CANDIDATES} candidates; ranking over a "
+                "subset of the matching materials",
+            )
+            if capped
+            else ()
+        )
+        return RetrievalResult(
+            candidates=tuple(_doc_to_candidate(doc, run_types) for doc in docs),
+            caveats=caveats,
+        )
 
     def property_vocabulary(self) -> Mapping[str, str | None]:
         """The summary-API properties this adapter can populate, mapped to their
@@ -125,7 +139,12 @@ class MaterialsProjectAdapter(SourceAdapter):
 
 #: Identity fields always requested alongside the spec's properties.
 _IDENTITY_FIELDS = ("material_id", "formula_pretty")
-_DEFAULT_LIMIT = 100
+#: Per-request page size. MP caps ``_limit`` at 1000 (per the /summary schema), so the
+#: largest legal page covers a set in the fewest HTTP calls — gentlest on the API.
+_DEFAULT_LIMIT = 1000
+#: Hard ceiling on accumulated candidates across pages. Hitting it records a loud
+#: caveat (ranking saw only a subset) rather than silently truncating the set.
+_MAX_CANDIDATES = 10000
 
 #: Property name → the base of its MP range filter param, when it differs from the
 #: field name. The elastic moduli are *returned* as ``bulk_modulus``/``shear_modulus``
@@ -133,6 +152,36 @@ _DEFAULT_LIMIT = 100
 #: ``bulk_modulus_min`` is not a real query param. The only non-1:1 field→param cases;
 #: every other numeric field's range param is just ``<field>_min``/``<field>_max``.
 _FILTER_PARAM_BASE = {"bulk_modulus": "k_vrh", "shear_modulus": "g_vrh"}
+
+
+def _paginate(
+    http_get: HttpGet,
+    params: Mapping[str, str],
+    headers: Mapping[str, str],
+    ceiling: int = _MAX_CANDIDATES,
+) -> tuple[list[dict], bool]:
+    """Page the summary endpoint by ``_skip``/``_limit``, accumulating docs until a
+    short page (fewer than ``_limit`` rows ⇒ the filtered set is exhausted) or the
+    ``ceiling`` is reached. Returns the accumulated docs (truncated to ``ceiling``)
+    and whether the set was capped — a *loud* signal that ranking saw only a subset,
+    never a silent truncation. ``capped`` is True only when more rows could still
+    exist (a full page at/over the ceiling) or the returned set overflowed the
+    ceiling; an exhausted set that lands exactly on the ceiling is complete, not
+    capped (exhaustion is checked first)."""
+    limit = int(params["_limit"])
+    docs: list[dict] = []
+    skip = 0
+    while True:
+        page = http_get("/materials/summary/", {**params, "_skip": str(skip)}, headers)["data"]
+        docs.extend(page)
+        if len(page) < limit:
+            # Short page ⇒ no more rows exist; the set is complete unless it itself
+            # overflowed the ceiling (so we had to truncate).
+            return docs[:ceiling], len(docs) > ceiling
+        if len(docs) >= ceiling:
+            # Full page at/over the ceiling ⇒ more rows could exist but we stop here.
+            return docs[:ceiling], True
+        skip += limit
 
 
 def _query_params(spec: TriageSpec) -> dict[str, str]:

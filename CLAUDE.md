@@ -61,7 +61,9 @@ merged vs. pending; this file stays focused on durable design + how-to-work guid
 Package layout (monorepo):
 - `src/materials_triage/core/` — frozen domain models (`schema.py`, `elements.py`),
   deterministic logic (`scoring.py`, `ranking.py`), hypothesis layer (`hypothesis.py`),
-  audit-trace export (`run_trace.py`). Pure, no heavy deps.
+  synthesis artifact (`synthesis.py`: `GroundedClaim`/`Synthesis` + the
+  `ungrounded_record_ids` grounding check shared by the validator and the synthesis
+  retry loop), audit-trace export (`run_trace.py`). Pure, no heavy deps.
 - `src/materials_triage/sources/` — `SourceAdapter` + the Materials Project adapter
   (injected `http_get`, lazy `requests`). The adapter exposes `property_vocabulary()`
   — its queryable property→unit surface — derived from the committed, generated
@@ -75,9 +77,14 @@ Package layout (monorepo):
   `is_magnetic`, element `any`) go to local buckets that `core/scoring.py`'s
   `apply_local_filters` enforces, and predicates the source can neither push nor return
   go to loud run-level `caveats`. `retrieval/rag.py` — BM25 literature RAG.
-- `src/materials_triage/agent/` — Bedrock `HypothesisProvider` (`llm.py`), prompts,
-  LangGraph `orchestrator.py` (9-step linear graph + checkpointer). `policy/guardrails.py`
-  — input gate + trust-boundary wrapper. `memory/store.py` — lab memory.
+- `src/materials_triage/agent/` — Bedrock `HypothesisProvider` (`llm.py`), prompts
+  (`prompts.py`: `ROLE_SYSTEM_PROMPT`, `build_chat_messages`, and `build_synthesis_prompt`
+  — trusted citable shortlist as instruction text, user goal + RAG snippets fenced as
+  untrusted DATA), the output validator (`validator.py`: `validate_output` raises
+  `UngroundedOutputError` unless every presented candidate and narrative citation
+  resolves to retrieved provenance), LangGraph `orchestrator.py` (9-step linear graph +
+  checkpointer). `policy/guardrails.py` — input gate + trust-boundary wrapper.
+  `memory/store.py` — lab memory.
 - `server/` — public-web-app hosting layer; imports the pure core, never the reverse.
 - `tools/` — dev-only generators, never part of the runtime package (on the test
   pythonpath only): `gen_mp_vocab.py` parses the vendored MP OpenAPI snapshot
