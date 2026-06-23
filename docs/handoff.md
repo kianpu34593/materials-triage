@@ -67,20 +67,34 @@ adapter's capability:
   the dropped rows); the trace records the *query*. Only locally-enforced predicates produce per-candidate
   `ExcludedCandidate` reasons.
 
-**2c · 🆕 Local-filter refocus (follow-up to #38).** `apply_hard_filters` today enforces **only numeric
-`Constraint`** — element/boolean/count are enforced *nowhere* locally (was fine when nothing was pushed; now
-server owns the pushable ones). Refocus the local filter onto the **DB-inexpressible** complement:
-- [ ] element **`any`** — *pre-existing bug*: no MP OR-param **and** no local enforcement, so an `any` spec
-  silently returns violating rows. Needs **composition data on the `Candidate`** (request `elements` back,
-  parse onto the candidate) — it carries none today.
-- [ ] **`is_magnetic`** and any other retrievable-but-unqueryable boolean → enforce locally (needs the field
-  requested back too — "request back what you filter on").
-- [ ] numeric on a field whose `_min/_max` isn't in `PUSHABLE_PARAMS` (rare) → local.
-- [ ] future: synthesizability / holistic toxicity / abundance (no data source yet — Kian's "local filter =
-  what the DB doesn't have").
-- **Open design Qs:** how does the local stage know what was *not* pushed (couple to the adapter's pushable
-  set, or enforce by data-presence on the candidate)? `_filter_node` currently passes only `spec.constraints`
-  — wire it to feed the unpushed predicates and stop double-enforcing pushed ones.
+**2c · 🆕 Make-it-loud + local-filter scope (follow-up to #38).** *Direction set by Kian 2026-06-23 after a
+multi-source design discussion. Deliberately lighter than "build full local enforcement."*
+
+**Decided NOT to build (for now):** the universal-local-authority model (re-enforce every predicate locally
+so push is pure optimization), the per-source `filter_capability()` declaration, and the per-call residual
+report. Reason: a **second database has a different queryable surface**, and we don't yet want to commit to an
+abstraction for that — *"do things server-side for now, see how it goes."* Server-side push stays the
+**primary** filter (each adapter pushes what its API allows; MP via `PUSHABLE_PARAMS`).
+
+**Local filter — rescoped.** It is **not** a redundant correctness backstop for what servers already do. Its
+scope becomes the things a DB *fundamentally can't* express — **derived / holistic / cross-source** concerns
+(synthesizability, holistic toxicity, abundance). No data source for those yet ⇒ **deferred**; the local
+filter stays minimal.
+
+**The one concrete near-term piece — MAKE IT LOUD (chosen 2026-06-23).** This leaves some spec predicates
+enforced **nowhere** — element **`any`** (no MP OR-param, no local filter → silently returns violating rows),
+and unpushed booleans like `is_magnetic`. Rather than silently-wrong, **record a run-level caveat** so the
+honesty property holds:
+- [ ] add a run-level **`caveats: tuple[str, ...]`** to `TriageRun` (no such field today — `run_trace.py` has
+  `filter_excluded`/`rank_excluded`/`steps`, no caveats/warnings channel) and surface it in **both** views
+  (PI + audit).
+- [ ] emit a caveat when the spec carries a predicate the pipeline didn't enforce — **v1 = element `any`**
+  (the clear, source-stable case today): e.g. *"`any={Fe,Co}` not applied — results are unfiltered on this
+  constraint."* Extend to unpushed booleans next.
+- [ ] **detection** without the deferred capability abstraction: simplest honest v1 is to flag `any`
+  predicates directly (true while MP is the only source and can't push `any`); revisit when a source *can*
+  push `any`. *(This is the open coupling question we chose to sidestep, not solve.)*
+- **Pairs with 2b's "bounded + loud" caveat** (cap-hit) — same `caveats` channel, same honesty rationale.
 
 **2b · 🆕 Pagination in `retrieve()`** — *sibling to #38; together they = "retrieve the complete filtered candidate set." Not part of #38 (#38 is the pure `_query_params` transform; this is the I/O loop).*
 - [ ] page MP's `_skip`/`_limit` to exhaust the (filtered) result set, accumulating candidates
