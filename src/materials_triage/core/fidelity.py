@@ -216,6 +216,19 @@ def reconcile_spec(goal: str, spec: TriageSpec) -> tuple[TriageSpec, list[FacetF
                     detail=f"count max={existing_max}",
                 )
             )
+        elif existing_min is not None and existing_min > target:
+            findings.append(
+                FacetFinding(
+                    facet="simple composition",
+                    cue=scue,
+                    action="skipped",
+                    detail=f"count max={target}",
+                    caveat=(
+                        f"simple-composition cap (max {target}) not applied: it "
+                        f"contradicts the stated minimum element count (min {existing_min})"
+                    ),
+                )
+            )
         else:
             seeded_count = CountConstraint(min=existing_min, max=target)
             findings.append(

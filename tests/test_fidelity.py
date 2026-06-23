@@ -109,6 +109,22 @@ def test_seeding_a_count_cap_preserves_an_existing_count_min():
     assert any(f.facet == "simple composition" and f.action == "seeded" for f in findings)
 
 
+def test_simplicity_cap_skipped_when_existing_min_exceeds_target():
+    """A self-contradictory goal — 'binary' (target 2) plus an explicit 'at least 3
+    elements' min — must NOT crash building CountConstraint(min=3, max=2). The explicit
+    min wins: the cap is skipped and a contradiction caveat is recorded for the user."""
+    spec = TriageSpec(count=CountConstraint(min=3))
+
+    reconciled, findings = reconcile_spec("a binary material with at least 3 elements", spec)
+
+    assert reconciled.count is not None
+    assert reconciled.count.min == 3  # the explicit minimum is preserved
+    assert reconciled.count.max is None  # the contradictory cap is NOT seeded
+    skipped = [f for f in findings if f.facet == "simple composition"]
+    assert skipped and skipped[0].action == "skipped"
+    assert skipped[0].caveat  # a non-empty contradiction caveat flows to the user
+
+
 def test_seeded_spec_that_violates_coherence_rules_raises():
     """A seeded toxic 'none' whose members cover an existing 'any' predicate makes that
     'any' unsatisfiable. The seeder re-validates through TriageSpec, so this incoherent

@@ -209,11 +209,12 @@ def _apply_critic(
     (relevance + redundancy, auto-applied) and collect its advisory bound flags as
     human-facing notes (surfaced, never auto-applied). Returns the (possibly pruned)
     hypothesis and the advisory caveat notes. Best-effort: any critic failure (a
-    transport error, malformed output) or a pruning that no longer compiles
-    soft-degrades to the original ``proposed`` with no notes — the critic never fails
-    the run."""
+    transport error, malformed output) soft-degrades to the original ``proposed`` with
+    no notes; a pruning that no longer compiles keeps the already-valid advisory notes
+    but discards only the prune — the critic never fails the run."""
     if critic is None:
         return proposed, ()
+    notes: tuple[str, ...] = ()
     try:
         prompt = build_critique_prompt(goal, proposed.proposals, nonce=nonce)
         critique = critic.critique(prompt)
@@ -229,7 +230,7 @@ def _apply_critic(
         compile_spec(pruned.proposals)  # the pruned set must still form a coherent spec
         return pruned, notes
     except Exception:  # noqa: BLE001 — the critic is best-effort grounding, never fatal
-        return proposed, ()
+        return proposed, notes
 
 
 def _make_hypothesis_node(
