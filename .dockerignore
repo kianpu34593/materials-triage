@@ -1,0 +1,24 @@
+# Keep the build context small and secrets out of the image.
+.git
+.github
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.venv
+venv
+
+# Not needed at runtime (the package installs only src/materials_triage).
+tests
+server
+tools
+docs
+notebooks
+*.ipynb
+
+# Local state / secrets — never copy into the image.
+runs
+.env
+.env.*
+!.env.example
