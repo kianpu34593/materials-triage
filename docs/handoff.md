@@ -1,4 +1,4 @@
-# Session Handoff - 2026-06-22 16:17
+# Session Handoff - 2026-06-22 17:30
 
 > Single living handoff, git-tracked at `docs/handoff.md` (PR #35). Do NOT recreate dated copies or
 > a `docs/handoffs/` subdir — untracked handoffs get wiped by parallel sessions' `git clean`. Keep
@@ -106,11 +106,15 @@ merged (#48/#49) — the real build re-implements via TDD.
 - `docs/design/0003-orchestrator-on-langgraph.md` (ADR, #40) · `0004-guardrail-architecture-threat-model.md`
   (ADR, #42; **expanded** with wrapper construction + attack-surface table, #43).
 - `docs/design/0001-retrieval-rest-adapters.md` (#29) · `0002-literature-abstracts-only.md` (#31).
-- `docs/design/0005-hosting-and-step-cache.md` — **hosting/billing/step-cache ADR (Session 10, this
-  PR on `docs/hosting-adr-0005`).** Was force-added (`git add -f`) past a stale local
-  `.git/info/exclude` line 9 that pre-emptively excluded this exact path; once merged the file is
-  tracked normally and that exclude line can be deleted. `.lavish/` is now in the tracked `.gitignore`
-  (was only in `.git/info/exclude`).
+- `docs/design/0005-hosting-and-step-cache.md` — **hosting/billing/step-cache ADR, MERGED (#53).**
+  `.lavish/` is now in the tracked `.gitignore`. ⚠️ The stale local `.git/info/exclude` line 9 (the
+  ADR path) is now obsolete (file is tracked) and can be deleted.
+- `server/mt_server/policy.py` — **first server-side unit, MERGED (#52).** `resolve_model(tier,
+  requested, *, default, allowed)`: anon→`default` (requested silently pinned, not an error);
+  signed-in→requested if in `allowed`, `default` if none, `ValueError` if unoffered; unknown
+  tier→`ValueError`. Pure (no FastAPI/AWS); `allowed`/`default` are params (server config owns them).
+  Tests in `server/tests/test_policy.py` (6, TDD). `pyproject.toml` wires `server/` into pytest
+  (`testpaths += server/tests`, `pythonpath = ["server"]`); core stays installed editable from `src`.
 - `notebooks/deterministic_pipeline_demo.ipynb` (#29) · `literature_rag_demo.ipynb` (#32/#33) ·
   one-shot **LLM→spec** and **RAG→spec** demo notebooks (#38, parallel session).
 - `docs/handoff.md` — this file (tracked, #35).
@@ -268,6 +272,27 @@ merged (#48/#49) — the real build re-implements via TDD.
   A **no-mistakes session was running on the `feat/spec-expressiveness-37` worktree**, so docs work was
   moved to a separate `docs/hosting-adr-0005` worktree off `origin/main`; the ADR was `git add -f`'d
   there (leaving the shared exclude untouched to keep the #37 worktree clean for its gate).
+- **— Session 11 (2026-06-22): first server-side build increment (#52) —**
+- **The cache belongs in core, not server.** Kian pushed on a `cache_key` placement: the boundary
+  isn't pure-vs-impure but *web-vs-not*. The core package already holds execution machinery
+  (orchestrator, checkpointer, `run_trace`, `memory/store`); the step cache is a sibling of those and
+  the step-cache is a **locked agent capability** (predates hosting), so its pure logic lives in core.
+  `server/` owns only web concerns (FastAPI/SSE/auth/limits/metering + *choosing* the storage backend).
+  ⇒ started instead with a genuinely-server-side unit (the model policy).
+- **The no-mistakes gate runs in its OWN worktree, not your checkout.** The editable install resolves
+  to `~/.no-mistakes/worktrees/<id>` (a gate-managed checkout), so "plain `pytest` fails in my dir" is
+  a red herring — the gate installs the core + applies the `pythonpath` there. Verify locally with
+  `PYTHONPATH="$PWD/src" pytest`; the gate's plain `pytest` works in its own env. Still must
+  **bootstrap from the main repo, not a worktree** (hook misfires) → had to remove the
+  `feat/hosting-server` worktree and check the branch out in the main repo (needed the user's OK to
+  use the main-repo checkout, which had been bounded for a now-finished #37 gate).
+- **Gate `ask-user` finding can be a cross-branch artifact.** The document step flagged "ADR 0005
+  referenced but missing" — true on `feat/hosting-server`, but the ADR was committed on the separate
+  `docs/hosting-adr-0005` branch (shipped as #53). Verified the file's existence on that branch before
+  approving, rather than letting the gate author a duplicate ADR (it even guessed a different filename).
+- **Two-PR split shipped:** #52 (server policy, via the no-mistakes gate) and #53 (docs: ADR 0005 +
+  `.gitignore` + handoff, pushed + PR'd directly since it's docs-only and a gate run was monitoring #52).
+  Merge docs-first/alongside so the ADR reference resolves on `main`.
 
 ## Work Done (all merged to `main` unless noted)
 *(Append-only history.)*
@@ -369,60 +394,84 @@ merged (#48/#49) — the real build re-implements via TDD.
     `handoff.md` edit there to keep that worktree clean, then moved all docs work to a fresh
     **`docs/hosting-adr-0005`** worktree off `origin/main`; force-added the ADR, added `.lavish/` to the
     tracked `.gitignore`. **This PR is docs-only.**
+- **Session 11 (2026-06-22) — first server-side build increment + ship both PRs:**
+  - Built **`server/mt_server/policy.py` `resolve_model`** TDD, one red→green slice at a time (6 tests),
+    after Kian redirected from `cache_key` (which belongs in core) to a genuinely-server-side unit.
+    Wired `server/` into `pyproject` pytest discovery.
+  - Drove it through **no-mistakes** (run `01KVRJ67…`): review 0 findings, test passed (server tests ran
+    green in the gate's own checkout), one `document`-step `ask-user` finding (ADR-0005-missing) — verified
+    the ADR exists on the docs branch and **approved** rather than authoring a duplicate. → **PR #52**,
+    CI green, merged.
+  - Pushed the docs branch + opened **PR #53** (ADR 0005 + `.gitignore` + Session-10 handoff) directly
+    (docs-only). Both PRs **merged**.
+  - Ran **`/sync-main`**: `main` → `129cb0a`; removed the `mt-hosting-docs` worktree; force-deleted the
+    two merged branches (`feat/hosting-server`, `docs/hosting-adr-0005`); restored the main repo to `main`.
+  - Refreshed this handoff (`/handoff update`, **this PR**).
 
 ## Status
-- **This worktree:** `docs/hosting-adr-0005` off `origin/main` (`1c174cc`, #50). **Docs-only,
-  uncommitted** as of this writing: new `docs/design/0005-hosting-and-step-cache.md` (force-added past
-  the stale local exclude), `.gitignore` (+`.lavish/`), and this `docs/handoff.md` update. Ready to
-  commit (signed) → PR; **awaiting Kian's go** (don't push while the #37 no-mistakes session runs).
-- **Parallel session:** `feat/spec-expressiveness-37` is mid-flight on **#37 (spec expressiveness)** —
-  a no-mistakes gate is running on its worktree. Recent #37 commits: `BooleanConstraint` (#37),
-  `ElementPredicate` unification, `CountConstraint`. **Do not edit that worktree.**
-- **Working / merged (`main` lineage `5f5dc2c`→`1c174cc`):** full deterministic slice + RAG (#17) +
-  hypothesis layer (#32) + Bedrock provider (#21) + complete LangGraph orchestrator (#23/#24/#9/#10) +
-  input-side guardrails (#18/#19 + role prompt #46) + ADRs 0001–0004. Fast-track reference impl on
-  `feat/fast-track-wire-guardrails` (no PR) — port from it during the real build.
-- **Not yet started on `main`:** #34 (orchestrator nodes still pass-throughs), #20 (output validator),
-  rest of #22 (prompts), #35 (synthesis), #25/#26 (renderers), #27 (CLI), #28 (eval), #29 (design
-  note), #30 (README/CLAUDE finalize), #31 (element-drop reasons), #36 (docs); fast-track quality
-  fixes #37 (in flight) → #38/#39 → #40.
-- **NEW — hosting build (ADR 0005, harness tasks #1–#10, this session):** scaffold `server/` + run
-  API/SSE + HITL-over-HTTP + auth/limits/metering + durable checkpointer + `source_version` + step
-  cache + force-fresh/idempotency + thread/attempt+diff + `web/` frontend. Net-new, **outside the v1
-  deep-plan**; sequence against v1 only after Kian confirms.
-- **Known issues:** Live Bedrock smoke test ~15% flaky by design (mitigated by #45 retry). Stale local
-  `.git/info/exclude` line 9 (the ADR path) becomes deletable once this PR merges. `stash@{0}`
-  (readme-kid-flowchart WIP) still unmerged.
+- **`main` @ `129cb0a`** (this update is on branch `docs/handoff-server-build`, pending PR). Newly
+  merged: **#51** (#37 spec expressiveness — boolean/element/count predicates), **#52** (server model
+  policy), **#53** (ADR 0005 + `.gitignore` + handoff). Main repo restored to `main`, clean.
+- **Server build STARTED (ADR 0005, harness tasks #1–#10):** `server/mt_server/policy.py`
+  `resolve_model` shipped (#52). `server/` is wired into pytest. **Done:** the model-policy slice of
+  task #4 + the test-discovery half of #1. **Still pending:** #1 `[server]` FastAPI extra, #2 run
+  API/SSE, #3 HITL-over-HTTP, rest of #4 (tier resolution, rate limiter, metering), #5 durable
+  checkpointer, #6 `source_version`, #7 step cache, #8 force-fresh/idempotency, #9 thread/attempt+diff,
+  #10 `web/` frontend. Net-new, **outside the v1 deep-plan** — sequence vs. v1 per Kian.
+- **Parallel sessions:** `feat/value-trust-metadata` (own worktree `mt-value-trust`, in flight — leave
+  alone). `feat/fast-track-wire-guardrails` retained as the reference impl (no PR).
+- **v1 still not started on `main`:** #34 (orchestrator nodes still pass-throughs), #20 (output
+  validator), rest of #22 (prompts), #35 (synthesis), #25/#26 (renderers), #27 (CLI), #28 (eval),
+  #29 (design note), #30 (README/CLAUDE finalize), #31 (element-drop reasons), #36 (docs); fast-track
+  quality fixes #38/#39 (← #37, now merged) → #40.
+- **Known issues:** Live Bedrock smoke test ~15% flaky by design (mitigated by #45 retry). The stale
+  local `.git/info/exclude` line 9 (ADR-0005 path) is now obsolete — **delete it** (file is tracked).
+  `stash@{0}` (readme-kid-flowchart WIP) still unmerged.
 - **Open threads:** v2 hybrid LLM scope check; v2 debts (RAG tokenizer, DFT/XC comparability);
   cross-source merge (doc-only ladder in `docs/ultimate-design.md`).
 
+## Hosting build task list (ADR 0005)
+*Harness tasks #1–#10. Labeled **HB1–HB10** here to avoid colliding with the v1 task numbers
+(#1–#40) used elsewhere in this doc. "Blocked by" uses the same HB labels.*
+
+| HB | Task | Status | Blocked by |
+|----|------|--------|-----------|
+| HB1 | Scaffold monorepo `server/` + `[server]` extra | **partial** — pytest test-wiring done (#52); FastAPI `[server]` extra pending | — |
+| HB2 | Backend run API + SSE step stream | pending | HB1 |
+| HB3 | HITL spec gate over HTTP (resume) | pending | HB2 |
+| HB4 | Auth tiers + rate limit + model policy + metering | **in progress** — `resolve_model` model-policy slice done (#52); tier resolution, rate limiter, metering pending | HB1 |
+| HB5 | Durable shared checkpointer (replace `MemorySaver`) | pending | — |
+| HB6 | `source_version` on source adapters | pending | — |
+| HB7 | Content-addressed step cache (key + recursive inputs) — *lives in core, not server* | pending | HB6 |
+| HB8 | Force-fresh toggle + idempotency short-circuit | pending | HB7 |
+| HB9 | Thread/attempt storage + cross-attempt diff | pending | HB7, HB2 |
+| HB10 | Frontend `web/` chat UI + steps banner | pending | HB2 |
+
+Unblocked and ready: **HB4** (continue — tier/rate-limit/metering), **HB5**, **HB6**, and HB1's
+remaining `[server]` extra. Net-new, **outside the v1 deep-plan** — sequence vs. v1 per Kian.
+
 ## Next Steps
 *(One function at a time, stop for approval after each; see CLAUDE.md. Don't start coding until told.)*
-1. **Land this docs PR.** From the `docs/hosting-adr-0005` worktree: signed commit (ADR 0005 +
-   `.gitignore` + handoff), then PR → squash-merge in the GitHub UI → `/sync-main`. **Hold the push
-   until the #37 no-mistakes session finishes** (don't contend the gate). After merge, the stale
-   `.git/info/exclude` line 9 (ADR path) can be deleted.
-2. **Let #37 land first.** The parallel spec-expressiveness work changes the `Constraint`/spec model
-   that #20/#35/#34 all build against — resume v1 only after it merges and Kian confirms sequencing.
-3. **Resume v1 (real build, TDD).** Natural order: **#20 output validator** (pure
-   `validate_output(result, synthesis, retrieved_ids)` rejecting ungrounded IDs/citations; confirm the
-   coupled-vs-decoupled `Synthesis` dependency) → **#35 synthesis** → **#34 wire** the
-   gate/hypothesis/synthesis/validator nodes. Port from `feat/fast-track-wire-guardrails`. Build in a
-   worktree (`PYTHONPATH="$PWD/src"`), ship via no-mistakes (bootstrap from the **main repo**).
+1. **Land this handoff PR** (`docs/handoff-server-build`) → squash-merge → `/sync-main`. Then delete
+   the obsolete `.git/info/exclude` line 9.
+2. **Continue the server build (task #4) — next pure server-side increments:** tier resolution
+   (`resolve_tier(session) -> "anon"|"user"`, feeds `resolve_model`), then the **rate limiter**
+   (token-bucket `allow(key)` with an injected clock — per-IP anon / per-user signed-in), then
+   **metering**. All pure/offline like `resolve_model`; FastAPI routes (#2) come after these.
+3. **OR resume v1** (Kian's call on priority): **#20 output validator** (pure
+   `validate_output(result, synthesis, retrieved_ids)`; confirm coupled-vs-decoupled `Synthesis`) →
+   **#35 synthesis** → **#34 wire** the orchestrator nodes. Port from `feat/fast-track-wire-guardrails`.
+   Note #37 (spec expressiveness) is now merged, so the `Constraint`/spec model #20/#35/#34 build
+   against is current.
 4. **Then:** renderers (#25/#26), CLI (#27), eval (#28), design note (#29 — must articulate the
    spec-expressiveness > server-filters > prompt leverage order), README/CLAUDE (#30), element-drop
    reasons (#31), docs (#36).
-5. **Hosting build (when prioritized): harness tasks #1–#10 under ADR 0005.** Start with the unblocked
-   #1 (scaffold `server/`), #5 (durable checkpointer), #6 (`source_version`). Net-new, outside the v1
-   deep-plan — confirm priority vs. finishing v1 first.
 
 ## Context for Next Session
-- **Branch:** active work on **`docs/hosting-adr-0005`** worktree (`/Users/kianpu/Projects/Job
-  search/Takehome/Lila/mt-hosting-docs`, off `origin/main` `1c174cc`) — docs-only ADR 0005 PR pending.
-  A **parallel `feat/spec-expressiveness-37` worktree** (the main repo dir) has a no-mistakes session
-  running — don't touch it. Saved `feat/fast-track-wire-guardrails` (local + origin, no PR) is the
-  reference impl to port from. Clean up the `mt-hosting-docs` worktree (`git worktree remove`) after
-  the docs PR merges.
+- **Branch:** this handoff update is on **`docs/handoff-server-build`** in the main repo (off `main`
+  `129cb0a`); PR pending → squash-merge → `/sync-main`. A **parallel `feat/value-trust-metadata`**
+  worktree (`mt-value-trust`) is in flight — don't touch it. `feat/fast-track-wire-guardrails`
+  (local + origin, no PR) is the reference impl to port from. No other worktrees.
 - **How to verify merged state:** `python -m pytest -q` (175 passed, 3 deselected), `ruff check .`.
   Live (needs creds): `pytest -m live` (Bedrock via `~/.aws/credentials`, OpenAlex, MP). RAG quick
   check: `OPENALEX_MAILTO=… python -c "from materials_triage.retrieval.rag import LiteratureRAG,
