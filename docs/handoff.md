@@ -67,8 +67,8 @@ adapter's capability:
   the dropped rows); the trace records the *query*. Only locally-enforced predicates produce per-candidate
   `ExcludedCandidate` reasons.
 
-**2c · 🆕 Make-it-loud + local-filter scope (follow-up to #38).** *Direction set by Kian 2026-06-23 after a
-multi-source design discussion. Deliberately lighter than "build full local enforcement."*
+**2c · 🆕 Exclusive-set local filter + make-it-loud (follow-up to #38) — DATA-PLANE DONE.** *Direction set by
+Kian 2026-06-23 after a multi-source design discussion. Deliberately lighter than "build full local enforcement."*
 
 **Decided NOT to build (for now):** the universal-local-authority model (re-enforce every predicate locally
 so push is pure optimization), the per-source `filter_capability()` declaration, and the per-call residual
@@ -81,19 +81,24 @@ scope becomes the things a DB *fundamentally can't* express — **derived / holi
 (synthesizability, holistic toxicity, abundance). No data source for those yet ⇒ **deferred**; the local
 filter stays minimal.
 
-**The one concrete near-term piece — MAKE IT LOUD (chosen 2026-06-23).** This leaves some spec predicates
-enforced **nowhere** — element **`any`** (no MP OR-param, no local filter → silently returns violating rows),
-and unpushed booleans like `is_magnetic`. Rather than silently-wrong, **record a run-level caveat** so the
-honesty property holds:
-- [ ] add a run-level **`caveats: tuple[str, ...]`** to `TriageRun` (no such field today — `run_trace.py` has
-  `filter_excluded`/`rank_excluded`/`steps`, no caveats/warnings channel) and surface it in **both** views
-  (PI + audit).
-- [ ] emit a caveat when the spec carries a predicate the pipeline didn't enforce — **v1 = element `any`**
-  (the clear, source-stable case today): e.g. *"`any={Fe,Co}` not applied — results are unfiltered on this
-  constraint."* Extend to unpushed booleans next.
-- [ ] **detection** without the deferred capability abstraction: simplest honest v1 is to flag `any`
-  predicates directly (true while MP is the only source and can't push `any`); revisit when a source *can*
-  push `any`. *(This is the open coupling question we chose to sidestep, not solve.)*
+**AS BUILT — exclusive-set local filter + caveats (branch `feat/exclusive-set-local-filter`, DATA-PLANE
+DONE, live-verified).** Kian's refinement (2026-06-23): rather than only "make it loud," *build a lightweight
+filter to capture the exclusive set* — the predicates that are **retrievable but not queryable (R∩¬Q)**,
+derived deterministically from the two committed surfaces (`FIELD_UNITS` = R, `PUSHABLE_PARAMS` = Q). This
+**enforces** `is_magnetic`/`any` locally (better than caveating them) while staying lightweight and
+source-agnostic; only the genuinely-impossible (¬R∩¬Q) is caveated. Four quadrants: R∩Q → server pushes;
+**R∩¬Q → local filter (the exclusive set)**; ¬R∩¬Q → **caveat**. Multi-source falls out free (each adapter's
+own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain.
+- [x] `SourceAdapter.classify_predicates(spec) → PredicateRouting` (adapter classifies; core stays
+  source-agnostic). MP routes booleans/element-`any` to `local_*`, unsupported-field constraints to `caveats`.
+- [x] `apply_local_filters(candidates, routing)` (core) — enforces local booleans (`boolean_mismatch`) +
+  element `any` (`element_mismatch`); composes after `apply_hard_filters` (numeric). New reasons added.
+- [x] `Candidate.elements` + `retrieve` requests-back the local-bucket fields (`is_magnetic`, `elements`) —
+  "request back what you filter on."
+- [x] orchestrator `_make_filter_node(adapter)` runs both filters into `filter_excluded`; writes
+  `routing.caveats` to a new `caveats` channel → `TriageRun.caveats` (the run-level "make it loud").
+- [ ] **surface caveats in the PI + audit views — BLOCKED:** no view layer exists yet (`render` is a
+  pass-through; future #25–#27). Data is captured in `TriageRun.caveats`; the views read it when built.
 - **Pairs with 2b's "bounded + loud" caveat** (cap-hit) — same `caveats` channel, same honesty rationale.
 
 **2b · 🆕 Pagination in `retrieve()`** — *sibling to #38; together they = "retrieve the complete filtered candidate set." Not part of #38 (#38 is the pure `_query_params` transform; this is the I/O loop).*
