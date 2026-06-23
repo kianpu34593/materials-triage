@@ -65,7 +65,9 @@ Package layout (monorepo):
   deterministic logic (`scoring.py`, `ranking.py`), hypothesis layer (`hypothesis.py`),
   synthesis artifact (`synthesis.py`: `GroundedClaim`/`Synthesis` + the
   `ungrounded_record_ids` grounding check shared by the validator and the synthesis
-  retry loop), audit-trace export (`run_trace.py`). Pure, no heavy deps.
+  retry loop), audit-trace export (`run_trace.py`: `export_run` builds a `TriageRun`
+  that also carries the synthesis narrative and the retrieved `literature` so both
+  renderers read every artifact from one object). Pure, no heavy deps.
 - `src/materials_triage/sources/` — `SourceAdapter` + the Materials Project adapter
   (injected `http_get`, lazy `requests`). The adapter exposes `property_vocabulary()`
   — its queryable property→unit surface — derived from the committed, generated
@@ -88,6 +90,12 @@ Package layout (monorepo):
   resolves to retrieved provenance), LangGraph `orchestrator.py` (9-step linear graph +
   checkpointer). `policy/guardrails.py` — input gate + trust-boundary wrapper.
   `memory/store.py` — lab memory.
+- `src/materials_triage/render.py` — plain-text renderers for workflow step 9 over one
+  exported `TriageRun`: `render_pi` (concise PI summary), `render_audit` (full technical
+  trace), and `render_run(run, view="pi"|"audit")` — the CLI dispatch entry that raises
+  `ValueError` on an unknown view. Pure functions returning strings (Rich/colour deferred
+  to v2); rendering runs *after* the graph, so the orchestrator's `render` node stays a
+  pass-through. This is where run-level `caveats` finally reach the user.
 - `server/` — public-web-app hosting layer; imports the pure core, never the reverse.
 - `tools/` — dev-only generators, never part of the runtime package (on the test
   pythonpath only): `gen_mp_vocab.py` parses the vendored MP OpenAPI snapshot

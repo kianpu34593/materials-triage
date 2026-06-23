@@ -70,7 +70,7 @@ adapter's capability:
 
 **2c · 🆕 Exclusive-set local filter + make-it-loud (follow-up to #38) — ✅ DATA-PLANE MERGED (#64, 2026-06-23).**
 *Direction set by Kian after a multi-source design discussion. Deliberately lighter than "build full local enforcement."*
-**Only remaining 2c piece: render caveats in the PI/audit views (blocked on the view layer — see the `[ ]` below).**
+**2c's last piece — render caveats in the PI/audit views — is built on `feat/export-synthesis` (not yet merged):** `render.py`'s `render_pi`/`render_audit` both surface run-level `caveats` as a labeled section (see the `[x]` below).
 
 **Decided NOT to build (for now):** the universal-local-authority model (re-enforce every predicate locally
 so push is pure optimization), the per-source `filter_capability()` declaration, and the per-call residual
@@ -99,8 +99,10 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
   "request back what you filter on."
 - [x] orchestrator `_make_filter_node(adapter)` runs both filters into `filter_excluded`; writes
   `routing.caveats` to a new `caveats` channel → `TriageRun.caveats` (the run-level "make it loud").
-- [ ] **surface caveats in the PI + audit views — BLOCKED:** no view layer exists yet (`render` is a
-  pass-through; future #25–#27). Data is captured in `TriageRun.caveats`; the views read it when built.
+- [x] **surface caveats in the PI + audit views** — built on `feat/export-synthesis` (not yet merged):
+  the new `render.py` view layer (`render_pi`/`render_audit`) reads `TriageRun.caveats` and prints a
+  labeled "Caveats:" section. The orchestrator `render` *node* stays a pass-through; rendering is a
+  post-run presentation concern, not a graph step.
 - **Pairs with 2b's "bounded + loud" caveat** (cap-hit) — same `caveats` channel, same honesty rationale.
 
 **2b · 🆕 Pagination in `retrieve()`** — *sibling to #38; together they = "retrieve the complete filtered candidate set." Not part of #38 (#38 is the pure `_query_params` transform; this is the I/O loop).*
@@ -134,7 +136,10 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
   grounding gate, **no retry** (synthesis already retried; a violation here is a real contract breach)
 
 **5 · Renderers → CLI** *(render BOTH views from ONE `TriageRun`)*
-- [ ] **#25** PI renderer (`view=pi`) · [ ] **#26** audit renderer (`view=audit`)
+- [x] **#25** PI renderer (`view=pi`) · [x] **#26** audit renderer (`view=audit`) — built on
+  `feat/export-synthesis` (not yet merged): `render.py` exposes `render_pi`/`render_audit` plus the
+  `render_run(run, view=...)` dispatch; `export_run` now carries `synthesis` + `literature` so both views
+  read every artifact from one `TriageRun`. Plain text in v1 (Rich deferred to v2).
 - [ ] **#27** CLI — `triage "<q>" --view pi|audit`; `resume`
 
 **6 · Capstone / polish**
@@ -367,10 +372,11 @@ property/material class *before* retrieval:
   stop for approval; TDD via the `tdd` skill (never batch tests); **don't start coding until told.**
 - **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~, ~~ranking #66~~ → **pagination (2b, in flight on
   `feat/retrieve-pagination`)**, **#34 (in flight on `feat/wire-input-gate` — wires the four LLM-path nodes)**,
-  #20, #35, #22, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21,
+  #20, #35, #22, **#25 + #26 (renderers — built on `feat/export-synthesis`, not yet merged)**, #27, #41,
+  #40 (see Plan). Completed: #1–#19, #21,
   #23, #24, #32, #33, #37, **#39 (supply side; binding → #34)**, **#38 server-side push (#63)**, **2c
-  exclusive-set local filter (#64)**, **selectable rankers (#66)**. Open within 2c: render caveats in views
-  (blocked on the view layer #25–#27). **#34/#22 now also owns:** bind the source vocabulary into the
+  exclusive-set local filter (#64)**, **selectable rankers (#66)**. 2c's render-caveats piece is now built
+  in the renderers (`feat/export-synthesis`); the CLI (#27) is the last view-layer gap. **#34/#22 now also owns:** bind the source vocabulary into the
   hypothesis prompt AND have the LLM announce desirability bounds for `geometric_mean` targets (prerequisite to
   flipping the default to `geometric_mean`). Deferred: #37 area B (on the critical path for "metal oxides"); the
   **multi-source filter abstraction** ("see how it goes"); **v2 XC-functional-first retrieval** (design note
