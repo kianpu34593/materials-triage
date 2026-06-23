@@ -26,6 +26,25 @@
     #gate { border: 1px solid #6cf4; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
     #gate textarea { width: 100%; box-sizing: border-box; min-height: 16rem; font: 13px/1.45 ui-monospace, monospace; }
     #gate .actions { margin-top: .6rem; display: flex; gap: .5rem; }
+    .rag { border: 1px solid #8884; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+    .rag h3 { margin: 0 0 .8rem; font-size: 1.05rem; }
+    .stage { margin: .5rem 0; padding-left: 1.6rem; position: relative; }
+    .stage::before { content: "↓"; position: absolute; left: .4rem; color: #8888; }
+    .stage:first-of-type::before { content: "•"; }
+    .stage .k { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: #8898; }
+    .stage .v { font: 13px/1.4 ui-monospace, monospace; background: #8881; border-radius: 4px; padding: .35rem .5rem; display: block; margin-top: .2rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .pill { font-size: .7rem; padding: .05rem .4rem; border-radius: 999px; border: 1px solid #8886; margin-left: .4rem; }
+    .pill.gen { background: #2e9e4f22; border-color: #2e9e4f; }
+    .pill.verbatim { background: #f5a62322; border-color: #f5a623; }
+    .pill.miss { background: #e74c3c22; border-color: #e74c3c; }
+    .psg { border-left: 3px solid #6cf; padding: .3rem .6rem; margin: .4rem 0; background: #8881; border-radius: 0 4px 4px 0; }
+    .psg .t { font-weight: 600; }
+    .psg .meta { font-size: .75rem; color: #8898; font-family: ui-monospace, monospace; }
+    .psg .snip { font-size: .85rem; margin-top: .2rem; }
+    .prop { font: 13px/1.4 ui-monospace, monospace; margin: .25rem 0; }
+    .prop .cite { color: #2e9e4f; }
+    details.prompt summary { cursor: pointer; font-size: .85rem; color: #8898; }
+    details.prompt pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: #8881; padding: .6rem; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -44,6 +63,7 @@
 
   <!-- Live, JS-driven panes (filled by the SSE stream). -->
   <div id="progress"></div>
+  <div id="ragtrace"></div>
   <div id="gate"></div>
   <div id="result"></div>
 
@@ -69,9 +89,74 @@
     const STEPS = {{ steps_json|safe }};
     const form = document.querySelector("form");
     const progress = document.getElementById("progress");
+    const ragtrace = document.getElementById("ragtrace");
     const gate = document.getElementById("gate");
     const result = document.getElementById("result");
     let lastGoal = "", lastView = "pi", lastGate = null;
+
+    const el = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+
+    // Render the goal -> query -> RAG -> passages -> prompt -> proposals chain.
+    const renderRagTrace = (t) => {
+      const box = el("div", "rag");
+      box.appendChild(el("h3", null, "Hypothesis grounding (RAG)"));
+
+      const stage = (k, valueNode) => {
+        const s = el("div", "stage");
+        s.appendChild(el("div", "k", k));
+        s.appendChild(valueNode);
+        box.appendChild(s);
+      };
+
+      stage("1 · user goal", el("span", "v", t.goal));
+
+      const q = el("span", "v", t.search_query);
+      q.appendChild(el("span", "pill " + (t.query_generated ? "gen" : "verbatim"),
+        t.query_generated ? "LLM-generated" : "goal verbatim"));
+      stage("2 · search query → RAG", q);
+
+      const psgWrap = el("div");
+      if (!t.passages.length) {
+        psgWrap.appendChild(el("span", "v", "(no passages retrieved)"));
+      } else {
+        t.passages.forEach((p) => {
+          const card = el("div", "psg");
+          card.appendChild(el("div", "t", "[" + p.n + "] " + (p.title || "(untitled)")));
+          const meta = el("div", "meta", p.source + ":" + p.record_id + "  score=" + p.score);
+          if (p.missing) meta.appendChild(el("span", "pill miss", "no abstract"));
+          card.appendChild(meta);
+          if (p.snippet) card.appendChild(el("div", "snip", p.snippet));
+          psgWrap.appendChild(card);
+        });
+      }
+      stage("3 · retrieved passages (response)", psgWrap);
+
+      const det = el("details", "prompt");
+      det.appendChild(el("summary", null, "4 · hypothesis prompt sent to the LLM (click to expand)"));
+      det.appendChild(el("pre", null, t.hypothesis_prompt));
+      const ps = el("div", "stage");
+      ps.appendChild(det);
+      box.appendChild(ps);
+
+      const propWrap = el("div");
+      t.proposals.forEach((pr) => {
+        const line = el("div", "prop", pr.kind + ": " + pr.summary + "  ");
+        if (pr.citations.length) {
+          line.appendChild(el("span", "cite", "[cites " + pr.citations.join(", ") + "]"));
+        } else {
+          line.appendChild(el("span", "pill verbatim", "uncited"));
+        }
+        propWrap.appendChild(line);
+      });
+      stage("5 · LLM proposals (grounded + cited)", propWrap);
+
+      ragtrace.replaceChildren(box);
+    };
 
     const setState = (name, state) => {
       const el = document.getElementById("step-" + name);
@@ -139,6 +224,8 @@
           setState(msg.name, "done");
           const i = STEPS.findIndex((s) => s.name === msg.name);
           if (STEPS[i + 1]) setState(STEPS[i + 1].name, "running");
+        } else if (msg.type === "rag_trace") {
+          renderRagTrace(msg.trace);
         } else if (msg.type === "spec_gate") {
           es.close();
           showGate(msg);
@@ -172,6 +259,7 @@
       lastGoal = goal; lastView = view; lastGate = null;
       result.replaceChildren();
       gate.replaceChildren();
+      ragtrace.replaceChildren();
       progress.innerHTML =
         "<h2>Running…</h2>" +
         STEPS.map((s) =>

@@ -18,6 +18,8 @@ from materials_triage.core.synthesis import Synthesis
 Complete = Callable[[str], Hypothesis]
 #: A completion seam: a rendered prompt string -> a validated Synthesis.
 CompleteSynthesis = Callable[[str], Synthesis]
+#: A completion seam: a rendered prompt string -> a plain text response.
+CompleteText = Callable[[str], str]
 
 
 def _role_messages(prompt: str) -> list[tuple[str, str]]:
@@ -67,6 +69,37 @@ class SynthesisProvider:
 
     def synthesize(self, prompt: str) -> Synthesis:
         return self._complete(prompt)
+
+
+class QueryProvider:
+    """Turn a rendered prompt into a plain-text literature search query via an
+    injected Bedrock seam — the same offline-testable pattern, unstructured text
+    out. Used to rewrite the user goal into a focused query before RAG."""
+
+    def __init__(
+        self,
+        complete: CompleteText | None = None,
+        model_id: str = DEFAULT_MODEL_ID,
+        region: str = DEFAULT_REGION,
+    ) -> None:
+        self._complete = complete or _bedrock_text(model_id, region)
+
+    def rewrite_query(self, prompt: str) -> str:
+        return self._complete(prompt)
+
+
+def _bedrock_text(model_id: str, region: str) -> CompleteText:
+    """Build a real plain-text completion seam (no structured schema). Returns the
+    response's text content. ``langchain_aws`` is imported only on invocation."""
+
+    def complete(prompt: str) -> str:
+        from langchain_aws import ChatBedrockConverse
+
+        model = ChatBedrockConverse(model=model_id, region_name=region)
+        response = model.invoke(_role_messages(prompt))
+        return str(response.content).strip()
+
+    return complete
 
 
 def _bedrock_complete(model_id: str, region: str) -> Complete:

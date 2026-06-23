@@ -66,6 +66,13 @@ class LiteratureRetriever(Protocol):
     def search(self, query: str, k: int = ...) -> "list[LiteraturePassage]": ...
 
 
+class QueryProvider(Protocol):
+    """The LLM seam that rewrites the user goal into a focused literature search
+    query before RAG: a rendered prompt in, a plain-text query out."""
+
+    def rewrite_query(self, prompt: str) -> str: ...
+
+
 class InputRefused(RuntimeError):
     """The input policy gate (step 1) refused the request: it named a forbidden
     capability (wet-lab, private data, paywalled scraping). Per the workflow a
@@ -147,6 +154,9 @@ class OrchestratorState(TypedDict, total=False):
     rank_excluded: tuple[ExcludedCandidate, ...]
     result: TriageResult | None
     synthesis: Synthesis | None
+    # The goal -> search query -> RAG -> passages -> prompt -> proposals record
+    # the hypothesis node builds, for the audit view and the live GUI panel.
+    rag_trace: dict
 
 
 def _passthrough(state: OrchestratorState) -> dict:
@@ -205,6 +215,31 @@ def _vocabulary_clause(vocabulary: Mapping[str, str]) -> str:
 
 #: How many literature passages to retrieve and inject into the hypothesis prompt.
 HYPOTHESIS_RAG_K = 5
+
+
+def _query_prompt(goal: str) -> str:
+    """Render the prompt that rewrites the goal into a focused literature search
+    query. The goal is fenced as untrusted DATA (the trust boundary, #19); the
+    instruction asks for a short keyword query, no commentary."""
+    wrapped = wrap_untrusted(goal, label="user query", nonce=secrets.token_hex(8))
+    return (
+        "Rewrite the materials-research goal in the data below into a concise "
+        "keyword search query (5-10 words) for a scientific literature database. "
+        "Return ONLY the query text, no quotes or commentary.\n" + wrapped
+    )
+
+
+def _generate_search_query(query_provider: "QueryProvider | None", goal: str) -> tuple[str, bool]:
+    """Return ``(query, generated)``: the LLM-rewritten search query and whether
+    the LLM produced it. Soft-degrades to the goal verbatim when no provider is
+    wired or the call fails/returns empty — RAG grounding is best-effort."""
+    if query_provider is None:
+        return goal, False
+    try:
+        query = query_provider.rewrite_query(_query_prompt(goal)).strip()
+    except Exception:  # noqa: BLE001 — query rewrite is best-effort; fall back to the goal
+        return goal, False
+    return (query, True) if query else (goal, False)
 
 
 def _passages_clause(passages: "list[LiteraturePassage]") -> str:
@@ -268,10 +303,56 @@ def _hypothesis_prompt(
     return prompt
 
 
+def _proposal_summary(proposal) -> dict:
+    """A compact, JSON-safe view of one proposal for the RAG trace: its kind, a
+    one-line detail (the inner constraint / ranking target / element rule), and
+    the records it cites."""
+    inner = getattr(proposal, proposal.kind)
+    detail = ", ".join(f"{k}={v}" for k, v in inner.model_dump().items() if v is not None)
+    return {
+        "kind": proposal.kind,
+        "summary": detail,
+        "citations": [f"{c.source}:{c.record_id}" for c in proposal.citations],
+    }
+
+
+def _build_rag_trace(
+    goal: str,
+    search_query: str,
+    query_generated: bool,
+    passages: "list[LiteraturePassage]",
+    prompt: str,
+    hypothesis: Hypothesis,
+) -> dict:
+    """Assemble the JSON-safe record of the goal -> query -> RAG -> passages ->
+    prompt -> proposals interaction, for the audit trace and the live GUI panel.
+    Stored as plain dicts (not pydantic) to keep the checkpoint channel simple."""
+    return {
+        "goal": goal,
+        "search_query": search_query,
+        "query_generated": query_generated,
+        "passages": [
+            {
+                "n": i,
+                "source": p.provenance.source,
+                "record_id": p.provenance.record_id,
+                "title": p.title,
+                "snippet": (p.text[:300] + " ...") if len(p.text) > 300 else p.text,
+                "missing": p.missing,
+                "score": round(p.score, 3),
+            }
+            for i, p in enumerate(passages, 1)
+        ],
+        "hypothesis_prompt": prompt,
+        "proposals": [_proposal_summary(pr) for pr in hypothesis.proposals],
+    }
+
+
 def _make_hypothesis_node(
     provider: HypothesisProvider | None,
     vocabulary: Mapping[str, str] | None = None,
     rag: "LiteratureRetriever | None" = None,
+    query_provider: "QueryProvider | None" = None,
     max_attempts: int = DEFAULT_MAX_HYPOTHESIS_ATTEMPTS,
 ):
     """The hypothesis step: the LLM proposes the cited spec-bridges. Structured
@@ -284,22 +365,31 @@ def _make_hypothesis_node(
     to retrievable properties; empty/None leaves the proposals unconstrained.
     ``rag`` (the literature retriever) grounds the proposals in cited public
     abstracts; None — or a retrieval that errors — degrades to an ungrounded
-    hypothesis rather than failing the run (RAG is grounding, not ground-truth)."""
+    hypothesis rather than failing the run (RAG is grounding, not ground-truth).
+    ``query_provider`` rewrites the goal into a focused search query before RAG;
+    None falls back to searching with the goal verbatim. The node records the full
+    goal -> query -> RAG -> passages -> prompt -> proposals interaction on the
+    ``rag_trace`` channel for the audit view and the live GUI panel."""
     vocabulary = vocabulary or {}
 
     def hypothesis(state: OrchestratorState) -> dict:
         if provider is None:
             return {}
-        passages = _retrieve_passages(rag, state["goal"])
+        goal = state["goal"]
+        search_query, query_generated = _generate_search_query(query_provider, goal)
+        passages = _retrieve_passages(rag, search_query)
         last_exc: ValidationError | None = None
         for _ in range(max_attempts):
             prompt = _hypothesis_prompt(
-                state["goal"], None if last_exc is None else str(last_exc), vocabulary, passages
+                goal, None if last_exc is None else str(last_exc), vocabulary, passages
             )
             try:
-                return {"hypothesis": provider.propose(prompt)}
+                result = provider.propose(prompt)
             except ValidationError as exc:
                 last_exc = exc
+                continue
+            trace = _build_rag_trace(goal, search_query, query_generated, passages, prompt, result)
+            return {"hypothesis": result, "rag_trace": trace}
         raise HypothesisConformanceError(
             f"LLM did not produce a schema-valid Hypothesis in {max_attempts} attempts"
         ) from last_exc
@@ -525,6 +615,7 @@ def build_orchestrator(
     provider: HypothesisProvider | None = None,
     synthesis_provider: SynthesisProvider | None = None,
     rag: "LiteratureRetriever | None" = None,
+    query_provider: "QueryProvider | None" = None,
     checkpointer: MemorySaver | None = None,
 ) -> CompiledStateGraph:
     """Build and compile the triage orchestrator graph.
@@ -543,7 +634,7 @@ def build_orchestrator(
     vocabulary = adapter.property_vocabulary() if adapter is not None else {}
     nodes = {
         "gate": _gate_node,
-        "hypothesis": _make_hypothesis_node(provider, vocabulary, rag),
+        "hypothesis": _make_hypothesis_node(provider, vocabulary, rag, query_provider),
         "spec_build": _spec_build_node,
         "retrieve": _make_retrieve_node(adapter),
         "filter": _filter_node,

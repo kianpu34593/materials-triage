@@ -71,7 +71,11 @@ def build_seams():
     """Wire the live pipeline seams (Bedrock + Materials Project), exactly as
     ``cli.main()`` does. Imports are lazy so merely importing this module — or
     serving ``GET /`` — never needs credentials or the heavy ``llm`` extra."""
-    from materials_triage.agent.llm import HypothesisProvider, SynthesisProvider
+    from materials_triage.agent.llm import (
+        HypothesisProvider,
+        QueryProvider,
+        SynthesisProvider,
+    )
     from materials_triage.retrieval.rag import LiteratureRAG, OpenAlexFetcher
     from materials_triage.sources.materials_project import MaterialsProjectAdapter
 
@@ -80,6 +84,7 @@ def build_seams():
         "provider": HypothesisProvider(),
         "synthesis_provider": SynthesisProvider(),
         "rag": LiteratureRAG(OpenAlexFetcher()),
+        "query_provider": QueryProvider(),
     }
 
 
@@ -135,6 +140,11 @@ def _drive(orchestrator, config, next_input, view, thread_id):
         for node in chunk:
             if node in WORKFLOW_STEPS:
                 yield _sse({"type": "step", "name": node})
+                # When the hypothesis node completes, surface its goal -> query ->
+                # RAG -> passages -> prompt -> proposals interaction live.
+                trace = chunk[node].get("rag_trace") if isinstance(chunk[node], dict) else None
+                if trace:
+                    yield _sse({"type": "rag_trace", "trace": trace})
 
     if gate is not None:
         _RUNS[thread_id] = orchestrator
