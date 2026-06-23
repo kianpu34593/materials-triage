@@ -165,12 +165,34 @@ pagination-/orchestrator-independent; the synthesis NODE wiring itself is deferr
 - [ ] **#40** RAG→synthesis (citations + caveats + ordering-fidelity) — unblocks after #35 + #20
 
 **Out of scope for the CLI:** #28 (eval), #29/#30/#36 (docs), #31 (drop reasons), all HB* hosting tasks,
-#37 area B (element-class constants) + area C (ranking) — both **deferred** (low priority).
+#37 area B (element-class constants) — **deferred**. (#37 area C "ranking beyond weighted-sum" is **partly
+shipped** by #66 — the geometric-mean desirability ranker — see "Ranking" below.)
+
+**Ranking — selectable arithmetic/geometric-mean rankers — ✅ MERGED (#66, 2026-06-23).** A second
+deterministic ranker now sits alongside the preserved weighted-sum, selected per run by
+`TriageSpec.ranking_method` (recorded → traceable/replayable). `arithmetic_mean` (default, unchanged
+behavior) is the old `rank()` renamed; `geometric_mean` is the non-compensatory weighted geometric mean of
+per-target **Derringer–Suich desirability curves** (`maximize`/`minimize`/`target` "moderate-is-best" shapes
++ a curvature exponent). The contract is fail-fast at spec construction (no silent wrong answers):
+- **anchors/curvature are geometric-only** — rejected under `arithmetic_mean` (it scores via pool-relative
+  `normalize`, which would silently ignore them); a `target` direction *requires* `geometric_mean`.
+- **`geometric_mean` requires announced absolute bounds on every target** (no pool fallback) — so a `0`
+  desirability means a genuine acceptability-floor failure, not merely pool-worst (which the geometric mean
+  would catastrophically zero). Per direction: maximize→`lower`+`target`, minimize→`target`+`upper`,
+  target→all three; strictly ascending; the unused monotonic anchor must be omitted.
+- **`arithmetic_mean` keeps pool fallback** (additive, no catastrophic zero).
+- **Default stays `arithmetic_mean`** (zero-setup). Flipping the default to `geometric_mean` is **deferred to
+  the #34/#22 PR** — because a default-geometric spec forces every target to announce bounds, which nothing
+  upstream provides until the hypothesis prompt does. **The bounds announcement is the #34/#22 hypothesis
+  responsibility** (the ranking step only enforces via the schema → LLM retry). [memory:
+  desirability-ranking-bounds-same-source]
 
 ## What's merged on `main` (the foundation to build on)
 - **Core:** `core/schema.py` (all frozen models; `Provenance` now carries required `method` + optional
   `xc_functional`), `core/elements.py`, `core/scoring.py` (`apply_hard_filters`/`on_missing`),
-  `core/ranking.py` (weighted-average), `core/hypothesis.py` (models + `compile_spec`, `kind`-discriminated
+  `core/ranking.py` (**two selectable rankers**: `rank_arithmetic_mean` weighted-average + `rank_geometric_mean`
+  desirability, #66), `core/scoring.py` also carries the desirability primitives (`desirability_curve`,
+  `resolve_bounds`, `score_desirability`), `core/hypothesis.py` (models + `compile_spec`, `kind`-discriminated
   union). #37 spec expressiveness areas **A** (BooleanConstraint / ElementPredicate all·any·none /
   CountConstraint) + **D** (trust metadata) shipped.
 - **Retrieval:** `sources/base.py` + `stubs.py` + `materials_project.py` — MP adapter does a **two-call**
@@ -311,6 +333,16 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
   adapter); functional lives in the task doc, varies per-property. [memory: materials-project-api, dft-xc-functional-comparability-v2]
 - **no-mistakes:** bootstrap from the **main repo** (not a worktree); `git push no-mistakes <branch>` → `axi
   abort` → `axi run --intent`; verify locally with `PYTHONPATH="$PWD/src" pytest`. [memory: no-mistakes-run-bootstrap]
+  *#66 corollary:* runs are per-branch and coexist concurrently (multiple sessions ran in parallel fine); a
+  worktree can drive `respond`/`rerun`, only the bootstrap *push* must come from the main repo. Transient
+  `529 Overloaded` API errors crash the no-mistakes Claude agents (review/fix/lint) → just `rerun`.
+- **Desirability/geometric ranker (#66): min-max normalization + a non-compensatory geometric mean is a trap.**
+  Pool-relative `d=0` (worst-in-pool) under `Π dᵢ^wᵢ` zeros a candidate's whole score for being last on *one*
+  axis — so the geometric ranker must use **absolute announced bounds** where `0` means a real floor failure,
+  never pool fallback. Mixing one announced + one pooled anchor also flips a ramp's sign (maximize → minimize)
+  → the **same-source rule**. The fix family is all fail-fast spec validation ("no silent wrong answers"): same
+  theme as H₂O. Announcing the bounds is an **upstream/hypothesis** duty (#34/#22). [memory:
+  desirability-ranking-bounds-same-source]
 
 ## Design direction (v2+): XC-functional-FIRST retrieval, not canonical-value acceptance
 *Raised by Kian 2026-06-23 while tracing #38's per-property functional handling. Important; likely **not v1**.*
