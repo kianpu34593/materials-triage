@@ -206,6 +206,7 @@ def reconcile_spec(goal: str, spec: TriageSpec) -> tuple[TriageSpec, list[FacetF
         scue = next(c for c, n in _SIMPLICITY_CUES if _found(c, text))
         target = max(min(implied), len(must_have | seeded_required))
         existing_max = spec.count.max if spec.count is not None else None
+        existing_min = spec.count.min if spec.count is not None else None
         if existing_max is not None and existing_max <= target:
             findings.append(
                 FacetFinding(
@@ -216,7 +217,7 @@ def reconcile_spec(goal: str, spec: TriageSpec) -> tuple[TriageSpec, list[FacetF
                 )
             )
         else:
-            seeded_count = CountConstraint(max=target)
+            seeded_count = CountConstraint(min=existing_min, max=target)
             findings.append(
                 FacetFinding(
                     facet="simple composition",
@@ -241,5 +242,5 @@ def reconcile_spec(goal: str, spec: TriageSpec) -> tuple[TriageSpec, list[FacetF
     update: dict = {"element_predicates": predicates}
     if seeded_count is not None:
         update["count"] = seeded_count
-    new_spec = spec.model_copy(update=update)
+    new_spec = TriageSpec.model_validate(spec.model_copy(update=update).model_dump())
     return new_spec, findings

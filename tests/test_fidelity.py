@@ -8,8 +8,15 @@ decision is recorded as a FacetFinding for the audit trace and the human gate.
 Pure domain logic — these tests call it directly with constructed specs.
 """
 
+import pytest
+
 from materials_triage.core.fidelity import reconcile_spec
-from materials_triage.core.schema import Constraint, ElementPredicate, TriageSpec
+from materials_triage.core.schema import (
+    Constraint,
+    CountConstraint,
+    ElementPredicate,
+    TriageSpec,
+)
 
 
 def _required_elements(spec: TriageSpec) -> set[str]:
@@ -86,3 +93,29 @@ def test_explicitly_required_toxic_element_is_not_also_excluded():
     assert "As" in _required_elements(reconciled)
     assert "As" not in _excluded_elements(reconciled)
     # The result already constructed without raising TriageSpec's contradiction check.
+
+
+def test_seeding_a_count_cap_preserves_an_existing_count_min():
+    """When the LLM proposed a hard 'at least N elements' min, seeding the simple-
+    composition max must MERGE into the existing constraint, not replace it — the min
+    survives so the hard requirement is not silently dropped."""
+    spec = TriageSpec(count=CountConstraint(min=2))
+
+    reconciled, findings = reconcile_spec("a simple ternary semiconductor", spec)
+
+    assert reconciled.count is not None
+    assert reconciled.count.min == 2  # the proposed 'at least 2' survives
+    assert reconciled.count.max == 3  # "ternary" -> at most 3 distinct elements
+    assert any(f.facet == "simple composition" and f.action == "seeded" for f in findings)
+
+
+def test_seeded_spec_that_violates_coherence_rules_raises():
+    """A seeded toxic 'none' whose members cover an existing 'any' predicate makes that
+    'any' unsatisfiable. The seeder re-validates through TriageSpec, so this incoherent
+    spec raises rather than being built silently."""
+    spec = TriageSpec(
+        element_predicates=(ElementPredicate(quantifier="any", members=frozenset({"Pb", "Hg"})),)
+    )
+
+    with pytest.raises(ValueError):
+        reconcile_spec("a non-toxic semiconductor", spec)
