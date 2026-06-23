@@ -674,6 +674,36 @@ def test_live_mp_honors_nelements_range():
     assert all(r["nelements"] == 2 for r in rows)
 
 
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("X_API_KEY"), reason="needs X_API_KEY for the live API")
+def test_live_mp_honors_the_vrh_modulus_alias():
+    """A `bulk_modulus` constraint pushes via the VRH alias `k_vrh_min` (not the
+    non-existent `bulk_modulus_min`): every returned row's VRH bulk modulus clears
+    the bound. Guards the one non-1:1 field→param mapping against silent ignore."""
+    spec = TriageSpec(constraints=(Constraint(property_name="bulk_modulus", min=100.0),))
+
+    rows = _live_rows(spec, ["bulk_modulus"])
+
+    vrhs = [r["bulk_modulus"]["vrh"] for r in rows if r.get("bulk_modulus")]
+    assert vrhs
+    assert all(v >= 100.0 for v in vrhs)
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("X_API_KEY"), reason="needs X_API_KEY for the live API")
+def test_live_retrieve_with_an_unqueryable_boolean_does_not_400():
+    """Regression for the is_magnetic 400 crash: constraining a retrievable-but-not-
+    queryable boolean must NOT reach the wire as a param. retrieve() succeeds because
+    the gate keeps is_magnetic local rather than pushing it (which 400s)."""
+    spec = TriageSpec(
+        boolean_constraints=(BooleanConstraint(property_name="is_magnetic", required=True),)
+    )
+
+    candidates = MaterialsProjectAdapter().retrieve(spec)
+
+    assert candidates  # no HTTP 400 — the param was never sent
+
+
 def test_retrieved_candidates_flow_through_filter_and_rank():
     """The payoff: candidates the adapter parses drop straight into the existing
     hard-filter and ranking stages — a sub-min material is excluded, the survivor
