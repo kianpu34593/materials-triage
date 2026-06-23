@@ -11,7 +11,7 @@ are pass-throughs their own slices/tasks replace.
 """
 
 import math
-from collections.abc import Mapping
+import secrets
 from typing import Protocol, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -20,10 +20,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
-from materials_triage.agent.prompts import (
-    RANKING_TARGET_GUIDANCE,
-    build_property_vocabulary_guidance,
-)
+from materials_triage.agent.prompts import build_hypothesis_prompt
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
 from materials_triage.core.ranking import rank_arithmetic_mean, rank_geometric_mean
 from materials_triage.core.schema import (
@@ -35,6 +32,7 @@ from materials_triage.core.schema import (
 )
 from materials_triage.core.scoring import apply_hard_filters, apply_local_filters
 from materials_triage.policy.guardrails import check_input
+from materials_triage.retrieval.rag import LiteraturePassage
 from materials_triage.sources.base import SourceAdapter
 
 #: Default cap on how many times the hypothesis node re-invokes the LLM provider
@@ -43,10 +41,22 @@ DEFAULT_MAX_HYPOTHESIS_ATTEMPTS = 3
 
 
 class HypothesisProvider(Protocol):
-    """The LLM seam the hypothesis node calls: a rendered prompt in, a validated
-    Hypothesis out (or a pydantic ValidationError if the output is malformed)."""
+    """The LLM seam the hypothesis node calls. ``propose`` takes a rendered prompt
+    and returns a validated Hypothesis (or raises a pydantic ValidationError if the
+    output is malformed). ``extract_keywords`` distills a free-text goal into a
+    literature search query for the RAG step; it is only invoked when a ``rag`` seam
+    is injected, so a provider used without RAG need not implement it."""
 
     def propose(self, prompt: str) -> Hypothesis: ...
+
+    def extract_keywords(self, goal: str) -> str: ...
+
+
+class LiteratureRetriever(Protocol):
+    """The RAG seam the hypothesis (and, later, synthesis) node calls: a query in,
+    the top relevant literature passages out. Matches ``LiteratureRAG.search``."""
+
+    def search(self, query: str, k: int = ...) -> list[LiteraturePassage]: ...
 
 
 class HypothesisConformanceError(RuntimeError):
@@ -153,50 +163,31 @@ def _gate_node(state: OrchestratorState) -> dict:
     return {}
 
 
-def _hypothesis_prompt(
-    goal: str,
-    prior_error: str | None,
-    vocabulary: Mapping[str, str | None] | None = None,
-) -> str:
-    """Render the prompt for the hypothesis step. Appends RANKING_TARGET_GUIDANCE so
-    the LLM proposes ranking targets the agent's default geometric-mean ranker can
-    score (each with explicit desirability ramp bounds) — the prose half of surfacing
-    the schema, paired with the RankingTarget field descriptions. When the retrieval
-    source declares a ``vocabulary`` (its retrievable property→unit surface), it is
-    bound in too, so the LLM names only properties the source actually returns — the
-    load-bearing lever for shortlist quality, above the prompt itself. On a retry, the
-    prior schema/compile rejection is fed back so the model corrects the malformation."""
-    prompt = (
-        f"Propose a materials triage hypothesis for this goal: {goal}\n\n{RANKING_TARGET_GUIDANCE}"
-    )
-    vocab_guidance = build_property_vocabulary_guidance(vocabulary or {})
-    if vocab_guidance:
-        prompt += f"\n\n{vocab_guidance}"
-    if prior_error is not None:
-        prompt += (
-            "\n\nYour previous response was rejected because it did not conform "
-            f"to the required schema:\n{prior_error}\nReturn a corrected response."
-        )
-    return prompt
-
-
 def _make_hypothesis_node(
     provider: HypothesisProvider | None,
     adapter: SourceAdapter | None = None,
+    rag: LiteratureRetriever | None = None,
     max_attempts: int = DEFAULT_MAX_HYPOTHESIS_ATTEMPTS,
 ):
-    """The hypothesis step: the LLM proposes the cited spec-bridges. The output is
-    conformed in two ways, both retry-on-failure: structured output is only *shape*-
-    checked by the schema (~15% of calls emit output it rejects), and a shape-valid
-    hypothesis may still not *compile* into a coherent spec — e.g. a ranking target
-    missing the ramp bounds the default geometric ranker requires, a duplicate
-    constraint, or a contradiction. Both surface as a pydantic ValidationError, so
-    this trial-compiles each candidate and retries either failure (feeding the reason
-    back into the prompt) up to ``max_attempts``, then raises a wrapped
-    HypothesisConformanceError. Catching the compile failure HERE — where the LLM can
-    be re-prompted — is what stops it becoming a terminal, feedback-less
+    """The hypothesis step (workflow step 3: LLM + RAG). When a ``rag`` seam is
+    injected, the node first asks the provider to distill the goal into search
+    keywords, retrieves the top literature passages for *those* keywords, and grounds
+    the prompt in them (fenced as untrusted DATA via ``build_hypothesis_prompt``) — so
+    the LLM proposes candidates anchored in the literature, not its own memory. Without
+    a ``rag`` it degrades to a literature-free prompt.
+
+    The output is conformed in two ways, both retry-on-failure: structured output is
+    only *shape*-checked by the schema (~15% of calls emit output it rejects), and a
+    shape-valid hypothesis may still not *compile* into a coherent spec — e.g. a
+    ranking target missing the ramp bounds the default geometric ranker requires, a
+    duplicate constraint, or a contradiction. Both surface as a pydantic
+    ValidationError, so this trial-compiles each candidate and retries either failure
+    (feeding the reason back into the prompt) up to ``max_attempts``, then raises a
+    wrapped HypothesisConformanceError. Catching the compile failure HERE — where the
+    LLM can be re-prompted — is what stops it becoming a terminal, feedback-less
     SpecCompilationError later in spec_build. Non-validation failures (transport,
-    throttling) are not retried here."""
+    throttling) are not retried here. Keyword extraction and retrieval happen once,
+    before the retry loop (only the schema feedback changes across attempts)."""
 
     # Snapshot the source's retrievable vocabulary once at build time: it is a static,
     # prebuilt table (no live fetch — that would break replayability), so binding it
@@ -206,10 +197,21 @@ def _make_hypothesis_node(
     def hypothesis(state: OrchestratorState) -> dict:
         if provider is None:
             return {}
+        goal = state["goal"]
+        # LLM + RAG: distill the goal to keywords, then ground in the retrieved
+        # (untrusted) abstracts. Fresh per-request nonce fences the untrusted text.
+        snippets: list[LiteraturePassage] = []
+        if rag is not None:
+            snippets = rag.search(provider.extract_keywords(goal))
+        nonce = secrets.token_hex(8)
         last_exc: ValidationError | None = None
         for _ in range(max_attempts):
-            prompt = _hypothesis_prompt(
-                state["goal"], None if last_exc is None else str(last_exc), vocabulary
+            prompt = build_hypothesis_prompt(
+                goal,
+                vocabulary,
+                snippets,
+                nonce=nonce,
+                prior_error=None if last_exc is None else str(last_exc),
             )
             try:
                 proposed = provider.propose(prompt)
@@ -358,6 +360,7 @@ def _rank_node(state: OrchestratorState) -> dict:
 def build_orchestrator(
     adapter: SourceAdapter | None = None,
     provider: HypothesisProvider | None = None,
+    rag: LiteratureRetriever | None = None,
     checkpointer: MemorySaver | None = None,
 ) -> CompiledStateGraph:
     """Build and compile the triage orchestrator graph.
@@ -368,14 +371,15 @@ def build_orchestrator(
     The ``gate`` (deterministic input policy), ``hypothesis`` (LLM,
     retry-on-malformed) and ``spec_build`` steps and the ``retrieve`` ->
     ``filter`` -> ``rank`` deterministic core are wired; the rest are
-    pass-throughs until their slices land. ``adapter`` and ``provider`` are the
-    injected retrieval and LLM seams (fakes make the whole graph offline-testable);
-    the adapter's ``property_vocabulary`` is also bound into the hypothesis prompt so
-    the LLM proposes only properties the source returns.
+    pass-throughs until their slices land. ``adapter``, ``provider`` and ``rag`` are
+    the injected retrieval, LLM and literature seams (fakes make the whole graph
+    offline-testable); the adapter's ``property_vocabulary`` is bound into the
+    hypothesis prompt so the LLM proposes only properties the source returns, and when
+    ``rag`` is supplied the hypothesis step grounds its prompt in retrieved abstracts.
     """
     nodes = {
         "gate": _gate_node,
-        "hypothesis": _make_hypothesis_node(provider, adapter),
+        "hypothesis": _make_hypothesis_node(provider, adapter, rag),
         "spec_build": _spec_build_node,
         "retrieve": _make_retrieve_node(adapter),
         "filter": _make_filter_node(adapter),

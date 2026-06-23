@@ -8,11 +8,14 @@ to Bedrock — mirroring the MaterialsProjectAdapter's ``http_get`` seam.
 
 from collections.abc import Callable
 
-from materials_triage.agent.prompts import ROLE_SYSTEM_PROMPT
+from materials_triage.agent.prompts import KEYWORD_EXTRACTION_SYSTEM_PROMPT, ROLE_SYSTEM_PROMPT
 from materials_triage.core.hypothesis import Hypothesis
 
 #: A completion seam: a rendered prompt string -> a validated Hypothesis.
 Complete = Callable[[str], Hypothesis]
+
+#: A keyword-extraction seam: a free-text goal -> a literature search query string.
+ExtractKeywords = Callable[[str], str]
 
 
 def _role_messages(prompt: str) -> list[tuple[str, str]]:
@@ -35,16 +38,22 @@ class HypothesisProvider:
     def __init__(
         self,
         complete: Complete | None = None,
+        extract: ExtractKeywords | None = None,
         model_id: str = DEFAULT_MODEL_ID,
         region: str = DEFAULT_REGION,
     ) -> None:
-        # Injecting `complete` is the offline mode (tests pass a fake); the default
-        # is the real Bedrock transport, built lazily so importing this module
-        # (and every offline test) never needs langchain_aws or AWS credentials.
+        # Injecting `complete`/`extract` is the offline mode (tests pass fakes); the
+        # defaults are the real Bedrock transports, built lazily so importing this
+        # module (and every offline test) never needs langchain_aws or AWS credentials.
         self._complete = complete or _bedrock_complete(model_id, region)
+        self._extract = extract or _bedrock_extract_keywords(model_id, region)
 
     def propose(self, prompt: str) -> Hypothesis:
         return self._complete(prompt)
+
+    def extract_keywords(self, goal: str) -> str:
+        """Distill a free-text goal into a literature search query for the RAG step."""
+        return self._extract(goal)
 
 
 def _bedrock_complete(model_id: str, region: str) -> Complete:
@@ -59,3 +68,25 @@ def _bedrock_complete(model_id: str, region: str) -> Complete:
         return model.with_structured_output(Hypothesis).invoke(_role_messages(prompt))
 
     return complete
+
+
+def _bedrock_extract_keywords(model_id: str, region: str) -> ExtractKeywords:
+    """Build the real keyword-extraction seam. Like ``_bedrock_complete``, imports
+    ``langchain_aws`` only when invoked, so construction stays offline. The goal is
+    fenced as untrusted DATA (fresh per-call nonce) under a keyword-extraction system
+    prompt; the model's plain-text reply is the literature search query."""
+
+    def extract(goal: str) -> str:
+        import secrets
+
+        from langchain_aws import ChatBedrockConverse
+
+        from materials_triage.policy.guardrails import wrap_untrusted
+
+        model = ChatBedrockConverse(model=model_id, region_name=region)
+        wrapped = wrap_untrusted(goal, label="user goal", nonce=secrets.token_hex(8))
+        response = model.invoke([("system", KEYWORD_EXTRACTION_SYSTEM_PROMPT), ("human", wrapped)])
+        content = response.content
+        return content if isinstance(content, str) else str(content)
+
+    return extract

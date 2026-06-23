@@ -17,11 +17,9 @@ from materials_triage.agent.orchestrator import (
     HypothesisConformanceError,
     InputRefused,
     SpecCompilationError,
-    _hypothesis_prompt,
     build_orchestrator,
     resume_run,
 )
-from materials_triage.agent.prompts import RANKING_TARGET_GUIDANCE
 from materials_triage.core.hypothesis import (
     Citation,
     ConstraintProposal,
@@ -42,33 +40,8 @@ from materials_triage.core.schema import (
     TriageResult,
     TriageSpec,
 )
+from materials_triage.retrieval.rag import LiteraturePassage
 from materials_triage.sources.base import SourceAdapter
-
-
-def test_hypothesis_prompt_surfaces_the_ranking_target_guidance():
-    """The hypothesis prompt carries the ranking-target guidance so the LLM proposes
-    ramp-bounded targets the default geometric-mean ranker can score — both on the
-    first attempt and on a retry (the guidance must not be dropped on the retry path)."""
-    first = _hypothesis_prompt("wide-gap oxide", None)
-    retry = _hypothesis_prompt("wide-gap oxide", "prior schema error")
-
-    assert RANKING_TARGET_GUIDANCE in first
-    assert RANKING_TARGET_GUIDANCE in retry
-    assert "wide-gap oxide" in first
-
-
-def test_hypothesis_prompt_surfaces_the_source_vocabulary_when_supplied():
-    """The hypothesis prompt binds in the source's retrievable vocabulary so the LLM
-    proposes only properties the source returns — without dropping the goal or the
-    ranking-target guidance. An empty/absent vocabulary adds no vocabulary block."""
-    bound = _hypothesis_prompt("wide-gap oxide", None, {"band_gap": "eV"})
-    plain = _hypothesis_prompt("wide-gap oxide", None, {})
-
-    assert "band_gap" in bound
-    assert "wide-gap oxide" in bound
-    assert RANKING_TARGET_GUIDANCE in bound  # ranking guidance is not displaced
-    # An empty vocabulary contributes nothing extra beyond the bare prompt.
-    assert "Retrievable properties" not in plain
 
 
 def test_hypothesis_node_binds_the_adapters_vocabulary_into_the_prompt():
@@ -568,6 +541,65 @@ def test_hypothesis_node_raises_when_proposals_never_compile():
 
     assert isinstance(excinfo.value.__cause__, ValidationError)
     assert len(provider.prompts) == DEFAULT_MAX_HYPOTHESIS_ATTEMPTS
+
+
+class _RagProvider:
+    """A provider that records every propose() prompt, extracts a fixed keyword
+    string from the goal (recording the goal it saw), and returns a compiling
+    hypothesis — so the node's RAG-grounding path can be observed offline."""
+
+    def __init__(self, keywords):
+        self._keywords = keywords
+        self.prompts = []
+        self.extracted_goals = []
+
+    def extract_keywords(self, goal):
+        self.extracted_goals.append(goal)
+        return self._keywords
+
+    def propose(self, prompt):
+        self.prompts.append(prompt)
+        return _ranking_hypothesis(bounded=True)
+
+
+class _FakeRag:
+    """An offline LiteratureRAG seam: records the query it was handed and returns a
+    fixed passage list, so the node's literature grounding is testable without OpenAlex."""
+
+    def __init__(self, passages):
+        self._passages = passages
+        self.queries = []
+
+    def search(self, query, k=10):
+        self.queries.append(query)
+        return list(self._passages)
+
+
+def test_hypothesis_node_grounds_the_prompt_in_rag_literature_via_extracted_keywords():
+    """Workflow step 3 is LLM + RAG: when a ``rag`` seam is injected, the node first
+    asks the provider to distill the goal into search keywords, searches the literature
+    with *those* keywords (not the raw goal), and grounds the hypothesis prompt in the
+    returned (untrusted) abstracts — so the LLM proposes candidates anchored in the
+    literature it was handed, not from its own memory."""
+    passage = LiteraturePassage(
+        provenance=Provenance(source="OpenAlex", record_id="W1", method="literature"),
+        title="Wide-gap oxides",
+        text="TiO2 shows a wide band gap suited to photocatalysis.",
+    )
+    rag = _FakeRag([passage])
+    provider = _RagProvider(keywords="wide band gap oxide photocatalyst")
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)], vocabulary={"band_gap": "eV"})
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(adapter=adapter, provider=provider, rag=rag)
+    config = {"configurable": {"thread_id": "rag-ground"}}
+    orchestrator.invoke({"goal": "wide-gap oxide for photocatalysis", "spec": spec}, config)
+
+    assert provider.extracted_goals == ["wide-gap oxide for photocatalysis"]
+    # The literature was searched with the EXTRACTED keywords, not the raw goal.
+    assert rag.queries == ["wide band gap oxide photocatalyst"]
+    # The returned abstract was grounded into the prompt the LLM actually received.
+    assert "TiO2 shows a wide band gap suited to photocatalysis." in provider.prompts[0]
 
 
 class _BrokenProvider:

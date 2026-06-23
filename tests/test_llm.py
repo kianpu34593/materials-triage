@@ -66,6 +66,22 @@ def test_propose_forwards_the_prompt_to_the_seam_unchanged():
     assert seen == ["RENDERED PROMPT with untrusted DATA blocks"]
 
 
+def test_extract_keywords_returns_the_seam_output_and_forwards_the_goal():
+    """The provider's keyword extraction (for the RAG step) delegates to its injected
+    keyword seam and hands back what it produced, forwarding the goal verbatim — the
+    provider invents no keywords itself."""
+    seen = []
+    provider = HypothesisProvider(
+        complete=lambda prompt: _canned_hypothesis(),
+        extract=lambda goal: (seen.append(goal), "wide band gap oxide photocatalyst")[1],
+    )
+
+    keywords = provider.extract_keywords("a stable wide-gap oxide for photocatalysis")
+
+    assert keywords == "wide band gap oxide photocatalyst"
+    assert seen == ["a stable wide-gap oxide for photocatalysis"]
+
+
 def test_default_provider_constructs_offline_without_importing_bedrock():
     """Constructed with no injected seam, the provider builds its real Bedrock
     transport lazily: construction must not import langchain_aws or need AWS
