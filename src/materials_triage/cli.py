@@ -17,6 +17,7 @@ from materials_triage.agent.orchestrator import (
     SynthesisProvider,
     build_orchestrator,
 )
+from materials_triage.agent.prompts import DEFAULT_TOP_K
 from materials_triage.core.run_trace import TriageRun, export_run, write_run
 from materials_triage.render import render_run
 from materials_triage.sources.base import SourceAdapter
@@ -29,6 +30,7 @@ def triage(
     provider: HypothesisProvider | None = None,
     synthesis_provider: SynthesisProvider | None = None,
     rag: LiteratureRetriever | None = None,
+    top_k: int = DEFAULT_TOP_K,
     runs_dir: str | None = None,
     thread_id: str = "cli",
 ) -> TriageRun:
@@ -37,11 +39,16 @@ def triage(
     Drives the orchestrator on a single thread; if the run pauses at the spec-build
     interrupt (no spec supplied), it auto-accepts the recommended spec — a
     non-interactive CLI run has no human to confirm, so the agent's recommendation
-    stands. The completed run is exported to a TriageRun and, when ``runs_dir`` is
-    given, persisted as ``runs_dir/<run_id>.json``.
+    stands. ``top_k`` caps the citable shortlist the synthesis step sees. The completed
+    run is exported to a TriageRun (which keeps the FULL ranking) and, when ``runs_dir``
+    is given, persisted as ``runs_dir/<run_id>.json``.
     """
     orchestrator = build_orchestrator(
-        adapter=adapter, provider=provider, rag=rag, synthesis_provider=synthesis_provider
+        adapter=adapter,
+        provider=provider,
+        rag=rag,
+        synthesis_provider=synthesis_provider,
+        top_k=top_k,
     )
     config = {"configurable": {"thread_id": thread_id}}
     result = orchestrator.invoke({"goal": goal, "run_id": thread_id}, config)
@@ -72,6 +79,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--runs-dir",
         default=None,
         help="if set, persist the run as <runs-dir>/<run_id>.json for later replay",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=DEFAULT_TOP_K,
+        help=f"size of the presented/citable shortlist (default {DEFAULT_TOP_K}); "
+        "the full ranking is still persisted",
     )
     parser.add_argument("--thread-id", default="cli", help="run/thread identifier")
     return parser.parse_args(argv)
@@ -105,7 +119,8 @@ def main(argv: list[str] | None = None) -> None:
         provider=BedrockHypothesisProvider(),
         synthesis_provider=BedrockSynthesisProvider(),
         rag=LiteratureRAG(OpenAlexFetcher()),
+        top_k=args.top_k,
         runs_dir=args.runs_dir,
         thread_id=args.thread_id,
     )
-    print(render_run(run, view=args.view))
+    print(render_run(run, view=args.view, top_k=args.top_k))

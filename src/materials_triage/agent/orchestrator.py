@@ -21,7 +21,11 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
-from materials_triage.agent.prompts import build_hypothesis_prompt, build_synthesis_prompt
+from materials_triage.agent.prompts import (
+    DEFAULT_TOP_K,
+    build_hypothesis_prompt,
+    build_synthesis_prompt,
+)
 from materials_triage.agent.validator import validate_output
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
 from materials_triage.core.ranking import rank_arithmetic_mean, rank_geometric_mean
@@ -381,6 +385,7 @@ DEFAULT_MAX_SYNTHESIS_ATTEMPTS = 3
 
 def _make_synthesis_node(
     provider: SynthesisProvider | None,
+    top_k: int = DEFAULT_TOP_K,
     max_attempts: int = DEFAULT_MAX_SYNTHESIS_ATTEMPTS,
 ):
     """The synthesis step (workflow step 7: LLM + RAG). Turns the ranked result into a
@@ -388,9 +393,9 @@ def _make_synthesis_node(
     (persisted in state — no second search). The LLM writes the prose, but every claim
     must cite a record_id deterministic retrieval returned; this checks each emission
     with ``ungrounded_record_ids`` and, on a miss, feeds the offending ids back and
-    retries (up to ``max_attempts``) before raising SynthesisConformanceError — so an
-    ungrounded narrative never reaches the output validator. With no provider injected
-    the step is a pass-through (its slice not yet active)."""
+    retries (up to ``max_attempts``), then degrades (omits the narrative + a caveat).
+    Only the top_k ranked materials are offered as citable — a huge citable set drives
+    hallucination. With no provider injected the step is a pass-through."""
 
     def synthesis(state: OrchestratorState) -> dict:
         if provider is None:
@@ -403,7 +408,7 @@ def _make_synthesis_node(
         prior_error: str | None = None
         for _ in range(max_attempts):
             prompt = build_synthesis_prompt(
-                goal, result, literature, nonce=nonce, prior_error=prior_error
+                goal, result, literature, nonce=nonce, prior_error=prior_error, top_k=top_k
             )
             # Two retry-worthy failures, both fed back: the LLM emits a malformed
             # Synthesis (~15% schema-rejection rate), or it cites a material that was
@@ -455,6 +460,7 @@ def build_orchestrator(
     provider: HypothesisProvider | None = None,
     rag: LiteratureRetriever | None = None,
     synthesis_provider: SynthesisProvider | None = None,
+    top_k: int = DEFAULT_TOP_K,
     checkpointer: MemorySaver | None = None,
 ) -> CompiledStateGraph:
     """Build and compile the triage orchestrator graph.
@@ -481,7 +487,7 @@ def build_orchestrator(
         "retrieve": _make_retrieve_node(adapter),
         "filter": _make_filter_node(adapter),
         "rank": _rank_node,
-        "synthesis": _make_synthesis_node(synthesis_provider),
+        "synthesis": _make_synthesis_node(synthesis_provider, top_k),
         "output_validate": _output_validate_node,
     }
     builder = StateGraph(OrchestratorState)

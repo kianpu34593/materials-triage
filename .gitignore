@@ -41,3 +41,6 @@ htmlcov/
 # Editors
 .vscode/
 .idea/
+
+# local live-run output captures
+.test*.txt
