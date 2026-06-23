@@ -16,7 +16,12 @@ from materials_triage.core.schema import (
     TriageSpec,
 )
 from materials_triage.core.scoring import apply_hard_filters
-from materials_triage.sources.materials_project import MaterialsProjectAdapter
+from materials_triage.sources.materials_project import (
+    MaterialsProjectAdapter,
+    _fetch_run_types,
+    _field_task_id,
+    _origin_task_ids,
+)
 
 
 def _spec() -> TriageSpec:
@@ -26,6 +31,173 @@ def _spec() -> TriageSpec:
 def _fixed(envelope: dict) -> MaterialsProjectAdapter:
     """An adapter whose transport always returns ``envelope`` (offline)."""
     return MaterialsProjectAdapter(http_get=lambda url, params, headers: envelope)
+
+
+def test_origin_task_ids_indexes_task_ids_by_origin_name():
+    """MP's origins list (one entry per computed property doc) collapses to a
+    name -> task_id lookup, the first step in tracing each value to its run."""
+    origins = [
+        {"name": "energy", "task_id": "t-energy", "last_updated": "2026-05-30"},
+        {"name": "electronic_structure", "task_id": "t-bands", "last_updated": "2022-06-22"},
+    ]
+
+    assert _origin_task_ids(origins) == {"energy": "t-energy", "electronic_structure": "t-bands"}
+
+
+def test_origin_task_ids_of_absent_origins_is_empty():
+    """A doc with no origins (the field unrequested or null) yields no lookup,
+    so downstream functional resolution simply finds nothing."""
+    assert _origin_task_ids(None) == {}
+
+
+def test_field_task_id_resolves_a_field_through_its_origin():
+    """A summary field maps (via _FIELD_ORIGIN) to an origin name, then to that
+    origin's task_id — the task whose run we'll read the functional from."""
+    index = {"electronic_structure": "t-bands", "energy": "t-energy"}
+
+    assert _field_task_id("band_gap", index) == "t-bands"
+    assert _field_task_id("formation_energy_per_atom", index) == "t-energy"
+
+
+def test_field_task_id_is_none_when_the_origin_is_absent():
+    """A field whose origin doc wasn't computed for this material (e.g. no
+    elasticity run) has no traceable task — its functional stays unknown."""
+    assert _field_task_id("bulk_modulus", {"energy": "t-energy"}) is None
+
+
+def test_field_task_id_is_none_for_a_field_with_no_origin_mapping():
+    """A field outside _FIELD_ORIGIN (not task-derived, e.g. a structural count)
+    has no functional to trace."""
+    assert _field_task_id("nsites", {"structure": "t-struct"}) is None
+
+
+def test_fetch_run_types_batches_task_ids_into_one_call():
+    """The functional lives in the task doc, not the summary: one batched
+    /materials/tasks/ call maps every task_id to its run_type."""
+    captured: dict = {}
+
+    def transport(url, params, headers):
+        captured["url"] = url
+        captured["params"] = params
+        return {
+            "data": [
+                {"task_id": "t-bands", "run_type": "GGA"},
+                {"task_id": "t-energy", "run_type": "r2SCAN"},
+            ]
+        }
+
+    run_types = _fetch_run_types(transport, {"X-API-KEY": "k"}, ["t-bands", "t-energy"])
+
+    assert run_types == {"t-bands": "GGA", "t-energy": "r2SCAN"}
+    assert captured["url"] == "/materials/tasks/"
+    assert set(captured["params"]["_fields"].split(",")) == {"task_id", "run_type"}
+    assert set(captured["params"]["task_ids"].split(",")) == {"t-bands", "t-energy"}
+
+
+def test_fetch_run_types_degrades_to_empty_when_the_tasks_call_fails():
+    """The functional is best-effort enrichment on an already-complete summary
+    result: a failed tasks call yields an empty map (all functionals unknown)
+    rather than aborting the retrieval."""
+
+    def transport(url, params, headers):
+        raise RuntimeError("tasks endpoint unavailable")
+
+    assert _fetch_run_types(transport, {"X-API-KEY": "k"}, ["t-bands"]) == {}
+
+
+def test_fetch_run_types_skips_the_call_when_there_are_no_task_ids():
+    """With nothing to trace (no task-derived fields / no origins) the adapter
+    makes no second network call at all."""
+
+    def transport(url, params, headers):
+        raise AssertionError("transport must not be called when there are no task_ids")
+
+    assert _fetch_run_types(transport, {}, []) == {}
+
+
+def _two_endpoint(summary: dict, tasks: dict):
+    """A transport that answers the summary and tasks endpoints by URL (offline)."""
+
+    def transport(url, params, headers):
+        return tasks if url == "/materials/tasks/" else summary
+
+    return MaterialsProjectAdapter(http_get=transport)
+
+
+def test_retrieve_stamps_each_property_with_its_own_xc_functional():
+    """The payoff: a value's provenance carries the functional of the task that
+    produced IT — band_gap (GGA bandstructure) and the energy (r2SCAN) differ
+    within one material, traced via origins -> tasks run_type."""
+    summary = {
+        "data": [
+            {
+                "material_id": "mp-x",
+                "formula_pretty": "Ac2O3",
+                "band_gap": 3.0,
+                "formation_energy_per_atom": -3.0,
+                "origins": [
+                    {"name": "electronic_structure", "task_id": "t-bands"},
+                    {"name": "energy", "task_id": "t-energy"},
+                ],
+            }
+        ],
+        "meta": {},
+    }
+    tasks = {
+        "data": [
+            {"task_id": "t-bands", "run_type": "GGA"},
+            {"task_id": "t-energy", "run_type": "r2SCAN"},
+        ]
+    }
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        ranking_targets=(
+            RankingTarget(
+                property_name="formation_energy_per_atom", direction="minimize", weight=1.0
+            ),
+        ),
+    )
+
+    props = _two_endpoint(summary, tasks).retrieve(spec)[0].properties
+
+    assert props["band_gap"].provenance.xc_functional == "GGA"
+    assert props["formation_energy_per_atom"].provenance.xc_functional == "r2SCAN"
+
+
+def test_retrieve_leaves_xc_functional_none_when_the_origin_is_absent():
+    """A property with no origin doc (no elasticity run) gets no functional —
+    honestly unknown, not fabricated."""
+    summary = {
+        "data": [
+            {
+                "material_id": "mp-x",
+                "formula_pretty": "Ac2O3",
+                "bulk_modulus": 200.0,
+                "origins": [{"name": "energy", "task_id": "t-energy"}],
+            }
+        ],
+        "meta": {},
+    }
+    tasks = {"data": [{"task_id": "t-energy", "run_type": "r2SCAN"}]}
+    spec = TriageSpec(constraints=(Constraint(property_name="bulk_modulus", min=1.0),))
+
+    props = _two_endpoint(summary, tasks).retrieve(spec)[0].properties
+
+    assert props["bulk_modulus"].provenance.xc_functional is None
+
+
+def test_retrieve_requests_origins_to_trace_the_functional():
+    """The adapter must ask the summary endpoint for origins, the bridge from a
+    value to the task carrying its functional."""
+    captured: dict = {}
+
+    def transport(url, params, headers):
+        captured.setdefault("summary_params", params)
+        return {"data": [], "meta": {}}
+
+    MaterialsProjectAdapter(http_get=transport).retrieve(_spec())
+
+    assert "origins" in captured["summary_params"]["_fields"].split(",")
 
 
 def test_retrieve_maps_a_one_doc_payload_to_a_candidate():

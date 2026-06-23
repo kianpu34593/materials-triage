@@ -21,14 +21,14 @@ from materials_triage.core.schema import (
 
 def test_provenance_carries_its_source():
     """A Provenance records where a scientific value came from."""
-    prov = Provenance(source="Materials Project", record_id="mp-2657")
+    prov = Provenance(source="Materials Project", record_id="mp-2657", method="computational")
 
     assert prov.source == "Materials Project"
 
 
 def test_provenance_reports_its_record_id():
     """A receipt names the specific record it came from, so a citation can resolve."""
-    prov = Provenance(source="Materials Project", record_id="mp-2657")
+    prov = Provenance(source="Materials Project", record_id="mp-2657", method="computational")
 
     assert prov.record_id == "mp-2657"
 
@@ -36,15 +36,58 @@ def test_provenance_reports_its_record_id():
 def test_provenance_rejects_blank_source():
     """A receipt with no issuer is meaningless, so a blank source is refused."""
     with pytest.raises(ValidationError):
-        Provenance(source="", record_id="mp-2657")
+        Provenance(source="", record_id="mp-2657", method="computational")
 
 
 def test_provenance_is_immutable():
     """Once a value is tagged with its origin, that tag cannot be changed."""
-    prov = Provenance(source="Materials Project", record_id="mp-2657")
+    prov = Provenance(source="Materials Project", record_id="mp-2657", method="computational")
 
     with pytest.raises(ValidationError):
         prov.source = "OQMD"
+
+
+def test_provenance_records_its_derivation_method():
+    """A value's origin can record how it was derived (e.g. a DFT computation)."""
+    prov = Provenance(
+        source="Materials Project",
+        record_id="mp-2657",
+        method="computational",
+    )
+
+    assert prov.method == "computational"
+
+
+def test_provenance_requires_a_derivation_method():
+    """A value's origin must state how it was derived — method is not optional."""
+    with pytest.raises(ValidationError):
+        Provenance(source="Materials Project", record_id="mp-2657")
+
+
+def test_provenance_accepts_literature_as_a_method():
+    """A value sourced from a published abstract declares the 'literature' method."""
+    prov = Provenance(source="openalex", record_id="W123", method="literature")
+
+    assert prov.method == "literature"
+
+
+def test_provenance_records_the_xc_functional_it_was_computed_with():
+    """A DFT value can record which exchange-correlation functional produced it."""
+    prov = Provenance(
+        source="Materials Project",
+        record_id="mp-2657",
+        method="computational",
+        xc_functional="r2SCAN",
+    )
+
+    assert prov.xc_functional == "r2SCAN"
+
+
+def test_provenance_leaves_xc_functional_unknown_by_default():
+    """The functional is honestly unknown unless the source states it — not assumed."""
+    prov = Provenance(source="openalex", record_id="W123", method="literature")
+
+    assert prov.xc_functional is None
 
 
 def test_property_value_reports_number_and_source():
@@ -52,7 +95,9 @@ def test_property_value_reports_number_and_source():
     pv = PropertyValue(
         value=3.2,
         unit="eV",
-        provenance=Provenance(source="Materials Project", record_id="mp-2657"),
+        provenance=Provenance(
+            source="Materials Project", record_id="mp-2657", method="computational"
+        ),
     )
 
     assert pv.value == 3.2
@@ -66,7 +111,9 @@ def test_missing_property_value_cannot_carry_a_number():
             value=3.2,
             unit="eV",
             missing=True,
-            provenance=Provenance(source="Materials Project", record_id="mp-2657"),
+            provenance=Provenance(
+                source="Materials Project", record_id="mp-2657", method="computational"
+            ),
         )
 
 
@@ -77,7 +124,9 @@ def test_present_property_value_must_carry_a_number():
             value=None,
             unit="eV",
             missing=False,
-            provenance=Provenance(source="Materials Project", record_id="mp-2657"),
+            provenance=Provenance(
+                source="Materials Project", record_id="mp-2657", method="computational"
+            ),
         )
 
 
@@ -87,7 +136,9 @@ def test_missing_property_value_still_reports_its_source():
         value=None,
         unit="eV",
         missing=True,
-        provenance=Provenance(source="Materials Project", record_id="mp-2657"),
+        provenance=Provenance(
+            source="Materials Project", record_id="mp-2657", method="computational"
+        ),
     )
 
     assert pv.missing is True
@@ -105,7 +156,9 @@ def test_candidate_identifies_material_and_exposes_named_property():
             "band_gap": PropertyValue(
                 value=1.7719,
                 unit="eV",
-                provenance=Provenance(source="Materials Project", record_id="mp-aaaaadyf"),
+                provenance=Provenance(
+                    source="Materials Project", record_id="mp-aaaaadyf", method="computational"
+                ),
             )
         },
     )
@@ -125,7 +178,9 @@ def test_candidate_distinguishes_absent_from_missing_property():
                 value=None,
                 unit="eV",
                 missing=True,
-                provenance=Provenance(source="Materials Project", record_id="mp-aaaaadyf"),
+                provenance=Provenance(
+                    source="Materials Project", record_id="mp-aaaaadyf", method="computational"
+                ),
             )
         },
     )
@@ -460,7 +515,9 @@ def test_scored_candidate_carries_candidate_score_and_contributions():
             "band_gap": PropertyValue(
                 value=1.7719,
                 unit="eV",
-                provenance=Provenance(source="Materials Project", record_id="mp-aaaaadyf"),
+                provenance=Provenance(
+                    source="Materials Project", record_id="mp-aaaaadyf", method="computational"
+                ),
             )
         },
     )
@@ -510,7 +567,9 @@ def test_excluded_candidate_records_structured_drop_reason():
             "band_gap": PropertyValue(
                 value=0.4,
                 unit="eV",
-                provenance=Provenance(source="Materials Project", record_id="mp-aaaaadyf"),
+                provenance=Provenance(
+                    source="Materials Project", record_id="mp-aaaaadyf", method="computational"
+                ),
             )
         },
     )

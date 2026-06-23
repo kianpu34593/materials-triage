@@ -2,9 +2,15 @@
 
 It queries the (sandboxed) Materials Project summary API, unwraps the
 ``{"data": [...], "meta": {...}}`` envelope, and turns each SummaryDoc into a
-provenance-tagged :class:`~materials_triage.core.schema.Candidate`. The HTTP
-call is injected (``http_get``) so parsing is exercised fully offline; the real
-transport is built lazily only when the adapter actually goes to the network.
+provenance-tagged :class:`~materials_triage.core.schema.Candidate`. The summary
+payload never carries the XC functional, so a second batched call to the
+``/materials/tasks/`` endpoint resolves each value's producing task (via the
+doc's ``origins``) to its ``run_type`` and stamps it onto the value's
+provenance as ``xc_functional``. This enrichment is best-effort: if the tasks
+call fails the functional simply stays unknown rather than aborting retrieval.
+The HTTP call is injected (``http_get``) so parsing is exercised fully offline;
+the real transport is built lazily only when the adapter actually goes to the
+network.
 """
 
 import os
@@ -31,6 +37,21 @@ FIELD_UNITS: Mapping[str, str] = {
     "shear_modulus": "GPa",
 }
 
+#: SummaryDoc field → the name of the MP "origin" (computed property doc) whose
+#: calculation produced it. ``origins`` is keyed by these internal doc names, not
+#: by our field names, so this table is the bridge used to trace each value back
+#: to its task (and thence its XC functional). Vendor knowledge, hence here in the
+#: adapter and not the source-neutral core. A field with no matching origin in a
+#: given doc simply has no traceable task → its functional stays unknown.
+_FIELD_ORIGIN: Mapping[str, str] = {
+    "band_gap": "electronic_structure",
+    "formation_energy_per_atom": "energy",
+    "energy_above_hull": "energy",
+    "density": "structure",
+    "bulk_modulus": "elasticity",
+    "shear_modulus": "elasticity",
+}
+
 
 class MaterialsProjectAdapter(SourceAdapter):
     """Retrieve candidates from the Materials Project summary API."""
@@ -49,8 +70,11 @@ class MaterialsProjectAdapter(SourceAdapter):
 
     def retrieve(self, spec: TriageSpec) -> list[Candidate]:
         headers = {"X-API-KEY": self._api_key}
-        envelope = self._http_get("/materials/summary/", _query_params(spec), headers)
-        return [_doc_to_candidate(doc) for doc in envelope["data"]]
+        docs = self._http_get("/materials/summary/", _query_params(spec), headers)["data"]
+        # The functional isn't in the summary; resolve every retrieved value's task
+        # and read its run_type in one batched call, then stamp each provenance.
+        run_types = _fetch_run_types(self._http_get, headers, _page_task_ids(docs))
+        return [_doc_to_candidate(doc, run_types) for doc in docs]
 
 
 #: Identity fields always requested alongside the spec's properties.
@@ -65,7 +89,8 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
     """
     properties = {c.property_name for c in spec.constraints}
     properties |= {t.property_name for t in spec.ranking_targets}
-    fields = list(_IDENTITY_FIELDS) + sorted(properties)
+    # origins is the per-property bridge to the task carrying each value's XC functional.
+    fields = list(_IDENTITY_FIELDS) + ["origins"] + sorted(properties)
     params = {"_fields": ",".join(fields), "_limit": str(_DEFAULT_LIMIT)}
     # Composition scoping is pushed server-side; the numeric bounds stay with
     # apply_hard_filters, which remains the authority on what survives. Only the
@@ -94,20 +119,93 @@ def _requests_transport(base_url: str) -> HttpGet:
     return transport
 
 
-def _doc_to_candidate(doc: dict) -> Candidate:
-    """Turn one SummaryDoc into a provenance-tagged Candidate."""
-    material_id = doc["material_id"]
-    provenance = Provenance(source=SOURCE_NAME, record_id=material_id)
-    properties = {
-        name: _property_value(doc[name], unit, provenance)
-        for name, unit in FIELD_UNITS.items()
-        if name in doc  # a field never returned stays absent; a returned null is "missing"
+def _origin_task_ids(origins: list[dict] | None) -> dict[str, str]:
+    """Index a SummaryDoc's ``origins`` list by origin name → task_id.
+
+    Each entry records which calculation produced one computed property doc; this
+    lookup is the first step in tracing a value to its run. A doc with no origins
+    (field unrequested or null) yields an empty lookup.
+    """
+    return {o["name"]: o["task_id"] for o in (origins or [])}
+
+
+def _fetch_run_types(
+    http_get: HttpGet, headers: Mapping[str, str], task_ids: list[str]
+) -> dict[str, str]:
+    """Map each task_id to its XC functional via one batched tasks call.
+
+    The summary endpoint never carries the functional; it lives in the task doc's
+    ``run_type``. All task_ids for a page are fetched in a single request. With no
+    task_ids to trace, no call is made. A task that returns no run_type is omitted,
+    so the caller treats its functional as unknown.
+
+    This is best-effort enrichment layered on an already-complete summary result:
+    if the tasks call fails (network error, non-200, malformed envelope) the map
+    degrades to empty — every functional becomes unknown — rather than aborting an
+    otherwise-valid retrieval.
+    """
+    unique = sorted(set(task_ids))
+    if not unique:
+        return {}
+    params = {
+        "task_ids": ",".join(unique),
+        "_fields": "task_id,run_type",
+        "_limit": str(len(unique)),
     }
-    return Candidate(
-        identifier=material_id,
-        formula=doc["formula_pretty"],
-        properties=properties,
-    )
+    try:
+        envelope = http_get("/materials/tasks/", params, headers)
+        return {d["task_id"]: d["run_type"] for d in envelope["data"] if d.get("run_type")}
+    except Exception:
+        return {}
+
+
+def _field_task_id(field: str, origin_index: Mapping[str, str]) -> str | None:
+    """Resolve a summary field to the task_id that produced it, or ``None``.
+
+    Bridges field → origin name (via ``_FIELD_ORIGIN``) → task_id (via the doc's
+    origin index). A field that isn't task-derived, or whose origin doc wasn't
+    computed for this material, has no task — so its functional stays unknown.
+    """
+    origin_name = _FIELD_ORIGIN.get(field)
+    if origin_name is None:
+        return None
+    return origin_index.get(origin_name)
+
+
+def _page_task_ids(docs: list[dict]) -> list[str]:
+    """Every retrieved value's task_id across a page of docs — the batch whose
+    run_types we fetch once. Fields with no traceable task contribute nothing.
+    """
+    ids: list[str] = []
+    for doc in docs:
+        origin_index = _origin_task_ids(doc.get("origins"))
+        for name in FIELD_UNITS:
+            if name in doc and (task_id := _field_task_id(name, origin_index)):
+                ids.append(task_id)
+    return ids
+
+
+def _doc_to_candidate(doc: dict, run_types: Mapping[str, str]) -> Candidate:
+    """Turn one SummaryDoc into a Candidate whose every value carries its own
+    provenance — including the XC functional of the task that produced it.
+    """
+    material_id = doc["material_id"]
+    origin_index = _origin_task_ids(doc.get("origins"))
+    properties = {}
+    for name, unit in FIELD_UNITS.items():
+        if name not in doc:  # a field never returned stays absent; a returned null is "missing"
+            continue
+        task_id = _field_task_id(name, origin_index)
+        # Every summary value MP serves is DFT-computed (the endpoint contract);
+        # the functional is the producing task's run_type, or unknown if untraceable.
+        provenance = Provenance(
+            source=SOURCE_NAME,
+            record_id=material_id,
+            method="computational",
+            xc_functional=run_types.get(task_id),
+        )
+        properties[name] = _property_value(doc[name], unit, provenance)
+    return Candidate(identifier=material_id, formula=doc["formula_pretty"], properties=properties)
 
 
 def _property_value(raw: float | None, unit: str, provenance: Provenance) -> PropertyValue:

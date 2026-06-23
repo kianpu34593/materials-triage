@@ -52,7 +52,10 @@ dropped or guessed) · no DB to host (HTTP client over public APIs; only local s
 
 Full design lives in `Deep-Plan-materials-triage-agent-2026-06-19-1429.md` (§0 has the workflow
 diagram). Implementation is **underway on the core data-model layer** — the frozen
-`Provenance`, `PropertyValue`, `Candidate`, `Constraint` (a hard filter holding an
+`Provenance` (where a value came from plus trust metadata: a required `method` —
+`experimental`/`computational`/`ml_predicted`/`literature` — and, for DFT values, the
+producing calculation's `xc_functional`, left `None` when untraceable), `PropertyValue`,
+`Candidate`, `Constraint` (a hard filter holding an
 inclusive min/max bound on one numeric property), `BooleanConstraint` (the source-neutral
 hard filter for yes/no facts like `is_stable`/`is_metal`, asserting one property's
 `required` truth value), `ElementPredicate` (a hard composition filter unifying the old

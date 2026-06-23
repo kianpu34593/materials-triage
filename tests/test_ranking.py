@@ -13,7 +13,9 @@ def _candidate(identifier: str, formula: str, **props: float) -> Candidate:
             name: PropertyValue(
                 value=value,
                 unit="eV",
-                provenance=Provenance(source="Materials Project", record_id=identifier),
+                provenance=Provenance(
+                    source="Materials Project", record_id=identifier, method="computational"
+                ),
             )
             for name, value in props.items()
         },

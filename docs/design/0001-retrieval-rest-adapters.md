@@ -35,7 +35,8 @@ unwraps the transport envelope, pins units the payload omits, attaches provenanc
   APIs — no scraper, no private-DB, no paywalled-source tool. Public-data-only is enforced by
   construction.
 - **Query-by-spec.** The adapter requests exactly the `_fields` the run reads (union of
-  constrained + ranked property names + identity fields), trimming the ~100-field payload.
+  constrained + ranked property names + identity fields, plus `origins` — the per-property
+  bridge to the task carrying each value's XC functional), trimming the ~100-field payload.
 
 ## Trade-offs (accepted)
 
@@ -52,4 +53,9 @@ unwraps the transport envelope, pins units the payload omits, attaches provenanc
 - Live network code is isolated to a lazily-imported `requests` transport; everything else is pure.
 - The sandboxed Materials Project mirror anonymizes ids (query id ≠ returned id), so adapters
   store the **source-returned** `material_id` as `Candidate.identifier`/`Provenance.record_id`.
+- Provenance carries trust metadata (`method`, `xc_functional`). The summary payload omits the
+  XC functional, so the MP adapter issues a **second batched `/materials/tasks/` call** —
+  resolving each value's producing task (via the doc's `origins`) to its `run_type` and stamping
+  it onto provenance. This enrichment is best-effort: a failed/empty tasks call degrades the
+  functional to unknown rather than aborting an otherwise-complete retrieval.
 - This note seeds the retrieval section of the full design note (#29).
