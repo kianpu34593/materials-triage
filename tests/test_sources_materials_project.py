@@ -23,6 +23,7 @@ from materials_triage.sources.materials_project import (
     _fetch_run_types,
     _field_task_id,
     _origin_task_ids,
+    _query_params,
 )
 
 
@@ -546,6 +547,93 @@ def test_live_retrieve_returns_real_candidates():
 
     assert candidates
     assert candidates[0].identifier.startswith("mp-")
+
+
+# --- Live contract suite -----------------------------------------------------
+# These are the SAFETY GUARANTEE of the trusted-adapter model: with no local
+# backstop re-checking server-side filters, a param MP silently ignores would
+# return unfiltered rows undetected. Each test sources its params from the real
+# _query_params(spec) — so it verifies the exact name the adapter ships — then
+# asserts every returned row actually satisfies the constraint. Because the
+# params combine as conjunction and _query_params builds each independently,
+# verifying each in isolation suffices; no combinatorial coverage needed.
+
+
+def _live_rows(spec: TriageSpec, fields_back: list[str]) -> list[dict]:
+    """Issue the adapter's own query for ``spec`` against the live API, requesting
+    ``fields_back`` so the pushed filter can be checked on the response."""
+    adapter = MaterialsProjectAdapter()
+    params = dict(_query_params(spec))
+    params["_fields"] = ",".join(fields_back)
+    rows = adapter._http_get("/materials/summary/", params, {"X-API-KEY": adapter._api_key})["data"]
+    assert rows, "live query returned no rows; cannot verify the param is honored"
+    return rows
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("X_API_KEY"), reason="needs X_API_KEY for the live API")
+def test_live_mp_honors_a_numeric_range_param():
+    """MP applies the `<field>_min`/`<field>_max` the adapter emits: every returned
+    row's value lands inside the requested window (an ignored param would leak
+    out-of-range rows)."""
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=1.0, max=3.0),))
+
+    rows = _live_rows(spec, ["band_gap"])
+
+    assert all(1.0 <= r["band_gap"] <= 3.0 for r in rows if r.get("band_gap") is not None)
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("X_API_KEY"), reason="needs X_API_KEY for the live API")
+def test_live_mp_honors_a_boolean_param():
+    """MP applies the same-named boolean exact-match param: every returned row is
+    actually stable."""
+    spec = TriageSpec(
+        boolean_constraints=(BooleanConstraint(property_name="is_stable", required=True),)
+    )
+
+    rows = _live_rows(spec, ["is_stable"])
+
+    assert all(r["is_stable"] is True for r in rows)
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("X_API_KEY"), reason="needs X_API_KEY for the live API")
+def test_live_mp_honors_exclude_elements():
+    """MP applies `exclude_elements`: no returned row contains a forbidden element."""
+    spec = TriageSpec(
+        element_predicates=(ElementPredicate(quantifier="none", members=frozenset({"Pb"})),)
+    )
+
+    rows = _live_rows(spec, ["elements"])
+
+    assert all("Pb" not in r["elements"] for r in rows)
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("X_API_KEY"), reason="needs X_API_KEY for the live API")
+def test_live_mp_honors_required_elements():
+    """MP applies `elements` with AND-membership: every returned row contains all
+    required elements."""
+    spec = TriageSpec(
+        element_predicates=(ElementPredicate(quantifier="all", members=frozenset({"Ga", "N"})),)
+    )
+
+    rows = _live_rows(spec, ["elements"])
+
+    assert all({"Ga", "N"} <= set(r["elements"]) for r in rows)
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("X_API_KEY"), reason="needs X_API_KEY for the live API")
+def test_live_mp_honors_nelements_range():
+    """MP applies `nelements_min`/`nelements_max`: every returned row has exactly the
+    requested number of distinct elements."""
+    spec = TriageSpec(count=CountConstraint(min=2, max=2))
+
+    rows = _live_rows(spec, ["nelements"])
+
+    assert all(r["nelements"] == 2 for r in rows)
 
 
 def test_retrieved_candidates_flow_through_filter_and_rank():
