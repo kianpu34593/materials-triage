@@ -15,7 +15,12 @@ from materials_triage.core.elements import ELEMENT_SYMBOLS
 
 
 class Provenance(BaseModel):
-    """Records where a scientific value came from.
+    """Records where a scientific value came from, and how trustworthy it is.
+
+    Beyond the bare source/record id, it carries trust metadata: ``method``
+    (how the value was produced — experimental, computational, ml_predicted, or
+    literature) and, for DFT-computed values, the ``xc_functional`` of the
+    producing calculation (``None`` when untraceable or not applicable).
 
     Immutable: once a value is tagged with its origin, that tag cannot change
     as it travels downstream.

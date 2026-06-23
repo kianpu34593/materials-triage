@@ -2,9 +2,15 @@
 
 It queries the (sandboxed) Materials Project summary API, unwraps the
 ``{"data": [...], "meta": {...}}`` envelope, and turns each SummaryDoc into a
-provenance-tagged :class:`~materials_triage.core.schema.Candidate`. The HTTP
-call is injected (``http_get``) so parsing is exercised fully offline; the real
-transport is built lazily only when the adapter actually goes to the network.
+provenance-tagged :class:`~materials_triage.core.schema.Candidate`. The summary
+payload never carries the XC functional, so a second batched call to the
+``/materials/tasks/`` endpoint resolves each value's producing task (via the
+doc's ``origins``) to its ``run_type`` and stamps it onto the value's
+provenance as ``xc_functional``. This enrichment is best-effort: if the tasks
+call fails the functional simply stays unknown rather than aborting retrieval.
+The HTTP call is injected (``http_get``) so parsing is exercised fully offline;
+the real transport is built lazily only when the adapter actually goes to the
+network.
 """
 
 import os
