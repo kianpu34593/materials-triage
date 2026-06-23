@@ -21,6 +21,8 @@ from materials_triage.core.schema import (
     TriageResult,
     TriageSpec,
 )
+from materials_triage.core.synthesis import Synthesis
+from materials_triage.retrieval.rag import LiteraturePassage
 
 
 class Step(BaseModel):
@@ -52,6 +54,12 @@ class TriageRun(BaseModel):
     #: could neither push nor return data for it — so both views can surface it.
     caveats: tuple[str, ...] = ()
     result: TriageResult | None = None
+    #: The synthesis step's grounded, cited narrative — the PI view leads with its
+    #: summary; ``None`` when the synthesis step was a pass-through (no provider).
+    synthesis: Synthesis | None = None
+    #: The literature the hypothesis step retrieved (and synthesis reused) — the audit
+    #: view shows what the run was grounded in; empty when no RAG seam was injected.
+    literature: tuple[LiteraturePassage, ...] = ()
     steps: tuple[Step, ...] = ()
 
 
@@ -96,6 +104,8 @@ def export_run(orchestrator, config: dict) -> TriageRun:
         # the two exclusion channels at the presentation boundary.
         caveats=tuple(final.get("retrieval_caveats", ())) + tuple(final.get("caveats", ())),
         result=final.get("result"),
+        synthesis=final.get("synthesis"),
+        literature=tuple(final.get("literature", ())),
         steps=tuple(steps),
     )
 

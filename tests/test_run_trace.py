@@ -10,6 +10,7 @@ of what each workflow step wrote.
 import pytest
 
 from materials_triage.agent.orchestrator import WORKFLOW_STEPS, build_orchestrator
+from materials_triage.core.hypothesis import ConstraintProposal, Hypothesis
 from materials_triage.core.run_trace import Step, TriageRun, export_run, write_run
 from materials_triage.core.schema import (
     Candidate,
@@ -22,6 +23,8 @@ from materials_triage.core.schema import (
     TriageResult,
     TriageSpec,
 )
+from materials_triage.core.synthesis import GroundedClaim, Synthesis
+from materials_triage.retrieval.rag import LiteraturePassage
 from materials_triage.sources.base import SourceAdapter
 
 
@@ -47,6 +50,90 @@ def _candidate(identifier, band_gap):
         formula="ZnO",
         properties={"band_gap": PropertyValue(value=band_gap, unit="eV", provenance=provenance)},
     )
+
+
+class _StubSynthesisProvider:
+    """Returns a fixed Synthesis, so a full run reaches the synthesis step offline."""
+
+    def __init__(self, synthesis):
+        self._synthesis = synthesis
+
+    def synthesize(self, prompt):
+        return self._synthesis
+
+
+def test_export_run_carries_the_synthesis_narrative():
+    """The synthesis step's grounded narrative is a top-level TriageRun field, so the
+    renderers (the PI view leads with the summary) read it directly from the export —
+    not by digging through the per-step trace."""
+    synthesis = Synthesis(
+        summary="ZnO leads for a wide-gap photocatalyst.",
+        claims=(GroundedClaim(text="ZnO has a ~3 eV gap.", record_id="mp-1"),),
+    )
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)])
+    orchestrator = build_orchestrator(
+        adapter=adapter, synthesis_provider=_StubSynthesisProvider(synthesis)
+    )
+    config = {"configurable": {"thread_id": "export-synth"}}
+    orchestrator.invoke({"goal": "wide-gap oxide", "run_id": "run-s", "spec": spec}, config)
+
+    run = export_run(orchestrator, config)
+
+    assert run.synthesis == synthesis
+
+
+class _RagProvider:
+    """A hypothesis provider that extracts fixed keywords and returns a compiling
+    hypothesis, so a run reaches retrieval with literature persisted."""
+
+    def __init__(self, hypothesis):
+        self._hypothesis = hypothesis
+
+    def extract_keywords(self, goal):
+        return "wide band gap oxide"
+
+    def propose(self, prompt):
+        return self._hypothesis
+
+
+class _FakeRag:
+    def __init__(self, passages):
+        self._passages = passages
+
+    def search(self, query, k=10):
+        return list(self._passages)
+
+
+def test_export_run_carries_the_retrieved_literature():
+    """The literature the hypothesis step retrieved (and synthesis reused) is a
+    top-level TriageRun field, so the audit view can show what the run was grounded in."""
+    passage = LiteraturePassage(
+        provenance=Provenance(source="OpenAlex", record_id="W1", method="literature"),
+        title="Wide-gap oxides",
+        text="ZnO shows a wide band gap.",
+    )
+    hypothesis = Hypothesis(
+        proposals=(
+            ConstraintProposal(
+                constraint=Constraint(property_name="band_gap", min=2.0),
+                rationale="wide gap",
+                confidence=0.8,
+            ),
+        ),
+        mechanism="m",
+    )
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)])
+    orchestrator = build_orchestrator(
+        adapter=adapter, provider=_RagProvider(hypothesis), rag=_FakeRag([passage])
+    )
+    config = {"configurable": {"thread_id": "export-lit"}}
+    orchestrator.invoke({"goal": "wide-gap oxide", "run_id": "run-l", "spec": spec}, config)
+
+    run = export_run(orchestrator, config)
+
+    assert run.literature == (passage,)
 
 
 def test_export_run_carries_caveats_into_the_trace():
