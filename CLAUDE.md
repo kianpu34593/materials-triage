@@ -28,9 +28,11 @@ profile — the spec is LLM-built and remembered in lab memory).
    candidates + `PropertyValue`s, each carrying `Provenance`.
 5. **Hard filters** — drop any candidate violating any hard constraint; each drop records a reason.
 6. **Ranking** — one of two selectable strategies, recorded per run on `TriageSpec.ranking_method`:
-   `arithmetic_mean` (the default, compensatory weighted average of target properties) or
-   `geometric_mean` (non-compensatory weighted geometric mean of per-target Derringer–Suich
-   desirabilities, where one zero desirability zeros the score). Applies `on_missing` and flags missing data.
+   `geometric_mean` (the agent default — what `compile_spec` emits — a non-compensatory weighted
+   geometric mean of per-target Derringer–Suich desirabilities, where one zero desirability zeros
+   the score; it requires every ranking target to announce explicit desirability ramp bounds) or
+   `arithmetic_mean` (compensatory weighted average of target properties; still the `TriageSpec`
+   field default). Applies `on_missing` and flags missing data.
 7. **Synthesis (LLM + RAG)** — grounded narrative + mechanistic "why," each claim cited; no invented numbers.
 8. **Output validator** — every referenced ID + citation must resolve to retrieved provenance; ungrounded → reject & retry.
 9. **Render** — `view=pi` concise summary · `view=audit` renders the full trace.
