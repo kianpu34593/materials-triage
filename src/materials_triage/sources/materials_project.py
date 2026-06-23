@@ -208,6 +208,21 @@ def _doc_to_candidate(doc: dict, run_types: Mapping[str, str]) -> Candidate:
     return Candidate(identifier=material_id, formula=doc["formula_pretty"], properties=properties)
 
 
-def _property_value(raw: float | None, unit: str | None, provenance: Provenance) -> PropertyValue:
+def _property_value(
+    raw: float | Mapping[str, float] | None, unit: str | None, provenance: Provenance
+) -> PropertyValue:
     """Wrap a raw payload number as a PropertyValue; a null becomes flagged-missing."""
-    return PropertyValue(value=raw, unit=unit, missing=raw is None, provenance=provenance)
+    value = _scalar(raw)
+    return PropertyValue(value=value, unit=unit, missing=value is None, provenance=provenance)
+
+
+def _scalar(raw: float | Mapping[str, float] | None) -> float | None:
+    """Collapse a raw summary value to the single scalar the pipeline filters and
+    ranks on. MP serves the elastic moduli (``bulk_modulus`` / ``shear_modulus``)
+    as a Voigt-Reuss-Hill dict ``{"voigt", "reuss", "vrh"}`` — the only object-typed
+    fields in the vocabulary — so take the VRH average. A plain number passes
+    through; a null (or a dict missing ``vrh``) stays ``None`` and is flagged missing.
+    """
+    if isinstance(raw, Mapping):
+        return raw.get("vrh")
+    return raw

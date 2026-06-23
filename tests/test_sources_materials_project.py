@@ -309,6 +309,26 @@ def test_retrieve_maps_all_pinned_fields_with_their_units():
     assert props["formation_energy_per_atom"].value == -3.4644
 
 
+def test_retrieve_collapses_the_vrh_modulus_dict_to_its_vrh_average():
+    """MP serves the elastic moduli as a Voigt-Reuss-Hill dict, not a bare number.
+    The adapter collapses ``{voigt, reuss, vrh}`` to the VRH average so the value the
+    pipeline filters and ranks on is the scalar the vocabulary promises — not a dict
+    that would fail PropertyValue validation."""
+    doc = {
+        "material_id": "mp-x",
+        "formula_pretty": "TiO2",
+        "bulk_modulus": {"voigt": 205.0, "reuss": 190.0, "vrh": 197.5},
+        "shear_modulus": {"voigt": 120.0, "reuss": 104.0, "vrh": 112.0},
+    }
+
+    props = _fixed({"data": [doc], "meta": {}}).retrieve(_spec())[0].properties
+
+    assert props["bulk_modulus"].value == 197.5
+    assert props["bulk_modulus"].unit == "GPa"
+    assert props["bulk_modulus"].missing is False
+    assert props["shear_modulus"].value == 112.0
+
+
 def test_retrieve_unwraps_multiple_docs_and_ignores_meta():
     """The transport envelope wraps a data list and a meta block; retrieve maps
     every doc in order and discards meta — the core never sees raw transport."""

@@ -12,10 +12,12 @@ from pathlib import Path
 
 import pytest
 from gen_mp_vocab import (
+    _OUTPUT,
     _VENDORED_SCHEMA,
     build_table,
     generate_table,
     parse_summary_fields,
+    render_module,
     vocabulary_fields,
 )
 
@@ -111,3 +113,15 @@ def test_generate_table_covers_the_full_vendored_surface():
     assert table["bulk_modulus"] == {"unit": "GPa", "origin": None}  # untraceable functional
     assert table["nelements"] == {"unit": None, "origin": None}  # bare count
     assert "deprecated" not in table  # metadata flag excluded
+
+
+def test_committed_table_is_in_sync_with_the_generator():
+    """The checked-in ``_mp_fields.py`` must equal what regenerating from the vendored
+    schema + ``_FIELD_META`` produces — otherwise an edit to either leaves a stale
+    artifact every other test still passes against. Guards against forgetting to rerun
+    ``python tools/gen_mp_vocab.py``."""
+    openapi = json.loads(_VENDORED_SCHEMA.read_text())
+    source = openapi.get("_api_version") or openapi.get("_source") or "vendored schema"
+    regenerated = render_module(generate_table(openapi), source=source)
+
+    assert _OUTPUT.read_text() == regenerated
