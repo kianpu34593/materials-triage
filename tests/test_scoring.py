@@ -193,12 +193,14 @@ def test_resolve_bounds_minimize_falls_back_to_pool_extremes():
     assert upper == 4.0
 
 
-def test_resolve_bounds_target_keeps_peak_and_pools_the_outer_anchors():
-    """A 'target' direction always names its sweet spot, so the peak is taken
-    verbatim while the omitted outer anchors fall back to the pool extremes."""
-    target = RankingTarget(property_name="band_gap", direction="target", weight=1.0, target=3.0)
+def test_resolve_bounds_target_returns_the_announced_window_verbatim():
+    """A 'target' direction names its full window, so resolve_bounds returns the
+    announced lower/target/upper as-is and never consults the candidate pool."""
+    target = RankingTarget(
+        property_name="band_gap", direction="target", weight=1.0, lower=1.0, target=3.0, upper=5.0
+    )
 
-    lower, peak, upper = resolve_bounds(target, [1.0, 3.0, 5.0])
+    lower, peak, upper = resolve_bounds(target, [10.0, 20.0, 30.0])
 
     assert lower == 1.0
     assert peak == 3.0

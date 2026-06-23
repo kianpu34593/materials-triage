@@ -71,23 +71,24 @@ def resolve_bounds(
 ) -> tuple[float | None, float | None, float | None]:
     """Resolve a target's desirability anchors to absolute (lower, target, upper).
 
-    The hybrid rule: an anchor the spec supplies is used as-is; an omitted outer
-    anchor falls back to the candidate pool's extreme so the curve spans the
-    actual candidates. Which extreme depends on the direction — ``maximize`` zeroes
-    at the pool minimum and saturates at the maximum, ``minimize`` is the mirror.
-    (A ``target`` direction always carries its own peak.)
+    The same-source rule (enforced by ``RankingTarget``): a ramp's two anchors are
+    either both supplied by the spec or both omitted, in which case they fall back
+    together to the candidate pool's extremes — so the span can never go negative.
+    ``maximize`` ramps the pool minimum (floor) up to the maximum (saturation),
+    ``minimize`` is the mirror, and ``target`` always names its full window.
     """
     pool_min = min(present_values) if present_values else None
     pool_max = max(present_values) if present_values else None
 
-    def fallback(supplied: float | None, pool: float | None) -> float | None:
-        return supplied if supplied is not None else pool
-
     if target.direction == "maximize":
-        return fallback(target.lower, pool_min), fallback(target.target, pool_max), None
+        if target.lower is None:
+            return pool_min, pool_max, None
+        return target.lower, target.target, None
     if target.direction == "minimize":
-        return None, fallback(target.target, pool_min), fallback(target.upper, pool_max)
-    return fallback(target.lower, pool_min), target.target, fallback(target.upper, pool_max)
+        if target.upper is None:
+            return None, pool_min, pool_max
+        return None, target.target, target.upper
+    return target.lower, target.target, target.upper
 
 
 def apply_hard_filters(

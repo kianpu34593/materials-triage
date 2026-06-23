@@ -185,9 +185,11 @@ class RankingTarget(BaseModel):
     ``minimize`` are monotonic (bigger / smaller is always better), while
     ``target`` is the non-monotonic "moderate is best" case — desirability peaks
     at ``target`` and falls to zero away from it. The window anchors
-    (``lower`` / ``target`` / ``upper``) are absolute and optional; an omitted
-    outer bound falls back to the candidate pool's extreme, but ``target`` itself
-    has no sensible pool fallback so a ``target``-direction needs it explicitly.
+    (``lower`` / ``target`` / ``upper``) are absolute. A ramp's two anchors share
+    a source: ``maximize`` (``lower``/``target``) and ``minimize``
+    (``target``/``upper``) take both from the spec or fill both from the candidate
+    pool's extremes, so they must be announced together or not at all; a
+    ``target`` direction names its full window explicitly (no pool fallback).
     ``curvature`` (an exponent ``> 0``) bends the curve between the anchors:
     ``1`` linear, ``> 1`` strict (credit only near the ideal), ``< 1`` lenient.
 
@@ -207,27 +209,46 @@ class RankingTarget(BaseModel):
     curvature: float = Field(default=1.0, gt=0)
 
     @model_validator(mode="after")
-    def _target_direction_needs_a_sweet_spot(self) -> Self:
-        if self.direction == "target" and self.target is None:
-            raise ValueError("a 'target' direction must set the target value it scores toward")
-        # Each direction consumes only some anchors (see ``resolve_bounds``):
+    def _anchors_share_a_source(self) -> Self:
+        # A desirability ramp's two anchors must come from the same source —
+        # both announced in the spec, or both filled from the candidate pool —
+        # so the curve's span can never go negative (see ``resolve_bounds``).
         # ``maximize`` ramps lower->target, ``minimize`` ramps target->upper, and
-        # ``target`` spans lower->target->upper. Enforce ascending order on just
-        # the anchors that direction actually uses; an irrelevant anchor a spec
-        # also supplies is accepted but ignored (it never affects scoring).
+        # ``target`` names its full lower->target->upper window (no pool fallback).
         if self.direction == "maximize":
-            anchors = (("lower", self.lower), ("target", self.target))
+            self._require_both_or_neither(("lower", self.lower), ("target", self.target))
         elif self.direction == "minimize":
-            anchors = (("target", self.target), ("upper", self.upper))
+            self._require_both_or_neither(("target", self.target), ("upper", self.upper))
         else:
-            anchors = (("lower", self.lower), ("target", self.target), ("upper", self.upper))
-        present = [(name, v) for name, v in anchors if v is not None]
-        for (lo_name, lo), (hi_name, hi) in zip(present, present[1:], strict=False):
-            if lo > hi:
-                raise ValueError(
-                    f"window anchors must ascend, but {lo_name}={lo} exceeds {hi_name}={hi}"
-                )
+            self._require_full_window()
         return self
+
+    def _require_both_or_neither(
+        self, low: tuple[str, float | None], high: tuple[str, float | None]
+    ) -> None:
+        (lo_name, lo), (hi_name, hi) = low, high
+        if (lo is None) != (hi is None):
+            present, missing = (lo_name, hi_name) if lo is not None else (hi_name, lo_name)
+            raise ValueError(
+                f"a '{self.direction}' direction needs {lo_name} and {hi_name} announced "
+                f"together or not at all, but {present} is set without {missing}"
+            )
+        if lo is not None and lo > hi:
+            raise ValueError(
+                f"window anchors must ascend, but {lo_name}={lo} exceeds {hi_name}={hi}"
+            )
+
+    def _require_full_window(self) -> None:
+        for name, value in (("lower", self.lower), ("target", self.target), ("upper", self.upper)):
+            if value is None:
+                raise ValueError(
+                    f"a 'target' direction must announce its full window, but {name} is unset"
+                )
+        if not self.lower <= self.target <= self.upper:
+            raise ValueError(
+                "window anchors must ascend, but "
+                f"lower={self.lower}, target={self.target}, upper={self.upper} do not"
+            )
 
 
 class TriageSpec(BaseModel):

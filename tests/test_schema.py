@@ -317,6 +317,24 @@ def test_ranking_target_direction_requires_a_target_value():
         )
 
 
+def test_ranking_target_direction_requires_a_lower_anchor():
+    """A 'target' window has no pool fallback, so it must announce its full
+    lower/target/upper; an omitted lower bound is an incomplete window."""
+    with pytest.raises(ValidationError):
+        RankingTarget(
+            property_name="band_gap", direction="target", weight=0.5, target=5.0, upper=8.0
+        )
+
+
+def test_ranking_target_direction_requires_an_upper_anchor():
+    """The 'target' window's upper bound is likewise mandatory — there is no pool
+    fallback to fill it in."""
+    with pytest.raises(ValidationError):
+        RankingTarget(
+            property_name="band_gap", direction="target", weight=0.5, lower=2.0, target=5.0
+        )
+
+
 def test_ranking_target_rejects_anchors_out_of_order():
     """The window anchors must ascend — desirability rises from ``lower`` to the
     ``target`` peak and falls to ``upper`` — so a target below its lower bound is
@@ -362,6 +380,42 @@ def test_ranking_target_still_orders_the_anchors_a_direction_uses():
             lower=5.0,
             target=4.0,
         )
+
+
+def test_ranking_target_maximize_rejects_one_anchor_without_its_partner():
+    """A ``maximize`` ramp's anchors (``lower``/``target``) must share a source —
+    both from the spec or both from the pool — so supplying one alone (here a
+    ``lower`` floor against a pool-derived saturation) is an incoherent half-window."""
+    with pytest.raises(ValidationError):
+        RankingTarget(property_name="band_gap", direction="maximize", weight=0.5, lower=2.0)
+
+
+def test_ranking_target_minimize_rejects_one_anchor_without_its_partner():
+    """A ``minimize`` ramp's anchors (``target``/``upper``) must likewise be
+    announced together; an ``upper`` bound without its ``target`` partner mixes
+    a spec anchor with a pool extreme and is rejected."""
+    with pytest.raises(ValidationError):
+        RankingTarget(property_name="density", direction="minimize", weight=0.5, upper=8.0)
+
+
+def test_ranking_target_maximize_accepts_neither_anchor():
+    """With no ramp anchors supplied, a ``maximize`` target borrows both from the
+    candidate pool at scoring time, so omitting them is valid."""
+    target = RankingTarget(property_name="band_gap", direction="maximize", weight=0.5)
+
+    assert target.lower is None
+    assert target.target is None
+
+
+def test_ranking_target_maximize_accepts_both_anchors():
+    """Announcing both ramp anchors together is the spec-supplied case: the curve
+    spans the announced floor and saturation regardless of the pool."""
+    target = RankingTarget(
+        property_name="band_gap", direction="maximize", weight=0.5, lower=2.0, target=8.0
+    )
+
+    assert target.lower == 2.0
+    assert target.target == 8.0
 
 
 def test_element_predicate_carries_its_quantifier_and_members():
