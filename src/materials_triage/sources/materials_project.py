@@ -292,7 +292,12 @@ def _doc_to_candidate(doc: dict, run_types: Mapping[str, str]) -> Candidate:
             xc_functional=run_types.get(task_id),
         )
         properties[name] = _property_value(doc[name], unit, provenance)
-    return Candidate(identifier=material_id, formula=doc["formula_pretty"], properties=properties)
+    return Candidate(
+        identifier=material_id,
+        formula=doc["formula_pretty"],
+        properties=properties,
+        elements=frozenset(doc.get("elements") or ()),
+    )
 
 
 def _property_value(

@@ -409,6 +409,23 @@ def test_retrieve_omits_elements_when_spec_has_no_required_elements():
     assert "elements" not in captured["params"]
 
 
+def test_retrieve_carries_composition_for_local_element_filtering():
+    """retrieve parses the `elements` list onto the candidate, so the deterministic
+    filter has the composition it needs to enforce an element predicate locally (the
+    data MP returns even though the `any` operator can't be pushed)."""
+    env = {
+        "data": [{"material_id": "mp-1", "formula_pretty": "Fe2O3", "elements": ["Fe", "O"]}],
+        "meta": {},
+    }
+    adapter = MaterialsProjectAdapter(
+        http_get=lambda url, p, h: env if url == "/materials/summary/" else {"data": []}
+    )
+
+    candidate = adapter.retrieve(_spec())[0]
+
+    assert candidate.elements == frozenset({"Fe", "O"})
+
+
 def test_classify_routes_an_unqueryable_boolean_to_local():
     """The exclusive set: `is_magnetic` is retrievable (in FIELD_UNITS) but not
     queryable (not in PUSHABLE_PARAMS), so the adapter routes it to the local

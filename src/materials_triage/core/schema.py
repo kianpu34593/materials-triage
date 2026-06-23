@@ -70,6 +70,10 @@ class Candidate(BaseModel):
     identifier: str = Field(min_length=1)
     formula: str = Field(min_length=1)
     properties: Mapping[str, PropertyValue] = Field(default_factory=dict)
+    #: The distinct element symbols in the composition — populated when retrieval asks
+    #: for it, so the deterministic filter can enforce element predicates a source
+    #: can't push (e.g. an ``any`` membership). Empty when composition wasn't fetched.
+    elements: frozenset[str] = frozenset()
 
     @model_validator(mode="after")
     def _freeze_properties(self) -> Self:
