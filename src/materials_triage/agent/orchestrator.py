@@ -5,9 +5,10 @@ not an autonomous tool-calling loop. The steps are graph nodes wired in a fixed
 linear edge order and compiled with a checkpointer (the substrate for the #9
 trace export and `resume --from`). Wired so far: the ``gate`` (deterministic
 input policy), ``hypothesis`` (LLM + RAG, with retry-on-malformed-output),
-``spec_build`` and ``synthesis`` (LLM + RAG, with grounding retry) steps, plus
-the ``retrieve`` -> ``filter`` -> ``rank`` deterministic core. The remaining
-steps (output_validate, render) are pass-throughs their own slices/tasks replace.
+``spec_build``, ``synthesis`` (LLM + RAG, with grounding retry) and
+``output_validate`` (the final grounding gate) steps, plus the ``retrieve`` ->
+``filter`` -> ``rank`` deterministic core. Only ``render`` remains a pass-through
+its own task replaces.
 """
 
 import math
@@ -21,6 +22,7 @@ from langgraph.types import interrupt
 from pydantic import ValidationError
 
 from materials_triage.agent.prompts import build_hypothesis_prompt, build_synthesis_prompt
+from materials_triage.agent.validator import validate_output
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
 from materials_triage.core.ranking import rank_arithmetic_mean, rank_geometric_mean
 from materials_triage.core.schema import (
@@ -164,9 +166,9 @@ class OrchestratorState(TypedDict, total=False):
 
 
 def _passthrough(state: OrchestratorState) -> dict:
-    """A skeleton node that contributes no state update yet. Backs the steps not
-    wired so far — output_validate, render — which their own slices / tasks fill in
-    (gate, hypothesis, spec_build and synthesis are now real nodes)."""
+    """A skeleton node that contributes no state update yet. Backs the one step not
+    wired so far — render — which its own task fills in (gate, hypothesis, spec_build,
+    synthesis and output_validate are now real nodes)."""
     return {}
 
 
@@ -429,6 +431,21 @@ def _make_synthesis_node(
     return synthesis
 
 
+def _output_validate_node(state: OrchestratorState) -> dict:
+    """Workflow step 8: the final grounding gate before render. Delegates to
+    ``validate_output``, which raises ``UngroundedOutputError`` unless every presented
+    candidate (ranked + excluded) and every narrative citation resolves to a retrieved
+    record id. The synthesis step already retries on a grounding miss, so a violation
+    here is a real contract breach: the validator refuses rather than render it (no
+    retry). On clean output it contributes no state change."""
+    validate_output(
+        state["result"],
+        state.get("synthesis"),
+        {c.identifier for c in state.get("candidates", ())},
+    )
+    return {}
+
+
 def build_orchestrator(
     adapter: SourceAdapter | None = None,
     provider: HypothesisProvider | None = None,
@@ -443,8 +460,9 @@ def build_orchestrator(
     ``MemorySaver``) so execution state is captured for trace export and resume.
     The ``gate`` (deterministic input policy), ``hypothesis`` (LLM + RAG,
     retry-on-malformed), ``spec_build`` and ``synthesis`` (LLM + RAG, grounding
-    retry) steps and the ``retrieve`` -> ``filter`` -> ``rank`` deterministic core
-    are wired; the rest are pass-throughs until their slices land. ``adapter``,
+    retry) and ``output_validate`` (final grounding gate) steps and the ``retrieve``
+    -> ``filter`` -> ``rank`` deterministic core are wired; only ``render`` remains a
+    pass-through until its slice lands. ``adapter``,
     ``provider``, ``rag`` and ``synthesis_provider`` are the injected retrieval, LLM,
     literature and synthesis-LLM seams (fakes make the whole graph offline-testable);
     the adapter's ``property_vocabulary`` is bound into the hypothesis prompt so the
@@ -460,6 +478,7 @@ def build_orchestrator(
         "filter": _make_filter_node(adapter),
         "rank": _rank_node,
         "synthesis": _make_synthesis_node(synthesis_provider),
+        "output_validate": _output_validate_node,
     }
     builder = StateGraph(OrchestratorState)
     for step in WORKFLOW_STEPS:

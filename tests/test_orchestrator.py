@@ -18,9 +18,11 @@ from materials_triage.agent.orchestrator import (
     InputRefused,
     SpecCompilationError,
     SynthesisConformanceError,
+    _output_validate_node,
     build_orchestrator,
     resume_run,
 )
+from materials_triage.agent.validator import UngroundedOutputError
 from materials_triage.core.hypothesis import (
     Citation,
     ConstraintProposal,
@@ -588,6 +590,40 @@ class _StubSynthesisProvider:
     def synthesize(self, prompt):
         self.prompts.append(prompt)
         return self._syntheses[min(len(self.prompts) - 1, len(self._syntheses) - 1)]
+
+
+def test_output_validate_rejects_a_presented_candidate_without_provenance():
+    """Workflow step 8 is the final grounding gate: if the output presents a material
+    not in retrieved provenance, the validator refuses rather than render it. This path
+    is unreachable through the happy graph (survivors are always a subset of retrieved),
+    so it is the defensive backstop — exercised here directly with inconsistent state."""
+    ghost = ScoredCandidate(candidate=_candidate("mp-ghost", 3.0), score=1.0)
+    state = {
+        "goal": "wide-gap oxide",
+        "result": TriageResult(ranked=(ghost,)),
+        "candidates": (_candidate("mp-1", 3.0),),  # mp-ghost was never retrieved
+        "synthesis": None,
+    }
+
+    with pytest.raises(UngroundedOutputError):
+        _output_validate_node(state)
+
+
+def test_output_validate_accepts_a_fully_grounded_output():
+    """The gate passes silently (no state change) when every presented candidate and
+    citation resolves to a retrieved record id — it must not reject valid output."""
+    grounded = ScoredCandidate(candidate=_candidate("mp-1", 3.0), score=1.0)
+    state = {
+        "goal": "wide-gap oxide",
+        "result": TriageResult(ranked=(grounded,)),
+        "candidates": (_candidate("mp-1", 3.0),),
+        "synthesis": Synthesis(
+            summary="ZnO leads.",
+            claims=(GroundedClaim(text="ZnO ~3 eV.", record_id="mp-1"),),
+        ),
+    }
+
+    assert _output_validate_node(state) == {}
 
 
 def test_synthesis_node_lands_a_grounded_synthesis_in_state():
