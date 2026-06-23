@@ -109,6 +109,16 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
     # Boolean facts the API exposes as same-named exact-match params. Gate on the
     # published vocabulary so a field this adapter can't answer stays a purely local
     # filter rather than a silently-ignored query param.
+    # Numeric bounds → MP's inclusive <field>_min/<field>_max range params, same
+    # vocab-gate: push only fields the adapter publishes. The hard-filter stage no
+    # longer re-checks these — the server-side query is the authority (verified by
+    # the live contract tests), so this trims the pool, not just the budget.
+    for c in spec.constraints:
+        if c.property_name in FIELD_UNITS:
+            if c.min is not None:
+                params[f"{c.property_name}_min"] = str(c.min)
+            if c.max is not None:
+                params[f"{c.property_name}_max"] = str(c.max)
     for b in spec.boolean_constraints:
         if b.property_name in FIELD_UNITS:
             params[b.property_name] = "true" if b.required else "false"

@@ -503,6 +503,24 @@ def test_retrieve_pushes_a_count_constraint_as_nelements_bounds():
     assert captured["params"]["nelements_max"] == "3"
 
 
+def test_retrieve_pushes_a_numeric_constraint_as_field_bounds():
+    """A numeric Constraint on a field the adapter publishes is pushed as MP's
+    inclusive `<field>_min`/`<field>_max` range params, so the API trims the pool
+    instead of the _limit budget being spent on rows the bound would drop."""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=1.0, max=3.0),))
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    assert captured["params"]["band_gap_min"] == "1.0"
+    assert captured["params"]["band_gap_max"] == "3.0"
+
+
 def test_retrieve_sends_the_api_key_header():
     """The summary API authenticates by an X-API-KEY header; retrieve sends the
     configured key so the live request is authorized."""
