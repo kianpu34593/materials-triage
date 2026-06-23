@@ -4,10 +4,10 @@ Per ADR 0003 the workflow is a deterministic, linear, *traced* state machine —
 not an autonomous tool-calling loop. The steps are graph nodes wired in a fixed
 linear edge order and compiled with a checkpointer (the substrate for the #9
 trace export and `resume --from`). Wired so far: the ``gate`` (deterministic
-input policy), ``hypothesis`` (LLM, with retry-on-malformed-output), and
-``spec_build`` steps, plus the ``retrieve`` -> ``filter`` -> ``rank``
-deterministic core. The remaining steps (synthesis, output_validate, render)
-are pass-throughs their own slices/tasks replace.
+input policy), ``hypothesis`` (LLM + RAG, with retry-on-malformed-output),
+``spec_build`` and ``synthesis`` (LLM + RAG, with grounding retry) steps, plus
+the ``retrieve`` -> ``filter`` -> ``rank`` deterministic core. The remaining
+steps (output_validate, render) are pass-throughs their own slices/tasks replace.
 """
 
 import math
@@ -20,7 +20,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
-from materials_triage.agent.prompts import build_hypothesis_prompt
+from materials_triage.agent.prompts import build_hypothesis_prompt, build_synthesis_prompt
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
 from materials_triage.core.ranking import rank_arithmetic_mean, rank_geometric_mean
 from materials_triage.core.schema import (
@@ -31,6 +31,7 @@ from materials_triage.core.schema import (
     TriageSpec,
 )
 from materials_triage.core.scoring import apply_hard_filters, apply_local_filters
+from materials_triage.core.synthesis import Synthesis, ungrounded_record_ids
 from materials_triage.policy.guardrails import check_input
 from materials_triage.retrieval.rag import LiteraturePassage
 from materials_triage.sources.base import SourceAdapter
@@ -59,6 +60,13 @@ class LiteratureRetriever(Protocol):
     def search(self, query: str, k: int = ...) -> list[LiteraturePassage]: ...
 
 
+class SynthesisProvider(Protocol):
+    """The LLM seam the synthesis node calls: a rendered prompt in, a validated
+    Synthesis out (or a pydantic ValidationError if the output is malformed)."""
+
+    def synthesize(self, prompt: str) -> Synthesis: ...
+
+
 class HypothesisConformanceError(RuntimeError):
     """The LLM could not produce a schema-valid Hypothesis within the retry cap.
 
@@ -79,6 +87,13 @@ class InputRefused(RuntimeError):
         super().__init__(reason)
         self.reason = reason
         self.category = category
+
+
+class SynthesisConformanceError(RuntimeError):
+    """The synthesis step could not produce a fully-grounded, schema-valid Synthesis
+    within the retry cap: every attempt either failed the Synthesis schema or cited a
+    material not in retrieved provenance. The output validator (step 8) is the final
+    backstop, but synthesis raises here so an ungrounded narrative never reaches it."""
 
 
 class SpecCompilationError(RuntimeError):
@@ -126,6 +141,10 @@ class OrchestratorState(TypedDict, total=False):
     run_id: str
     spec: TriageSpec | None
     hypothesis: Hypothesis | None
+    # The literature passages retrieved once at the hypothesis step, persisted so the
+    # synthesis step grounds its narrative in the SAME papers (no second search) and
+    # the audit trace records what the run was grounded in.
+    literature: tuple[LiteraturePassage, ...]
     candidates: tuple[Candidate, ...]
     survivors: tuple[Candidate, ...]
     # Exclusions are split by stage so each channel has a single writer (no
@@ -141,12 +160,13 @@ class OrchestratorState(TypedDict, total=False):
     retrieval_caveats: tuple[str, ...]
     caveats: tuple[str, ...]
     result: TriageResult | None
+    synthesis: Synthesis | None
 
 
 def _passthrough(state: OrchestratorState) -> dict:
     """A skeleton node that contributes no state update yet. Backs the steps not
-    wired so far — synthesis, output_validate, render — which their own
-    slices / tasks fill in (gate, hypothesis and spec_build are now real nodes)."""
+    wired so far — output_validate, render — which their own slices / tasks fill in
+    (gate, hypothesis, spec_build and synthesis are now real nodes)."""
     return {}
 
 
@@ -221,7 +241,7 @@ def _make_hypothesis_node(
             except ValidationError as exc:
                 last_exc = exc
                 continue
-            return {"hypothesis": proposed}
+            return {"hypothesis": proposed, "literature": tuple(snippets)}
         raise HypothesisConformanceError(
             f"LLM did not produce a schema-valid, compilable Hypothesis in {max_attempts} attempts"
         ) from last_exc
@@ -357,10 +377,63 @@ def _rank_node(state: OrchestratorState) -> dict:
     }
 
 
+#: Default cap on synthesis re-invocations when the LLM emits a malformed Synthesis
+#: or cites a material not in retrieved provenance (analogous to the hypothesis cap).
+DEFAULT_MAX_SYNTHESIS_ATTEMPTS = 3
+
+
+def _make_synthesis_node(
+    provider: SynthesisProvider | None,
+    max_attempts: int = DEFAULT_MAX_SYNTHESIS_ATTEMPTS,
+):
+    """The synthesis step (workflow step 7: LLM + RAG). Turns the ranked result into a
+    grounded, cited narrative, reusing the SAME literature the hypothesis step retrieved
+    (persisted in state — no second search). The LLM writes the prose, but every claim
+    must cite a record_id deterministic retrieval returned; this checks each emission
+    with ``ungrounded_record_ids`` and, on a miss, feeds the offending ids back and
+    retries (up to ``max_attempts``) before raising SynthesisConformanceError — so an
+    ungrounded narrative never reaches the output validator. With no provider injected
+    the step is a pass-through (its slice not yet active)."""
+
+    def synthesis(state: OrchestratorState) -> dict:
+        if provider is None:
+            return {}
+        goal = state["goal"]
+        result = state["result"]
+        literature = state.get("literature", ())
+        retrieved_ids = {c.identifier for c in state.get("candidates", ())}
+        nonce = secrets.token_hex(8)
+        prior_error: str | None = None
+        for _ in range(max_attempts):
+            prompt = build_synthesis_prompt(
+                goal, result, literature, nonce=nonce, prior_error=prior_error
+            )
+            # Two retry-worthy failures, both fed back: the LLM emits a malformed
+            # Synthesis (~15% schema-rejection rate), or it cites a material that was
+            # not retrieved. Non-validation failures (transport/throttle) propagate.
+            try:
+                produced = provider.synthesize(prompt)
+            except ValidationError as exc:
+                prior_error = str(exc)
+                continue
+            ungrounded = ungrounded_record_ids(produced, retrieved_ids)
+            if not ungrounded:
+                return {"synthesis": produced}
+            prior_error = (
+                f"these cited materials were not in retrieved provenance: {', '.join(ungrounded)}"
+            )
+        raise SynthesisConformanceError(
+            f"no grounded, schema-valid Synthesis in {max_attempts} attempts: {prior_error}"
+        )
+
+    return synthesis
+
+
 def build_orchestrator(
     adapter: SourceAdapter | None = None,
     provider: HypothesisProvider | None = None,
     rag: LiteratureRetriever | None = None,
+    synthesis_provider: SynthesisProvider | None = None,
     checkpointer: MemorySaver | None = None,
 ) -> CompiledStateGraph:
     """Build and compile the triage orchestrator graph.
@@ -368,14 +441,16 @@ def build_orchestrator(
     The nine ``WORKFLOW_STEPS`` become nodes wired START -> gate -> ... ->
     render -> END, compiled with a checkpointer (v1 default: an in-process
     ``MemorySaver``) so execution state is captured for trace export and resume.
-    The ``gate`` (deterministic input policy), ``hypothesis`` (LLM,
-    retry-on-malformed) and ``spec_build`` steps and the ``retrieve`` ->
-    ``filter`` -> ``rank`` deterministic core are wired; the rest are
-    pass-throughs until their slices land. ``adapter``, ``provider`` and ``rag`` are
-    the injected retrieval, LLM and literature seams (fakes make the whole graph
-    offline-testable); the adapter's ``property_vocabulary`` is bound into the
-    hypothesis prompt so the LLM proposes only properties the source returns, and when
-    ``rag`` is supplied the hypothesis step grounds its prompt in retrieved abstracts.
+    The ``gate`` (deterministic input policy), ``hypothesis`` (LLM + RAG,
+    retry-on-malformed), ``spec_build`` and ``synthesis`` (LLM + RAG, grounding
+    retry) steps and the ``retrieve`` -> ``filter`` -> ``rank`` deterministic core
+    are wired; the rest are pass-throughs until their slices land. ``adapter``,
+    ``provider``, ``rag`` and ``synthesis_provider`` are the injected retrieval, LLM,
+    literature and synthesis-LLM seams (fakes make the whole graph offline-testable);
+    the adapter's ``property_vocabulary`` is bound into the hypothesis prompt so the
+    LLM proposes only properties the source returns, ``rag`` (when supplied) grounds
+    the hypothesis prompt in retrieved abstracts that are persisted for synthesis to
+    reuse, and ``synthesis_provider`` writes the grounded narrative.
     """
     nodes = {
         "gate": _gate_node,
@@ -384,6 +459,7 @@ def build_orchestrator(
         "retrieve": _make_retrieve_node(adapter),
         "filter": _make_filter_node(adapter),
         "rank": _rank_node,
+        "synthesis": _make_synthesis_node(synthesis_provider),
     }
     builder = StateGraph(OrchestratorState)
     for step in WORKFLOW_STEPS:

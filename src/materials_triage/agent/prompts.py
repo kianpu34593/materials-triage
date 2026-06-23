@@ -161,6 +161,7 @@ def build_synthesis_prompt(
     snippets: Iterable[LiteraturePassage],
     *,
     nonce: str,
+    prior_error: str | None = None,
 ) -> str:
     """Build the human-message prompt for the synthesis step (workflow step 7).
 
@@ -185,7 +186,7 @@ def build_synthesis_prompt(
         )
         for p in snippets
     )
-    return (
+    prompt = (
         "Write a grounded synthesis of the ranked materials shortlist below for the "
         "scientist's goal.\n"
         "Rules: cite ONLY the listed material ids; do not invent materials or numbers; "
@@ -195,3 +196,9 @@ def build_synthesis_prompt(
         f"Ranked shortlist (the only citable materials):\n{shortlist}\n\n"
         f"Literature abstracts for grounding:\n{literature}"
     )
+    if prior_error is not None:
+        prompt += (
+            "\n\nYour previous response was rejected:\n"
+            f"{prior_error}\nCite only the listed material ids; return a corrected response."
+        )
+    return prompt

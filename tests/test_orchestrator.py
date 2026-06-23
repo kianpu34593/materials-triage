@@ -17,6 +17,7 @@ from materials_triage.agent.orchestrator import (
     HypothesisConformanceError,
     InputRefused,
     SpecCompilationError,
+    SynthesisConformanceError,
     build_orchestrator,
     resume_run,
 )
@@ -40,6 +41,7 @@ from materials_triage.core.schema import (
     TriageResult,
     TriageSpec,
 )
+from materials_triage.core.synthesis import GroundedClaim, Synthesis
 from materials_triage.retrieval.rag import LiteraturePassage
 from materials_triage.sources.base import SourceAdapter
 
@@ -575,6 +577,133 @@ class _FakeRag:
         return list(self._passages)
 
 
+class _StubSynthesisProvider:
+    """An offline synthesis LLM seam: records every prompt and returns a fixed
+    Synthesis (or one per call, to drive the grounding-retry path)."""
+
+    def __init__(self, *syntheses):
+        self._syntheses = list(syntheses)
+        self.prompts = []
+
+    def synthesize(self, prompt):
+        self.prompts.append(prompt)
+        return self._syntheses[min(len(self.prompts) - 1, len(self._syntheses) - 1)]
+
+
+def test_synthesis_node_lands_a_grounded_synthesis_in_state():
+    """Workflow step 7: with a synthesis provider injected, the node turns the ranked
+    result into a grounded Synthesis and lands it in state — every claim cites a
+    retrieved candidate (here mp-1), so the narrative is non-fabricated by construction."""
+    synthesis = Synthesis(
+        summary="ZnO leads for a wide-gap photocatalyst.",
+        claims=(GroundedClaim(text="ZnO has a ~3 eV gap.", record_id="mp-1"),),
+    )
+    syn_provider = _StubSynthesisProvider(synthesis)
+    provider = _StubProvider(_valid_hypothesis())
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)])
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(
+        adapter=adapter, provider=provider, synthesis_provider=syn_provider
+    )
+    config = {"configurable": {"thread_id": "synth-ok"}}
+    final = orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert final["synthesis"] is synthesis
+    assert syn_provider.prompts  # the node called the synthesis provider
+
+
+class _FlakySynthesisProvider:
+    """Raises a pydantic ValidationError (malformed Synthesis) for the first
+    ``fail_times`` calls, then returns a grounded Synthesis. Records every prompt."""
+
+    def __init__(self, fail_times, good):
+        self.fail_times = fail_times
+        self._good = good
+        self.prompts = []
+
+    def synthesize(self, prompt):
+        self.prompts.append(prompt)
+        if len(self.prompts) <= self.fail_times:
+            Synthesis(summary="   ", claims=())  # raises ValidationError (blank summary)
+        return self._good
+
+
+def test_synthesis_node_retries_malformed_llm_output_then_succeeds():
+    """Like the hypothesis step, synthesis conforms the LLM to its schema by RETRYING
+    on a pydantic ValidationError (the measured ~15% malformed-output rate), not by
+    crashing the run. After one malformed attempt and one good one, the Synthesis lands."""
+    good = Synthesis(
+        summary="ZnO leads.",
+        claims=(GroundedClaim(text="ZnO has a ~3 eV gap.", record_id="mp-1"),),
+    )
+    syn_provider = _FlakySynthesisProvider(fail_times=1, good=good)
+    provider = _StubProvider(_valid_hypothesis())
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)])
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(
+        adapter=adapter, provider=provider, synthesis_provider=syn_provider
+    )
+    config = {"configurable": {"thread_id": "synth-malformed"}}
+    final = orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert final["synthesis"] is good
+    assert len(syn_provider.prompts) == 2  # one malformed attempt + one good
+
+
+def test_synthesis_node_retries_when_a_claim_is_ungrounded_then_succeeds():
+    """The synthesis LLM may cite a material that was not retrieved. The node catches
+    that with the grounding check, feeds the offending record_id back, and retries —
+    so a transient hallucinated citation self-corrects instead of reaching the output
+    validator. After one ungrounded attempt and one good one, the grounded Synthesis
+    lands and the bad id appears in the retry prompt."""
+    bad = Synthesis(
+        summary="An invented lead.",
+        claims=(GroundedClaim(text="MgX has a huge gap.", record_id="mp-999"),),
+    )
+    good = Synthesis(
+        summary="ZnO leads.",
+        claims=(GroundedClaim(text="ZnO has a ~3 eV gap.", record_id="mp-1"),),
+    )
+    syn_provider = _StubSynthesisProvider(bad, good)
+    provider = _StubProvider(_valid_hypothesis())
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)])
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(
+        adapter=adapter, provider=provider, synthesis_provider=syn_provider
+    )
+    config = {"configurable": {"thread_id": "synth-retry"}}
+    final = orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert final["synthesis"] is good
+    assert len(syn_provider.prompts) == 2  # one ungrounded attempt + one corrected
+    assert "mp-999" in syn_provider.prompts[1]  # the ungrounded id was fed back
+
+
+def test_synthesis_node_raises_when_it_cannot_ground_within_the_cap():
+    """If every attempt cites an unretrieved material, the node exhausts its retries
+    and raises SynthesisConformanceError — an ungrounded narrative never silently
+    reaches the output validator or the rendered result."""
+    ungrounded = Synthesis(
+        summary="Always invented.",
+        claims=(GroundedClaim(text="bogus", record_id="mp-404"),),
+    )
+    syn_provider = _StubSynthesisProvider(ungrounded)
+    provider = _StubProvider(_valid_hypothesis())
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)])
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(
+        adapter=adapter, provider=provider, synthesis_provider=syn_provider
+    )
+    config = {"configurable": {"thread_id": "synth-fail"}}
+
+    with pytest.raises(SynthesisConformanceError):
+        orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+
 def test_hypothesis_node_grounds_the_prompt_in_rag_literature_via_extracted_keywords():
     """Workflow step 3 is LLM + RAG: when a ``rag`` seam is injected, the node first
     asks the provider to distill the goal into search keywords, searches the literature
@@ -600,6 +729,28 @@ def test_hypothesis_node_grounds_the_prompt_in_rag_literature_via_extracted_keyw
     assert rag.queries == ["wide band gap oxide photocatalyst"]
     # The returned abstract was grounded into the prompt the LLM actually received.
     assert "TiO2 shows a wide band gap suited to photocatalysis." in provider.prompts[0]
+
+
+def test_hypothesis_node_persists_retrieved_literature_for_reuse_downstream():
+    """The passages the hypothesis step retrieves are persisted in run state so the
+    synthesis step can ground its narrative in the SAME papers — retrieved once, never
+    re-searched. (Without this they would be used in the prompt and discarded.)"""
+    passage = LiteraturePassage(
+        provenance=Provenance(source="OpenAlex", record_id="W1", method="literature"),
+        title="Wide-gap oxides",
+        text="TiO2 shows a wide band gap.",
+    )
+    rag = _FakeRag([passage])
+    provider = _RagProvider(keywords="wide band gap oxide")
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)], vocabulary={"band_gap": "eV"})
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=2.0),))
+
+    orchestrator = build_orchestrator(adapter=adapter, provider=provider, rag=rag)
+    config = {"configurable": {"thread_id": "lit-persist"}}
+    final = orchestrator.invoke({"goal": "wide-gap oxide", "spec": spec}, config)
+
+    assert final["literature"] == (passage,)
+    assert len(rag.queries) == 1  # searched once for the whole run, not per stage
 
 
 class _BrokenProvider:
