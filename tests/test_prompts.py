@@ -83,6 +83,53 @@ def test_build_hypothesis_prompt_carries_goal_ranking_guidance_vocab_and_literat
     assert "TiO2 shows a wide band gap." in prompt  # the literature snippet
 
 
+def test_ranking_target_guidance_forbids_inventing_off_goal_objectives():
+    """Defense-in-depth (H): the ranking guidance tells the LLM to only propose
+    objectives the goal asks for and to tie each rationale to the goal — cutting
+    invented objectives at the source, before the critic even runs."""
+    lowered = RANKING_TARGET_GUIDANCE.lower()
+    assert "goal" in lowered
+    assert "invent" in lowered or "do not propose" in lowered
+
+
+def test_build_critique_prompt_lists_objectives_and_fences_the_goal():
+    """The critique prompt lists each proposed ranking objective (trusted context to
+    judge) and fences the scientist's goal as untrusted DATA with the call's nonce."""
+    from materials_triage.agent.prompts import build_critique_prompt
+    from materials_triage.core.hypothesis import ConstraintProposal, RankingProposal
+    from materials_triage.core.schema import Constraint, RankingTarget
+
+    proposals = (
+        ConstraintProposal(
+            constraint=Constraint(property_name="band_gap", min=2.0),
+            rationale="wide gap",
+            confidence=0.8,
+        ),
+        RankingProposal(
+            ranking_target=RankingTarget(
+                property_name="bulk_modulus",
+                direction="maximize",
+                weight=1.0,
+                lower=1.0,
+                target=3.0,
+            ),
+            rationale="prefer stiff",
+            confidence=0.8,
+        ),
+    )
+
+    prompt = build_critique_prompt("a soft dielectric", proposals, nonce="NONCE7")
+
+    assert "bulk_modulus" in prompt  # the objective to judge is listed
+    assert "untrusted_data" in prompt and "NONCE7" in prompt  # goal fenced as DATA
+    # H': the prompt shows the hard constraints (so bounds can be flagged) and asks for
+    # redundancy + bound-flag judgments, not just relevance.
+    assert "band_gap" in prompt  # the constraint bound is shown
+    lowered = prompt.lower()
+    assert "redundant" in lowered
+    assert "bound" in lowered
+
+
 def test_build_hypothesis_prompt_fences_untrusted_goal_and_literature():
     """The goal and the literature snippets are untrusted DATA — fenced in the
     trust-boundary tags with the call's nonce so the LLM treats them as content,

@@ -606,6 +606,54 @@ def test_retrieve_excludes_forbidden_elements_server_side():
     assert captured["params"]["exclude_elements"] == "Cd,Pb"
 
 
+# A long exclude list (the fidelity gate's ~29-element non-toxic set) exceeds MP's
+# 60-char cap on the `exclude_elements` query string (a live 422). Such a predicate
+# must be enforced locally instead of pushed — never silently dropped.
+_BIG_EXCLUDE = frozenset(
+    "Ac Am As At Be Bk Cd Cf Cm Es Fm Fr Hg Lr Md No Np Pa Pb Pm Po Pu Ra Rn Sb Tc Th Tl U".split()
+)
+
+
+def test_classify_routes_an_oversized_none_predicate_to_local():
+    """A 'none' predicate whose joined exclude string exceeds MP's 60-char limit can't
+    be pushed (MP 422s it), so it is routed to the local filter — a small one still
+    stays the server's job."""
+    big = TriageSpec(
+        element_predicates=(ElementPredicate(quantifier="none", members=_BIG_EXCLUDE),)
+    )
+    small = TriageSpec(
+        element_predicates=(ElementPredicate(quantifier="none", members=frozenset({"Pb", "Cd"})),)
+    )
+    adapter = MaterialsProjectAdapter(http_get=lambda *a: {})
+
+    big_routing = adapter.classify_predicates(big)
+    small_routing = adapter.classify_predicates(small)
+
+    assert any(p.quantifier == "none" for p in big_routing.local_element_predicates)
+    assert not any(p.quantifier == "none" for p in small_routing.local_element_predicates)
+
+
+def test_retrieve_does_not_push_an_oversized_exclude_elements():
+    """An oversized 'none' list is NOT pushed as `exclude_elements` (which would 422);
+    it is enforced locally instead. The `elements` field is still requested so the
+    local filter has the composition to check."""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=1.0),),
+        element_predicates=(ElementPredicate(quantifier="none", members=_BIG_EXCLUDE),),
+    )
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    assert "exclude_elements" not in captured["params"]
+    assert "elements" in captured["params"]["_fields"].split(",")
+
+
 def test_retrieve_does_not_push_an_any_element_predicate():
     """MP has no OR-membership query param, so an "any"-quantifier predicate cannot be
     pushed — the adapter must not leak its members into `elements`/`exclude_elements`,

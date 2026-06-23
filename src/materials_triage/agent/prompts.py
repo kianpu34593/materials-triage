@@ -74,7 +74,10 @@ inferred from the candidate pool:
 - direction "target" (a moderate value is best): give the full `lower` < `target` < \
 `upper` window, peaking at `target`.
 Optionally set `curvature` (>1 strict, <1 lenient; default 1 linear). Weights are \
-proportional shares; they are renormalized to sum to 1."""
+proportional shares; they are renormalized to sum to 1.
+Only propose objectives the goal asks for or clearly implies: each ranking target's \
+rationale must tie back to the scientist's goal. Do not invent objectives the goal \
+never requested (e.g. do not rank by mechanical stiffness for a purely optical goal)."""
 
 
 def build_property_vocabulary_guidance(vocabulary: Mapping[str, str | None]) -> str:
@@ -146,6 +149,58 @@ def build_hypothesis_prompt(
             "Your previous response was rejected because it did not conform to the "
             f"required schema:\n{prior_error}\nReturn a corrected response."
         )
+    return "\n\n".join(parts)
+
+
+def build_critique_prompt(goal: str, proposals: Iterable, *, nonce: str) -> str:
+    """Build the prompt for the ranking-target critic (a second agent in the
+    hypothesis step). The proposed ranking objectives and their rationales are
+    *trusted* instruction context (the items to judge); the scientist's ``goal`` is
+    *untrusted* DATA, fenced via
+    :func:`~materials_triage.policy.guardrails.wrap_untrusted` with the call's
+    ``nonce``. The critic votes keep/drop on each objective against the goal — it must
+    judge relevance only, never invent new objectives. Pair with
+    :data:`ROLE_SYSTEM_PROMPT`.
+    """
+    proposals = list(proposals)
+    ranking = [p for p in proposals if p.kind == "ranking_target"]
+    listed = "\n".join(
+        f"- {p.ranking_target.property_name} ({p.ranking_target.direction}): {p.rationale}"
+        for p in ranking
+    )
+    constraints = [p for p in proposals if p.kind == "constraint"]
+    constraint_lines = "\n".join(
+        f"- {p.constraint.property_name}: "
+        + ", ".join(
+            part
+            for part in (
+                f"min={p.constraint.min}" if p.constraint.min is not None else "",
+                f"max={p.constraint.max}" if p.constraint.max is not None else "",
+            )
+            if part
+        )
+        for p in constraints
+    )
+    parts = [
+        "You are a critic reviewing the objectives proposed for a materials triage. For "
+        "EACH ranking objective below, decide whether to keep it: drop it if the goal "
+        "never asked for or implied it (relevance), or if it is REDUNDANT with another "
+        "kept objective measuring the same property (redundancy). Judge against the goal "
+        "text alone; do not invent new objectives.",
+        f"Proposed ranking objectives:\n{listed}",
+    ]
+    if constraint_lines:
+        parts.append(
+            "Hard constraints (do not change these — only FLAG a bound that looks "
+            "inactive, i.e. excludes nothing, impossible, i.e. excludes everything, or "
+            f"counter to the goal):\n{constraint_lines}"
+        )
+    parts.append(f"Scientist's goal:\n{wrap_untrusted(goal, label='user goal', nonce=nonce)}")
+    parts.append(
+        "Return a keep/drop verdict with a reason for every ranking objective, plus an "
+        "advisory bound flag for any constraint bound that concerns you (these flags are "
+        "surfaced to the human, never auto-applied)."
+    )
     return "\n\n".join(parts)
 
 

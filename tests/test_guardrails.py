@@ -118,3 +118,29 @@ def test_in_the_lab_trigger_does_not_match_within_the_lab():
     # word-boundary matching: "within the lab" must not trip the "in the lab" trigger
     decision = check_input("rank materials characterized within the lab's published dataset")
     assert decision.allowed is True
+
+
+# --- allowlist-first scope (D): off-topic with no materials signal is refused ---
+
+
+def test_off_topic_request_with_no_materials_signal_is_refused():
+    # Allowlist-first: a request that shows no materials-domain signal at all is out
+    # of scope. The refusal carries the capabilities redirect, never a bare "no".
+    decision = check_input("what's the weather in Boston tomorrow")
+    assert decision.allowed is False
+    assert decision.category == "out_of_scope"
+    assert "Materials-Triage" in decision.reason  # capabilities redirect appended
+
+
+def test_formula_only_query_is_allowed_via_the_formula_signal():
+    # A request whose only materials signal is a chemical formula (no domain keyword)
+    # is still in scope — the formula shape is recognized as materials intent.
+    assert check_input("compare Fe2O3 and TiO2").allowed is True
+
+
+def test_capitalized_non_formula_word_is_not_mistaken_for_a_formula():
+    # The formula regex requires a subscript, so an ordinary capitalized word like a
+    # surname does not read as a formula — keeps the off-topic refusal honest.
+    decision = check_input("who is McDonald")
+    assert decision.allowed is False
+    assert decision.category == "out_of_scope"

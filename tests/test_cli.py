@@ -197,6 +197,36 @@ def test_main_forwards_top_k_to_triage_and_render(monkeypatch, capsys):
     assert "5 of 25" in out  # forwarded to render (display cap)
 
 
+class _RecordingCritic:
+    def __init__(self, critique):
+        self._critique = critique
+        self.calls = 0
+
+    def critique(self, prompt):
+        self.calls += 1
+        return self._critique
+
+
+def test_triage_forwards_the_critic_to_the_pipeline():
+    """triage wires an injected RankingCritic into the orchestrator, so the critic
+    actually runs on the hypothesis (the off-goal-objective guard reaches a real run)."""
+    from materials_triage.core.critique import RankingCritique, TargetVerdict
+
+    critic = _RecordingCritic(
+        RankingCritique(
+            verdicts=(TargetVerdict(property_name="band_gap", keep=True, reason="core"),)
+        )
+    )
+    adapter = _FakeAdapter([_candidate("mp-1", 3.0)])
+    provider = _StubProvider(_compilable_hypothesis())
+
+    triage(
+        "wide-gap oxide", adapter=adapter, provider=provider, critic=critic, thread_id="t-critic"
+    )
+
+    assert critic.calls == 1
+
+
 def test_main_defaults_to_the_pi_view(monkeypatch, capsys):
     """With no --view, main renders the concise PI view (which leads with 'Goal:' and
     a 'Ranked shortlist:' section, not the audit's 'Run:' header)."""

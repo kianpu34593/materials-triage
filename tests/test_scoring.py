@@ -78,6 +78,25 @@ def test_apply_local_filters_drops_a_candidate_failing_a_local_any_predicate():
     assert excluded[0].reason == "element_mismatch"
 
 
+def test_apply_local_filters_drops_a_candidate_failing_a_local_none_predicate():
+    """A local 'none' element predicate (routed locally when its exclude list is too
+    long to push to MP): a candidate containing an excluded element is dropped
+    (element_mismatch); one free of every excluded element survives."""
+    has_pb = Candidate(identifier="mp-pb", formula="PbO", elements=frozenset({"Pb", "O"}))
+    clean = Candidate(identifier="mp-zn", formula="ZnO", elements=frozenset({"Zn", "O"}))
+    routing = PredicateRouting(
+        local_element_predicates=(
+            ElementPredicate(quantifier="none", members=frozenset({"Pb", "Hg", "Cd"})),
+        )
+    )
+
+    survivors, excluded = apply_local_filters([has_pb, clean], routing)
+
+    assert [c.identifier for c in survivors] == ["mp-zn"]
+    assert excluded[0].candidate.identifier == "mp-pb"
+    assert excluded[0].reason == "element_mismatch"
+
+
 def test_normalize_maximize_maps_highest_value_to_one():
     """For a 'maximize' target, the largest value is best and maps to 1, the
     smallest to 0, and the rest scale linearly between."""

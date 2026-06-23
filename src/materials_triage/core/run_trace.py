@@ -103,7 +103,9 @@ def export_run(orchestrator, config: dict) -> TriageRun:
         # synthesis degradation) into the trace's one caveats surface, the same way
         # result.excluded unions the two exclusion channels at the presentation boundary.
         caveats=(
-            tuple(final.get("retrieval_caveats", ()))
+            tuple(final.get("hypothesis_caveats", ()))
+            + tuple(final.get("retrieval_caveats", ()))
+            + tuple(final.get("spec_caveats", ()))
             + tuple(final.get("caveats", ()))
             + tuple(final.get("synthesis_caveats", ()))
         ),
