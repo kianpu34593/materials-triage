@@ -1262,3 +1262,45 @@ def test_resume_run_recovers_from_an_infra_failure_reusing_upstream_steps():
     assert provider.calls == 1
     assert adapter.calls == 2
     assert [sc.candidate.identifier for sc in final["result"].ranked] == ["mp-1"]
+
+
+def test_checkpoint_serde_emits_no_unregistered_or_blocked_warnings(caplog):
+    """The checkpointer the orchestrator compiles with allowlists our pydantic domain
+    models for msgpack, so a full run (which serializes them and reads them back on
+    resume + export) emits no 'unregistered type' (future-blocked) or 'Blocked
+    deserialization' warnings. Clears LangGraph's warn-once cache so an unregistered
+    type would re-warn here if the allowlist were incomplete."""
+    import logging
+
+    import langgraph.checkpoint.serde.jsonplus as jp
+
+    jp._warned_unregistered_types.clear()
+    jp._warned_blocked_types.clear()
+    caplog.set_level(logging.WARNING, logger="langgraph.checkpoint.serde.jsonplus")
+
+    provider = _StubProvider(_hypothesis_with_unnormalized_weights())
+    adapter = _FakeAdapter(
+        # mp-drop fails band_gap >= 2.0, so an ExcludedCandidate is serialized too.
+        [_candidate("mp-keep", 3.0), _candidate("mp-drop", 1.0)],
+        vocabulary={"band_gap": "eV"},
+    )
+    syn = _StubSynthesisProvider(
+        Synthesis(
+            summary="ZnO leads.",
+            claims=(GroundedClaim(text="ZnO ~3 eV.", record_id="mp-keep"),),
+        )
+    )
+    orchestrator = build_orchestrator(adapter=adapter, provider=provider, synthesis_provider=syn)
+    config = {"configurable": {"thread_id": "serde-clean"}}
+
+    paused = orchestrator.invoke({"goal": "wide-gap oxide"}, config)
+    recommended = paused["__interrupt__"][0].value["recommended_spec"]
+    orchestrator.invoke(Command(resume=recommended), config)
+    export_run(orchestrator, config)
+
+    offenders = [
+        r.getMessage()
+        for r in caplog.records
+        if "unregistered type" in r.getMessage() or "Blocked deserialization" in r.getMessage()
+    ]
+    assert not offenders, offenders
