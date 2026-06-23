@@ -112,6 +112,13 @@ def _query_params(spec: TriageSpec) -> dict[str, str]:
     for b in spec.boolean_constraints:
         if b.property_name in FIELD_UNITS:
             params[b.property_name] = "true" if b.required else "false"
+    # Element-count cap → MP's inclusive nelements range params. Same vocab-gate:
+    # push only when the adapter actually publishes the nelements field.
+    if spec.count is not None and "nelements" in FIELD_UNITS:
+        if spec.count.min is not None:
+            params["nelements_min"] = str(spec.count.min)
+        if spec.count.max is not None:
+            params["nelements_max"] = str(spec.count.max)
     return params
 
 

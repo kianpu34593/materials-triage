@@ -12,6 +12,7 @@ from materials_triage.core.ranking import rank
 from materials_triage.core.schema import (
     BooleanConstraint,
     Constraint,
+    CountConstraint,
     ElementPredicate,
     RankingTarget,
     TriageSpec,
@@ -483,6 +484,23 @@ def test_retrieve_does_not_push_a_boolean_constraint_outside_the_vocabulary():
     MaterialsProjectAdapter(http_get=spy).retrieve(spec)
 
     assert "is_superconductor" not in captured["params"]
+
+
+def test_retrieve_pushes_a_count_constraint_as_nelements_bounds():
+    """A CountConstraint on composition cardinality is pushed as MP's inclusive
+    `nelements_min`/`nelements_max` range params, shrinking the pool server-side."""
+    captured: dict = {}
+
+    def spy(url, params, headers):
+        captured["params"] = params
+        return {"data": [], "meta": {}}
+
+    spec = TriageSpec(count=CountConstraint(min=2, max=3))
+
+    MaterialsProjectAdapter(http_get=spy).retrieve(spec)
+
+    assert captured["params"]["nelements_min"] == "2"
+    assert captured["params"]["nelements_max"] == "3"
 
 
 def test_retrieve_sends_the_api_key_header():
