@@ -1,4 +1,4 @@
-# Session Handoff - 2026-06-22 20:51
+# Session Handoff - 2026-06-22 23:12
 
 > Single living handoff, git-tracked at `docs/handoff.md`. Keep it **lean** — deep per-session
 > history lives in [`docs/handoff-archive.md`](handoff-archive.md); recurring gotchas live in
@@ -24,11 +24,12 @@ One function at a time, stop for approval after each.
 Port every increment from the reference impl on `feat/fast-track-wire-guardrails`.
 
 **1 · #39 — Source vocabulary binding** *(foundational: kills "vocab drift → empty results", expands past
-today's 6 fields; owns the `FIELD_UNITS`/`_FIELD_ORIGIN` lockstep invariant)* — **supply side DONE**
-(branch `feat/source-vocabulary`, PR open): schema-derived vocabulary via `tools/gen_mp_vocab.py` parsing
-the vendored MP OpenAPI → committed `_mp_fields.py` (39 fields, units + xc origins); adapter derives
-`FIELD_UNITS`/`_FIELD_ORIGIN` from it; `property_vocabulary()` exposes all 39; `PropertyValue.unit` relaxed
-to `str | None` for dimensionless. Live-smoked.
+today's 6 fields; owns the `FIELD_UNITS`/`_FIELD_ORIGIN` lockstep invariant)* — **supply side MERGED (#61)**:
+schema-derived vocabulary via `tools/gen_mp_vocab.py` parsing the vendored MP OpenAPI → committed
+`_mp_fields.py` (39 fields, units + xc origins); adapter derives `FIELD_UNITS`/`_FIELD_ORIGIN` from it;
+`property_vocabulary()` exposes all 39; `PropertyValue.unit` relaxed to `str | None` for dimensionless; the
+adapter's `_scalar` VRH-collapse was added (no-mistakes review caught that it was assumed-but-missing →
+`retrieve()` crashed on elastic materials). Live-smoked.
 - [x] `property_vocabulary()` on the MP adapter — derive queryable name surface from the published API schema
 - [x] grow `FIELD_UNITS` + `_FIELD_ORIGIN` in lockstep with the new surface
 - [ ] bind the vocabulary into the hypothesis prompt ("use ONLY these names") — **moved to #34** (hypothesis
@@ -93,6 +94,10 @@ from being spent on rows that `apply_hard_filters` will drop. That stage stays t
 - **Retrieval:** `sources/base.py` + `stubs.py` + `materials_project.py` — MP adapter does a **two-call**
   retrieve (summary → batched `/materials/tasks/` for per-property `xc_functional`). `retrieval/rag.py`
   BM25 literature RAG (abstract-only).
+- **#39 vocabulary (merged #61):** `tools/gen_mp_vocab.py` + vendored `tools/mp_summary_schema.json` →
+  committed `src/materials_triage/sources/_mp_fields.py` (39-field `{unit, origin}` table); adapter derives
+  `FIELD_UNITS`/`_FIELD_ORIGIN` from it and exposes `property_vocabulary()`; `_scalar` collapses the VRH
+  moduli dict; `PropertyValue.unit: str | None` (dimensionless). `tools/` on the test pythonpath.
 - **Agent:** `agent/llm.py` Bedrock `HypothesisProvider` (injected `complete` seam; `us.*` inference-profile
   model id). `agent/prompts.py` `ROLE_SYSTEM_PROMPT` + `build_chat_messages`. `agent/orchestrator.py`
   LangGraph graph with per-stage exclusion channels + retry + spec-build HITL gate; `core/run_trace.py`
@@ -104,13 +109,18 @@ from being spent on rows that `apply_hard_filters` will drop. That stage stays t
 - **Docs/ADRs:** 0001 retrieval · 0002 RAG abstracts-only · 0003 orchestrator-on-LangGraph · 0004 guardrail
   threat-model · 0005 hosting & step-cache.
 - **Reference impl (NOT on `main`):** `feat/fast-track-wire-guardrails` (local + origin) — full end-to-end
-  wiring + `core/synthesis.py`, `agent/validator.py`, `render.py`, `cli.py`, `property_vocabulary()`, VRH
-  `_scalar` collapse. Port from it.
+  wiring + `core/synthesis.py`, `agent/validator.py`, `render.py`, `cli.py`. Port from it. (NB:
+  `property_vocabulary()` + the VRH `_scalar` collapse are now **on `main`** via #61 — no longer "port from
+  reference." ⚠️ Verify each remaining helper actually exists on `main` before citing it — the `_scalar`
+  assumption-not-verified bug is exactly how #61's review caught a crash. [memory: verify-against-main-not-reference-impl])
 
 ## Status
-- **`main` @ `1745fe6`**, clean. 207 tests pass (3 `live` deselected).
+- **`main` @ `9266956`**, clean. 219 tests pass (3 `live` deselected).
+- **#39 supply side done** (merged #61): 39-field schema-derived vocabulary exposed via the adapter;
+  `PropertyValue.unit: str | None`; VRH `_scalar` collapse. Increment 4 (prompt binding) → **#34**.
 - **#37 done** (A #51 + D #55; B + C deferred). This unblocked **#38/#39/#41**.
-- **No parallel sessions in flight.** `feat/value-trust-metadata` merged (#55) + pruned.
+- **No parallel sessions in flight.** `feat/source-vocabulary` (#61) + `docs/handoff-38-pagination-mechanics`
+  (#60) merged + pruned; `feat/value-trust-metadata` (#55) merged + pruned.
 - **Known issues / loose ends:**
   - Live Bedrock smoke test ~15% flaky by design (mitigated by the #45 retry loop).
   - Obsolete `.git/info/exclude` line 9 (ADR-0005 path, now tracked) — safe to delete.
@@ -145,7 +155,14 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
 - **Vocabulary binding (#39):** the *adapter*, not the LLM, owns the queryable name surface; publish it via
   `property_vocabulary()` and feed the prompt "use ONLY these names," or you get silent empty results.
 - **Only the live end-to-end run finds integration bugs** unit tests miss (vocab drift, PI/audit view
-  mismatch, VRH-dict crash). Render BOTH views from ONE `TriageRun`.
+  mismatch, VRH-dict crash). Render BOTH views from ONE `TriageRun`. *#61 corollary:* a placeholder test
+  value (`bulk_modulus=1.0`) hid the real `{voigt,reuss,vrh}`-dict crash — fixtures for object-typed fields
+  must use the **real payload shape**, and verify a ported helper exists on `main` before citing it (the
+  no-mistakes review's grep caught the missing `_scalar`). [memory: verify-against-main-not-reference-impl]
+- **MP OpenAPI for the vocabulary:** at `GET /openapi.json` (3.1.0; `SummaryDoc` = 69 props) — needs the
+  `X_API_KEY` header **and** a non-`urllib` User-Agent (MP WAFs `Python-urllib/*` → 403; `requests` passes).
+  Origins are a small controlled set; **elasticity has no `origins[]` entry** (moduli `origin=None`,
+  functional untraceable) and surface energies trace only to method-named docs. [memory: materials-project-api]
 - **Encode LLM contracts in the JSON schema, not hidden `model_validator`s** (discriminated union). LLM
   structured output is ~15% schema-flaky → the orchestrator retry loop is load-bearing. [memory: llm-structured-output-flakiness]
 - **MP API:** sandboxed mirror, `X_API_KEY` header; query-id ≠ returned-id; units not in payload (pinned in
@@ -154,9 +171,9 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
   abort` → `axi run --intent`; verify locally with `PYTHONPATH="$PWD/src" pytest`. [memory: no-mistakes-run-bootstrap]
 
 ## Context for Next Session
-- **Branch:** `main` @ `1745fe6`, clean. Build the next increment in a worktree (run pytest with
+- **Branch:** `main` @ `9266956`, clean. Build the next increment in a worktree (run pytest with
   `PYTHONPATH="$PWD/src" pytest`). Port from `feat/fast-track-wire-guardrails`.
-- **Verify merged state:** `python -m pytest -q` (207 pass, 3 deselected); `ruff check .`. Live (needs
+- **Verify merged state:** `python -m pytest -q` (219 pass, 3 deselected); `ruff check .`. Live (needs
   creds): `pytest -m live`.
 - **Credentials:** `X_API_KEY` (MP), `OPENALEX_MAILTO` (optional polite pool), AWS creds for Bedrock
   (prefer `~/.aws/credentials`; conftest `load_dotenv`s `.env`; AWS keys in `.env` must be UPPERCASE).
@@ -166,6 +183,7 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
   abort a commit → re-add + re-commit.
 - **Collaboration rules (CLAUDE.md):** ask before choosing between approaches; one function at a time then
   stop for approval; TDD via the `tdd` skill (never batch tests); **don't start coding until told.**
-- **Task tracker:** v1 path = #39, #38, **pagination (untracked sibling of #38)**, #20, #35, #22, #34, #25,
-  #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32, #33, #37. Deferred: #37 area B/C
-  (note: area B is now on the critical path for the "metal oxides" query). Hosting = HB1–HB10.
+- **Task tracker:** v1 path = ~~#39~~, **#38 + pagination (untracked sibling)** ← next, #20, #35, #22, #34,
+  #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32, #33, #37, **#39 (supply side;
+  binding → #34)**. Deferred: #37 area B/C (note: area B is now on the critical path for the "metal oxides"
+  query). Hosting = HB1–HB10.
