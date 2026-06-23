@@ -23,6 +23,7 @@ from materials_triage.sources.materials_project import (
     _fetch_run_types,
     _field_task_id,
     _origin_task_ids,
+    _paginate,
     _query_params,
 )
 
@@ -34,6 +35,33 @@ def _spec() -> TriageSpec:
 def _fixed(envelope: dict) -> MaterialsProjectAdapter:
     """An adapter whose transport always returns ``envelope`` (offline)."""
     return MaterialsProjectAdapter(http_get=lambda url, params, headers: envelope)
+
+
+def _paged_transport(pages: dict[int, list]):
+    """A transport that serves ``pages`` keyed by the requested ``_skip`` offset,
+    returning an empty page for any offset not present."""
+
+    def transport(url, params, headers):
+        return {"data": pages.get(int(params["_skip"]), []), "meta": {}}
+
+    return transport
+
+
+def test_paginate_accumulates_across_pages_until_a_short_page():
+    # _limit=2: skip=0 is full (2 docs) so it pages on; skip=2 is short (1 doc) so it stops.
+    pages = {0: [{"id": 0}, {"id": 1}], 2: [{"id": 2}]}
+    docs, capped = _paginate(_paged_transport(pages), {"_limit": "2"}, {})
+    assert [d["id"] for d in docs] == [0, 1, 2]
+    assert capped is False
+
+
+def test_paginate_stops_at_the_ceiling_and_flags_capped():
+    # Every page is full, so only the ceiling can halt the loop. _limit=2, ceiling=4
+    # ⇒ stop after two full pages (4 docs) without paging into the endless tail.
+    pages = {skip: [{"id": skip}, {"id": skip + 1}] for skip in range(0, 100, 2)}
+    docs, capped = _paginate(_paged_transport(pages), {"_limit": "2"}, {}, ceiling=4)
+    assert len(docs) == 4
+    assert capped is True
 
 
 def test_vocabulary_names_only_properties_retrieve_can_populate():
@@ -48,7 +76,7 @@ def test_vocabulary_names_only_properties_retrieve_can_populate():
 
     # a SummaryDoc carrying a value for every published field
     doc = {"material_id": "mp-1", "formula_pretty": "Si", **{name: 1.0 for name in vocab}}
-    candidate = _two_endpoint({"data": [doc]}, {"data": []}).retrieve(_spec())[0]
+    candidate = _two_endpoint({"data": [doc]}, {"data": []}).retrieve(_spec()).candidates[0]
 
     assert vocab  # non-empty: the source declares a surface
     assert set(vocab) <= set(candidate.properties)  # every published name got populated
@@ -160,6 +188,36 @@ def _two_endpoint(summary: dict, tasks: dict):
     return MaterialsProjectAdapter(http_get=transport)
 
 
+def test_retrieve_returns_a_retrieval_result_with_no_caveats_when_uncapped():
+    """retrieve now returns a RetrievalResult: candidates plus a run-level caveats
+    channel. A single short page exhausts the set, so nothing is capped."""
+    result = _two_endpoint(
+        {"data": [{"material_id": "mp-a", "formula_pretty": "TiO2", "band_gap": 1.7}]},
+        {"data": []},
+    ).retrieve(_spec())
+    assert [c.identifier for c in result.candidates] == ["mp-a"]
+    assert result.caveats == ()
+
+
+def test_retrieve_caveats_flag_a_capped_result(monkeypatch):
+    """When pagination hits the ceiling, retrieve surfaces a loud caveat (ranking
+    saw only a subset) rather than silently returning an arbitrary truncation."""
+    import materials_triage.sources.materials_project as mp
+
+    monkeypatch.setattr(mp, "_MAX_CANDIDATES", 2)
+    monkeypatch.setattr(mp, "_DEFAULT_LIMIT", 1)
+    full = {"material_id": "mp-x", "formula_pretty": "TiO2", "band_gap": 1.5}
+
+    def transport(url, params, headers):
+        if url == "/materials/tasks/":
+            return {"data": []}
+        return {"data": [full], "meta": {}}  # every page full ⇒ only the ceiling halts
+
+    result = MaterialsProjectAdapter(http_get=transport).retrieve(_spec())
+    assert len(result.candidates) == 2
+    assert result.caveats and "capped" in result.caveats[0]
+
+
 def test_retrieve_stamps_each_property_with_its_own_xc_functional():
     """The payoff: a value's provenance carries the functional of the task that
     produced IT — band_gap (GGA bandstructure) and the energy (r2SCAN) differ
@@ -194,7 +252,7 @@ def test_retrieve_stamps_each_property_with_its_own_xc_functional():
         ),
     )
 
-    props = _two_endpoint(summary, tasks).retrieve(spec)[0].properties
+    props = _two_endpoint(summary, tasks).retrieve(spec).candidates[0].properties
 
     assert props["band_gap"].provenance.xc_functional == "GGA"
     assert props["formation_energy_per_atom"].provenance.xc_functional == "r2SCAN"
@@ -217,7 +275,7 @@ def test_retrieve_leaves_xc_functional_none_when_the_origin_is_absent():
     tasks = {"data": [{"task_id": "t-energy", "run_type": "r2SCAN"}]}
     spec = TriageSpec(constraints=(Constraint(property_name="bulk_modulus", min=1.0),))
 
-    props = _two_endpoint(summary, tasks).retrieve(spec)[0].properties
+    props = _two_endpoint(summary, tasks).retrieve(spec).candidates[0].properties
 
     assert props["bulk_modulus"].provenance.xc_functional is None
 
@@ -244,7 +302,7 @@ def test_retrieve_maps_a_one_doc_payload_to_a_candidate():
         "meta": {},
     }
 
-    candidates = _fixed(envelope).retrieve(_spec())
+    candidates = _fixed(envelope).retrieve(_spec()).candidates
 
     assert len(candidates) == 1
     candidate = candidates[0]
@@ -263,7 +321,7 @@ def test_retrieve_stores_the_returned_id_not_the_query_id():
         "meta": {},
     }
 
-    candidate = _fixed(envelope).retrieve(_spec())[0]
+    candidate = _fixed(envelope).retrieve(_spec()).candidates[0]
 
     assert candidate.identifier == "mp-aaaaadyf"
     assert candidate.properties["band_gap"].provenance.record_id == "mp-aaaaadyf"
@@ -278,7 +336,7 @@ def test_retrieve_marks_a_null_field_as_missing():
         "meta": {},
     }
 
-    candidate = _fixed(envelope).retrieve(_spec())[0]
+    candidate = _fixed(envelope).retrieve(_spec()).candidates[0]
 
     band_gap = candidate.properties["band_gap"]
     assert band_gap.missing is True
@@ -301,7 +359,7 @@ def test_retrieve_maps_all_pinned_fields_with_their_units():
         "shear_modulus": 112.0,
     }
 
-    props = _fixed({"data": [doc], "meta": {}}).retrieve(_spec())[0].properties
+    props = _fixed({"data": [doc], "meta": {}}).retrieve(_spec()).candidates[0].properties
 
     assert props["band_gap"].unit == "eV"
     assert props["energy_above_hull"].unit == "eV/atom"
@@ -324,7 +382,7 @@ def test_retrieve_collapses_the_vrh_modulus_dict_to_its_vrh_average():
         "shear_modulus": {"voigt": 120.0, "reuss": 104.0, "vrh": 112.0},
     }
 
-    props = _fixed({"data": [doc], "meta": {}}).retrieve(_spec())[0].properties
+    props = _fixed({"data": [doc], "meta": {}}).retrieve(_spec()).candidates[0].properties
 
     assert props["bulk_modulus"].value == 197.5
     assert props["bulk_modulus"].unit == "GPa"
@@ -343,7 +401,7 @@ def test_retrieve_unwraps_multiple_docs_and_ignores_meta():
         "meta": {"total_doc": 2},
     }
 
-    candidates = _fixed(envelope).retrieve(_spec())
+    candidates = _fixed(envelope).retrieve(_spec()).candidates
 
     assert [c.identifier for c in candidates] == ["mp-a", "mp-b"]
 
@@ -351,7 +409,7 @@ def test_retrieve_unwraps_multiple_docs_and_ignores_meta():
 def test_retrieve_returns_empty_list_when_data_is_empty():
     """A query that matches nothing yields an empty data list, so retrieve returns
     no candidates rather than erroring."""
-    assert _fixed({"data": [], "meta": {}}).retrieve(_spec()) == []
+    assert _fixed({"data": [], "meta": {}}).retrieve(_spec()).candidates == ()
 
 
 def test_retrieve_requests_the_fields_the_pipeline_will_read():
@@ -443,7 +501,7 @@ def test_retrieve_carries_composition_for_local_element_filtering():
         http_get=lambda url, p, h: env if url == "/materials/summary/" else {"data": []}
     )
 
-    candidate = adapter.retrieve(_spec())[0]
+    candidate = adapter.retrieve(_spec()).candidates[0]
 
     assert candidate.elements == frozenset({"Fe", "O"})
 
@@ -714,7 +772,7 @@ def test_live_retrieve_returns_real_candidates():
     key set it should return candidates whose ids are the anonymized mp-… tokens."""
     spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=0.0),))
 
-    candidates = MaterialsProjectAdapter().retrieve(spec)
+    candidates = MaterialsProjectAdapter().retrieve(spec).candidates
 
     assert candidates
     assert candidates[0].identifier.startswith("mp-")
@@ -832,7 +890,7 @@ def test_live_retrieve_with_an_unqueryable_boolean_does_not_400():
         boolean_constraints=(BooleanConstraint(property_name="is_magnetic", required=True),)
     )
 
-    candidates = MaterialsProjectAdapter().retrieve(spec)
+    candidates = MaterialsProjectAdapter().retrieve(spec).candidates
 
     assert candidates  # no HTTP 400 — the param was never sent
 
@@ -853,7 +911,7 @@ def test_retrieved_candidates_flow_through_filter_and_rank():
         ranking_targets=(RankingTarget(property_name="density", direction="minimize", weight=1.0),),
     )
 
-    candidates = _fixed(envelope).retrieve(spec)
+    candidates = _fixed(envelope).retrieve(spec).candidates
     survivors, excluded = apply_hard_filters(candidates, spec.constraints)
     result = rank(survivors, spec.ranking_targets)
 

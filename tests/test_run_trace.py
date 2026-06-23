@@ -18,6 +18,7 @@ from materials_triage.core.schema import (
     PropertyValue,
     Provenance,
     RankingTarget,
+    RetrievalResult,
     TriageResult,
     TriageSpec,
 )
@@ -25,12 +26,13 @@ from materials_triage.sources.base import SourceAdapter
 
 
 class _FakeAdapter(SourceAdapter):
-    def __init__(self, candidates, routing=None):
+    def __init__(self, candidates, routing=None, caveats=()):
         self._candidates = candidates
         self._routing = routing or PredicateRouting()
+        self._caveats = tuple(caveats)
 
     def retrieve(self, spec):
-        return list(self._candidates)
+        return RetrievalResult(candidates=tuple(self._candidates), caveats=self._caveats)
 
     def classify_predicates(self, spec):
         return self._routing
@@ -62,6 +64,29 @@ def test_export_run_carries_caveats_into_the_trace():
 
     run = export_run(orchestrator, config)
 
+    assert any("toxicity" in c for c in run.caveats)
+
+
+def test_export_run_unions_retrieval_and_routing_caveats():
+    """Retrieval's own caveats (e.g. a capped result set) and the filter stage's
+    routing caveats land in the same trace channel, neither clobbering the other —
+    so the audit shows every honesty signal the run produced."""
+    routing = PredicateRouting(
+        caveats=("constraint on 'toxicity' was not applied: Materials Project provides no data",)
+    )
+    spec = TriageSpec(constraints=(Constraint(property_name="band_gap", min=1.0),))
+    adapter = _FakeAdapter(
+        [_candidate("mp-1", 3.0)],
+        routing=routing,
+        caveats=("result set capped at 10000 candidates; ranking over a subset",),
+    )
+    orchestrator = build_orchestrator(adapter=adapter)
+    config = {"configurable": {"thread_id": "caveat-union"}}
+    orchestrator.invoke({"goal": "nontoxic oxide", "spec": spec}, config)
+
+    run = export_run(orchestrator, config)
+
+    assert any("capped" in c for c in run.caveats)
     assert any("toxicity" in c for c in run.caveats)
 
 

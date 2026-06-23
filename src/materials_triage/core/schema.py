@@ -296,6 +296,21 @@ class PredicateRouting(BaseModel):
     caveats: tuple[str, ...] = ()
 
 
+class RetrievalResult(BaseModel):
+    """What a source's ``retrieve`` returns: the candidates it fetched plus any
+    run-level ``caveats`` the I/O loop must surface loudly. The caveats channel is
+    how retrieval reports that it could not return the *complete* filtered set — e.g.
+    the result was capped at a page ceiling, so ranking sees only a subset — without
+    silently truncating. Predicate-routing caveats (``PredicateRouting.caveats``) are
+    a separate stage; these are retrieval's own.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    candidates: tuple[Candidate, ...] = ()
+    caveats: tuple[str, ...] = ()
+
+
 class ScoredCandidate(BaseModel):
     """A survivor of the hard filters, paired with the composite score it earned
     and the per-target contributions that produced it, so the audit view can

@@ -9,7 +9,7 @@ and ranking stages.
 import abc
 from collections.abc import Mapping
 
-from materials_triage.core.schema import Candidate, PredicateRouting, TriageSpec
+from materials_triage.core.schema import PredicateRouting, RetrievalResult, TriageSpec
 
 
 class SourceAdapter(abc.ABC):
@@ -24,9 +24,12 @@ class SourceAdapter(abc.ABC):
     """
 
     @abc.abstractmethod
-    def retrieve(self, spec: TriageSpec) -> list[Candidate]:
-        """Return the candidates this source offers for ``spec``, each property
-        carrying its :class:`~materials_triage.core.schema.Provenance`."""
+    def retrieve(self, spec: TriageSpec) -> RetrievalResult:
+        """Return a :class:`~materials_triage.core.schema.RetrievalResult`: the
+        candidates this source offers for ``spec`` (each property carrying its
+        :class:`~materials_triage.core.schema.Provenance`) plus any run-level
+        ``caveats`` the I/O loop must surface — e.g. the set was capped at a page
+        ceiling, so the returned candidates are an incomplete subset of the match."""
 
     def property_vocabulary(self) -> Mapping[str, str | None]:
         """The canonical retrievable property names this source exposes, mapped to

@@ -6,7 +6,7 @@ v1 slice sources data from Materials Project only, and a stub refuses rather
 than fabricate. Cross-source merge is deferred with them.
 """
 
-from materials_triage.core.schema import Candidate, TriageSpec
+from materials_triage.core.schema import RetrievalResult, TriageSpec
 from materials_triage.sources.base import SourceAdapter
 
 
@@ -15,7 +15,7 @@ class _DeferredAdapter(SourceAdapter):
 
     source_name: str = "deferred source"
 
-    def retrieve(self, spec: TriageSpec) -> list[Candidate]:
+    def retrieve(self, spec: TriageSpec) -> RetrievalResult:
         raise NotImplementedError(
             f"the {self.source_name} adapter is a v1 stub and retrieves nothing yet"
         )
