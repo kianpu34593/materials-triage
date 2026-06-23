@@ -64,6 +64,16 @@ def test_paginate_stops_at_the_ceiling_and_flags_capped():
     assert capped is True
 
 
+def test_paginate_is_not_capped_when_a_complete_set_lands_exactly_on_the_ceiling():
+    # _limit=3, ceiling=4: a full page (3) then a short page (1) exhausts the set at
+    # exactly 4 rows. The set is COMPLETE, so it must not be flagged capped — a short
+    # page means no more rows could exist, even if the total equals the ceiling.
+    pages = {0: [{"id": 0}, {"id": 1}, {"id": 2}], 3: [{"id": 3}]}
+    docs, capped = _paginate(_paged_transport(pages), {"_limit": "3"}, {}, ceiling=4)
+    assert [d["id"] for d in docs] == [0, 1, 2, 3]
+    assert capped is False
+
+
 def test_vocabulary_names_only_properties_retrieve_can_populate():
     """The contract #39 protects: every name the adapter publishes is one retrieve
     actually fills -- so a hypothesis built from the vocabulary never asks for a

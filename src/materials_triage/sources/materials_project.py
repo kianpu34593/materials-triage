@@ -163,18 +163,24 @@ def _paginate(
     """Page the summary endpoint by ``_skip``/``_limit``, accumulating docs until a
     short page (fewer than ``_limit`` rows ⇒ the filtered set is exhausted) or the
     ``ceiling`` is reached. Returns the accumulated docs (truncated to ``ceiling``)
-    and whether the ceiling capped the set — a *loud* signal that ranking saw only a
-    subset, never a silent truncation."""
+    and whether the set was capped — a *loud* signal that ranking saw only a subset,
+    never a silent truncation. ``capped`` is True only when more rows could still
+    exist (a full page at/over the ceiling) or the returned set overflowed the
+    ceiling; an exhausted set that lands exactly on the ceiling is complete, not
+    capped (exhaustion is checked first)."""
     limit = int(params["_limit"])
     docs: list[dict] = []
     skip = 0
     while True:
         page = http_get("/materials/summary/", {**params, "_skip": str(skip)}, headers)["data"]
         docs.extend(page)
-        if len(docs) >= ceiling:
-            return docs[:ceiling], True
         if len(page) < limit:
-            return docs, False
+            # Short page ⇒ no more rows exist; the set is complete unless it itself
+            # overflowed the ceiling (so we had to truncate).
+            return docs[:ceiling], len(docs) > ceiling
+        if len(docs) >= ceiling:
+            # Full page at/over the ceiling ⇒ more rows could exist but we stop here.
+            return docs[:ceiling], True
         skip += limit
 
 
