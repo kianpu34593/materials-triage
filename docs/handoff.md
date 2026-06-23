@@ -39,21 +39,48 @@ adapter's `_scalar` VRH-collapse was added (no-mistakes review caught that it wa
   MP WAFs the `Python-urllib` UA (use `requests`/a UA). [memory: vocab-prebuilt-not-runtime,
   two-model-categories-strictness, materials-project-api]
 
-**2 · #38 — Push #37 predicates server-side** (`_query_params` only) *(execution-location optimization, NOT
-the H₂O fix — it changes WHERE a predicate runs, not WHETHER the spec carries one. Real justification: MP
-applies `_limit=100` BEFORE returning, so pushing the filters the spec already has keeps the 100-row budget
-from being spent on rows that `apply_hard_filters` will drop. That stage stays the authority on what survives.)*
-- [ ] BooleanConstraint → `_query_params`
-- [ ] ElementPredicate (all / any / none) → `_query_params`
-- [ ] CountConstraint (cap element count) → `_query_params`
+**2 · #38 — Push #37 predicates server-side** — **SERVER-SIDE HALF DONE (PR pending, branch
+`feat/push-predicates-serverside`, 9 commits)**. The architecture shifted mid-build (2026-06-23) from the
+original "optimization on top of a local backstop" to a **trusted-adapter / one-owner** model — see below.
+- [x] `ElementPredicate none` → `exclude_elements`; `all` → `elements` (was already done)
+- [x] `BooleanConstraint` → same-named exact-match param
+- [x] `CountConstraint` → `nelements_min`/`nelements_max`
+- [x] **numeric `Constraint`** → `<field>_min`/`<field>_max` (reversed the "keep numeric local" call — push
+  *everything* MP can express)
+- [x] **`PUSHABLE_PARAMS`** — schema-derived gate (generator parses the vendored `/summary` GET params → 124
+  names in `_mp_fields.py`); `_query_params` gates on the *computed param name* ∈ this set
+- [x] **live contract suite** — each test sources params from the real `_query_params(spec)` and asserts MP
+  honours them; this is the safety net (no local re-check)
+- [ ] **LOCAL-FILTER REFOCUS → follow-up PR** (the DB-*inexpressible* half; see task **2c** below)
 
-**#38 mechanics (per-predicate, push only what the schema supports — confirm param names against #39):**
-- `ElementPredicate all` → `elements=` (AND-membership) — *already done today.*
-- `ElementPredicate none` → `exclude_elements=` — pushable.
-- `ElementPredicate any` → **no MP OR-membership param** → **stays local** (the deterministic filter honours it).
-- `BooleanConstraint` → per-field params (`is_stable`, `is_metal`, …) — push only the booleans the schema exposes as query params.
-- `CountConstraint` → `nelements_min` / `nelements_max`.
-- **Two invariants:** (1) **`apply_hard_filters` stays the authority** — server-side params are an optimization, every pushed predicate is *also* enforced locally, so a source that can't express one still gets correct results. (2) **MP silently ignores unknown query params** — a wrong/typo'd name returns *unfiltered* rows with no error, so a `live`-marked test must assert the returned rows actually satisfy the constraint (invariant 1 hides the symptom from offline tests). Drive the pushable-param set off #39's published vocabulary; never hand-type a second param table.
+**Architecture as built (supersedes the old "two invariants").** One owner per predicate, decided by the
+adapter's capability:
+- **Server-side = single authority for everything MP can express** (numeric, boolean, element all/none,
+  count). Correctness guaranteed by **live contract tests** (trusted-adapter), *not* a redundant local
+  re-check. We deliberately **dropped invariant 1** (re-enforce-everything-locally) as redundant.
+- **Pushability ≠ retrievability.** The filterable surface (124 `/summary` GET params) is distinct from and
+  larger than the 39 retrievable fields. `is_magnetic` is retrievable but **not** a query param → pushing it
+  **400-crashed `retrieve()`** (now fixed by the gate). `bulk_modulus`/`shear_modulus` filter via
+  `k_vrh`/`g_vrh`, not `<field>_min` (a hand-pinned `_FILTER_PARAM_BASE` alias — the only non-1:1 case).
+  [memory: mp-pushability-not-retrievability]
+- **Trade-off accepted:** pushed filters lose per-candidate exclusion reasons in the audit (MP never returns
+  the dropped rows); the trace records the *query*. Only locally-enforced predicates produce per-candidate
+  `ExcludedCandidate` reasons.
+
+**2c · 🆕 Local-filter refocus (follow-up to #38).** `apply_hard_filters` today enforces **only numeric
+`Constraint`** — element/boolean/count are enforced *nowhere* locally (was fine when nothing was pushed; now
+server owns the pushable ones). Refocus the local filter onto the **DB-inexpressible** complement:
+- [ ] element **`any`** — *pre-existing bug*: no MP OR-param **and** no local enforcement, so an `any` spec
+  silently returns violating rows. Needs **composition data on the `Candidate`** (request `elements` back,
+  parse onto the candidate) — it carries none today.
+- [ ] **`is_magnetic`** and any other retrievable-but-unqueryable boolean → enforce locally (needs the field
+  requested back too — "request back what you filter on").
+- [ ] numeric on a field whose `_min/_max` isn't in `PUSHABLE_PARAMS` (rare) → local.
+- [ ] future: synthesizability / holistic toxicity / abundance (no data source yet — Kian's "local filter =
+  what the DB doesn't have").
+- **Open design Qs:** how does the local stage know what was *not* pushed (couple to the adapter's pushable
+  set, or enforce by data-presence on the candidate)? `_filter_node` currently passes only `spec.constraints`
+  — wire it to feed the unpushed predicates and stop double-enforcing pushed ones.
 
 **2b · 🆕 Pagination in `retrieve()`** — *sibling to #38; together they = "retrieve the complete filtered candidate set." Not part of #38 (#38 is the pure `_query_params` transform; this is the I/O loop).*
 - [ ] page MP's `_skip`/`_limit` to exhaust the (filtered) result set, accumulating candidates
@@ -159,6 +186,13 @@ Ready now: **HB4** (tier/rate-limit/metering), **HB5**, **HB6**, HB1's remaining
   value (`bulk_modulus=1.0`) hid the real `{voigt,reuss,vrh}`-dict crash — fixtures for object-typed fields
   must use the **real payload shape**, and verify a ported helper exists on `main` before citing it (the
   no-mistakes review's grep caught the missing `_scalar`). [memory: verify-against-main-not-reference-impl]
+- **Pushability ≠ retrievability (#38).** What a field *returns* and what it can be *filtered on* are two
+  surfaces. The `/summary` GET endpoint declares **124 query params** (≠ the 39 retrievable fields):
+  `is_magnetic` is retrievable but not queryable (pushing it **400s**), and the moduli filter via
+  `k_vrh`/`g_vrh` not `<field>_min`. Schema-derive the pushable set (`PUSHABLE_PARAMS`), gate on it, and
+  **trust the adapter** — the live contract suite (params sourced from the real `_query_params`) is the only
+  thing catching a silently-ignored/typo'd param, since there's no local re-check. [memory:
+  mp-pushability-not-retrievability]
 - **MP OpenAPI for the vocabulary:** at `GET /openapi.json` (3.1.0; `SummaryDoc` = 69 props) — needs the
   `X_API_KEY` header **and** a non-`urllib` User-Agent (MP WAFs `Python-urllib/*` → 403; `requests` passes).
   Origins are a small controlled set; **elasticity has no `origins[]` entry** (moduli `origin=None`,
@@ -225,7 +259,9 @@ property/material class *before* retrieval:
   abort a commit → re-add + re-commit.
 - **Collaboration rules (CLAUDE.md):** ask before choosing between approaches; one function at a time then
   stop for approval; TDD via the `tdd` skill (never batch tests); **don't start coding until told.**
-- **Task tracker:** v1 path = ~~#39~~, **#38 + pagination (untracked sibling)** ← next, #20, #35, #22, #34,
-  #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32, #33, #37, **#39 (supply side;
-  binding → #34)**. Deferred: #37 area B/C (note: area B is now on the critical path for the "metal oxides"
-  query). Hosting = HB1–HB10.
+- **Task tracker:** v1 path = ~~#39~~, **#38 server-side push (PR pending)**, then **#38 local-filter refocus
+  (task 2c)** ← next, + pagination (untracked sibling), #20, #35, #22, #34, #25, #26, #27, #41, #40 (see
+  Plan). Completed: #1–#19, #21, #23, #24, #32, #33, #37, **#39 (supply side; binding → #34)**, **#38
+  server-side half** (branch `feat/push-predicates-serverside`). Deferred: #37 area B/C (area B on the
+  critical path for "metal oxides"); **v2 XC-functional-first retrieval** (new design note above). Hosting =
+  HB1–HB10.
