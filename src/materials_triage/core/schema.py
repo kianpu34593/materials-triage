@@ -334,16 +334,19 @@ class ExcludedCandidate(BaseModel):
 
     candidate: Candidate
     property_name: str = Field(min_length=1)
-    reason: Literal["below_min", "above_max", "missing_data", "boolean_mismatch"]
+    reason: Literal[
+        "below_min", "above_max", "missing_data", "boolean_mismatch", "element_mismatch"
+    ]
     value: float | None = None
     bound: float | None = None
 
     @model_validator(mode="after")
     def _reason_agrees_with_evidence(self) -> Self:
-        if self.reason in ("missing_data", "boolean_mismatch"):
-            # No numeric bound to record: the property was either absent
-            # (missing_data) or a boolean that didn't match the required flag
-            # (boolean_mismatch); a value here would contradict the reason.
+        if self.reason in ("missing_data", "boolean_mismatch", "element_mismatch"):
+            # No numeric bound to record: the property was absent (missing_data), a
+            # boolean that didn't match the required flag (boolean_mismatch), or a
+            # composition that failed an element predicate (element_mismatch); a value
+            # here would contradict the reason.
             if self.value is not None:
                 raise ValueError(f"a {self.reason!r} exclusion cannot carry a value")
             return self

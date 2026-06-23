@@ -6,6 +6,7 @@ from materials_triage.core.schema import (
     BooleanConstraint,
     Candidate,
     Constraint,
+    ElementPredicate,
     PredicateRouting,
     PropertyValue,
     Provenance,
@@ -53,6 +54,25 @@ def test_apply_local_filters_drops_a_candidate_failing_a_local_boolean():
     assert [c.identifier for c in survivors] == ["mp-mag"]
     assert excluded[0].candidate.identifier == "mp-non"
     assert excluded[0].property_name == "is_magnetic"
+
+
+def test_apply_local_filters_drops_a_candidate_failing_a_local_any_predicate():
+    """A local 'any' element predicate: a candidate sharing at least one required
+    member survives; one sharing none is excluded (element_mismatch). Uses the
+    composition on the candidate, which the source returned but couldn't push."""
+    has_fe = Candidate(identifier="mp-fe", formula="FeO", elements=frozenset({"Fe", "O"}))
+    no_match = Candidate(identifier="mp-cu", formula="CuO", elements=frozenset({"Cu", "O"}))
+    routing = PredicateRouting(
+        local_element_predicates=(
+            ElementPredicate(quantifier="any", members=frozenset({"Fe", "Co"})),
+        )
+    )
+
+    survivors, excluded = apply_local_filters([has_fe, no_match], routing)
+
+    assert [c.identifier for c in survivors] == ["mp-fe"]
+    assert excluded[0].candidate.identifier == "mp-cu"
+    assert excluded[0].reason == "element_mismatch"
 
 
 def test_normalize_maximize_maps_highest_value_to_one():

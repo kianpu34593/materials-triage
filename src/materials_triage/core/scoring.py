@@ -116,6 +116,17 @@ def apply_local_filters(
                     reason="boolean_mismatch",
                 )
                 break
+        if drop is None:
+            # Only "any" is routed here (no MP OR-param). It holds when the candidate
+            # shares at least one required member with its composition.
+            for predicate in routing.local_element_predicates:
+                if not (candidate.elements & predicate.members):
+                    drop = ExcludedCandidate(
+                        candidate=candidate,
+                        property_name="elements",
+                        reason="element_mismatch",
+                    )
+                    break
         if drop is not None:
             excluded.append(drop)
         else:
