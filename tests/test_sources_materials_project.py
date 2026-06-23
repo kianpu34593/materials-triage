@@ -463,6 +463,23 @@ def test_classify_caveats_a_constraint_on_an_unsupported_field():
     assert not any("band_gap" in c for c in routing.caveats)
 
 
+def test_classify_caveats_a_boolean_on_an_unsupported_field():
+    """A boolean constraint on a field MP can't return (e.g. `is_toxic`) can be
+    neither pushed nor enforced locally, so it's caveated rather than silently
+    vanishing from the routing. A real boolean field (`is_stable`) is not caveated."""
+    spec = TriageSpec(
+        boolean_constraints=(
+            BooleanConstraint(property_name="is_stable", required=True),
+            BooleanConstraint(property_name="is_toxic", required=True),
+        ),
+    )
+
+    routing = MaterialsProjectAdapter(http_get=lambda *a: {}).classify_predicates(spec)
+
+    assert any("is_toxic" in c for c in routing.caveats)
+    assert not any("is_stable" in c for c in routing.caveats)
+
+
 def test_retrieve_excludes_forbidden_elements_server_side():
     """A "none"-quantifier ElementPredicate scopes the pool server-side via MP's
     `exclude_elements` param (sorted, comma-joined) — the mirror of `elements`."""
