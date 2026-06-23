@@ -27,6 +27,7 @@ from materials_triage.agent.prompts import (
     build_hypothesis_prompt,
     build_synthesis_prompt,
 )
+from materials_triage.agent.serde import domain_serde
 from materials_triage.agent.validator import validate_output
 from materials_triage.core.critique import RankingCritique, prune_ranking_proposals
 from materials_triage.core.fidelity import reconcile_spec
@@ -562,7 +563,7 @@ def build_orchestrator(
     for earlier, later in zip(WORKFLOW_STEPS, WORKFLOW_STEPS[1:], strict=False):
         builder.add_edge(earlier, later)
     builder.add_edge(WORKFLOW_STEPS[-1], END)
-    return builder.compile(checkpointer=checkpointer or MemorySaver())
+    return builder.compile(checkpointer=checkpointer or MemorySaver(serde=domain_serde()))
 
 
 def resume_run(orchestrator: CompiledStateGraph, config: dict) -> dict:
