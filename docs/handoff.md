@@ -1,4 +1,4 @@
-# Session Handoff - 2026-06-22 23:12
+# Session Handoff - 2026-06-23 10:18
 
 > Single living handoff, git-tracked at `docs/handoff.md`. Keep it **lean** — deep per-session
 > history lives in [`docs/handoff-archive.md`](handoff-archive.md); recurring gotchas live in
@@ -39,9 +39,9 @@ adapter's `_scalar` VRH-collapse was added (no-mistakes review caught that it wa
   MP WAFs the `Python-urllib` UA (use `requests`/a UA). [memory: vocab-prebuilt-not-runtime,
   two-model-categories-strictness, materials-project-api]
 
-**2 · #38 — Push #37 predicates server-side** — **SERVER-SIDE HALF DONE (PR pending, branch
-`feat/push-predicates-serverside`, 9 commits)**. The architecture shifted mid-build (2026-06-23) from the
-original "optimization on top of a local backstop" to a **trusted-adapter / one-owner** model — see below.
+**2 · #38 — Push #37 predicates server-side** — ✅ **MERGED (#63, 2026-06-23)**. The architecture shifted
+mid-build from the original "optimization on top of a local backstop" to a **trusted-adapter / one-owner**
+model — see below. (The local-enforcement complement landed separately as 2c / #64.)
 - [x] `ElementPredicate none` → `exclude_elements`; `all` → `elements` (was already done)
 - [x] `BooleanConstraint` → same-named exact-match param
 - [x] `CountConstraint` → `nelements_min`/`nelements_max`
@@ -67,8 +67,9 @@ adapter's capability:
   the dropped rows); the trace records the *query*. Only locally-enforced predicates produce per-candidate
   `ExcludedCandidate` reasons.
 
-**2c · 🆕 Exclusive-set local filter + make-it-loud (follow-up to #38) — DATA-PLANE DONE.** *Direction set by
-Kian 2026-06-23 after a multi-source design discussion. Deliberately lighter than "build full local enforcement."*
+**2c · 🆕 Exclusive-set local filter + make-it-loud (follow-up to #38) — ✅ DATA-PLANE MERGED (#64, 2026-06-23).**
+*Direction set by Kian after a multi-source design discussion. Deliberately lighter than "build full local enforcement."*
+**Only remaining 2c piece: render caveats in the PI/audit views (blocked on the view layer — see the `[ ]` below).**
 
 **Decided NOT to build (for now):** the universal-local-authority model (re-enforce every predicate locally
 so push is pure optimization), the per-source `filter_capability()` declaration, and the per-call residual
@@ -81,8 +82,8 @@ scope becomes the things a DB *fundamentally can't* express — **derived / holi
 (synthesizability, holistic toxicity, abundance). No data source for those yet ⇒ **deferred**; the local
 filter stays minimal.
 
-**AS BUILT — exclusive-set local filter + caveats (branch `feat/exclusive-set-local-filter`, DATA-PLANE
-DONE, live-verified).** Kian's refinement (2026-06-23): rather than only "make it loud," *build a lightweight
+**AS BUILT — exclusive-set local filter + caveats (merged #64, live-verified).** Kian's refinement
+(2026-06-23): rather than only "make it loud," *build a lightweight
 filter to capture the exclusive set* — the predicates that are **retrievable but not queryable (R∩¬Q)**,
 derived deterministically from the two committed surfaces (`FIELD_UNITS` = R, `PUSHABLE_PARAMS` = Q). This
 **enforces** `is_magnetic`/`any` locally (better than caveating them) while staying lightweight and
@@ -144,6 +145,16 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
   committed `src/materials_triage/sources/_mp_fields.py` (39-field `{unit, origin}` table); adapter derives
   `FIELD_UNITS`/`_FIELD_ORIGIN` from it and exposes `property_vocabulary()`; `_scalar` collapses the VRH
   moduli dict; `PropertyValue.unit: str | None` (dimensionless). `tools/` on the test pythonpath.
+- **#38 server-side push (merged #63):** `_query_params` pushes every DB-expressible hard filter (numeric
+  `<field>_min/_max`, booleans, `elements`/`exclude_elements`, `nelements` range), gated on the schema-derived
+  **`PUSHABLE_PARAMS`** (124 `/summary` GET params, now also generated into `_mp_fields.py`). Fixes the
+  `is_magnetic` 400 + maps the moduli via the `k_vrh`/`g_vrh` alias (`_FILTER_PARAM_BASE`). A `live`-marked
+  **contract suite** (params sourced from the real `_query_params`) verifies MP honours each — the
+  trusted-adapter safety net. [memory: mp-pushability-not-retrievability]
+- **2c exclusive-set local filter (merged #64):** `SourceAdapter.classify_predicates(spec) -> PredicateRouting`
+  (R∩¬Q → local, ¬R∩¬Q → caveat). `core/scoring.py` `apply_local_filters` enforces local booleans
+  (`boolean_mismatch`) + element `any` (`element_mismatch`); `Candidate.elements` + retrieve request-back;
+  orchestrator `_make_filter_node(adapter)` runs both filters + writes `TriageRun.caveats`. Live-verified.
 - **Agent:** `agent/llm.py` Bedrock `HypothesisProvider` (injected `complete` seam; `us.*` inference-profile
   model id). `agent/prompts.py` `ROLE_SYSTEM_PROMPT` + `build_chat_messages`. `agent/orchestrator.py`
   LangGraph graph with per-stage exclusion channels + retry + spec-build HITL gate; `core/run_trace.py`
@@ -161,17 +172,25 @@ own R/Q → its own exclusive set), so no `filter_capability()` to hand-maintain
   assumption-not-verified bug is exactly how #61's review caught a crash. [memory: verify-against-main-not-reference-impl])
 
 ## Status
-- **`main` @ `9266956`**, clean. 219 tests pass (3 `live` deselected).
-- **#39 supply side done** (merged #61): 39-field schema-derived vocabulary exposed via the adapter;
-  `PropertyValue.unit: str | None`; VRH `_scalar` collapse. Increment 4 (prompt binding) → **#34**.
-- **#37 done** (A #51 + D #55; B + C deferred). This unblocked **#38/#39/#41**.
-- **No parallel sessions in flight.** `feat/source-vocabulary` (#61) + `docs/handoff-38-pagination-mechanics`
-  (#60) merged + pruned; `feat/value-trust-metadata` (#55) merged + pruned.
+- **`main` @ `f5d8c63`**, clean. **241 tests pass** (10 `live` deselected, incl. the new MP filter-contract suite).
+- **#38 + 2c done this session** (#63 server-side push, #64 exclusive-set local filter): the full
+  filtering architecture is on `main` — **server-side primary (PUSHABLE_PARAMS) + deterministic local filter
+  for the exclusive set (R∩¬Q) + loud caveats (¬R∩¬Q → TriageRun.caveats)**. `is_magnetic` and element `any`
+  now enforced end-to-end (were enforced nowhere before); live-verified.
+- **#39 supply side done** (merged #61). Increment 4 (prompt binding) → **#34**.
+- **#37 done** (A #51 + D #55; B + C deferred).
+- **Parallel work in flight:** `feat/desirability-ranker` (selectable geometric-mean desirability ranker) was
+  in a separate worktree + had its own no-mistakes run this session — independent, untouched by #63/#64.
 - **Known issues / loose ends:**
+  - **4 informational nits from #64's review** to fix opportunistically (next time touching the files):
+    (1) `classify_predicates` comment oversells — the ¬R caveat is *additive* (explains the empty result),
+    NOT *protective*; `apply_hard_filters` still drops the candidates as `missing_data`. (2) `classify_predicates`
+    runs twice per run (retrieve + filter) — pure, harmless. (3) duplicate caveat strings if a numeric + boolean
+    constraint share a property name. (4) `element_mismatch` conflates "composition not fetched" with "members
+    genuinely absent" (boolean branch distinguishes `missing_data`).
   - Live Bedrock smoke test ~15% flaky by design (mitigated by the #45 retry loop).
-  - Obsolete `.git/info/exclude` line 9 (ADR-0005 path, now tracked) — safe to delete.
-  - `mt-value-trust` worktree + `backup-D-20260622` tag still around — can be removed.
-  - `stash@{0}` (readme-kid-flowchart WIP) unmerged — drop if unwanted.
+  - LangGraph msgpack "unregistered type" warnings on our pydantic models — round-trips today, will block in a
+    future version [memory: langgraph-msgpack-unregistered-types].
 
 ## Hosting build task list (ADR 0005) — net-new, sequence vs. v1 per Kian
 Harness tasks #1–#10, labeled **HB1–HB10** to avoid colliding with the v1 numbers.
@@ -266,10 +285,16 @@ property/material class *before* retrieval:
   this is the *consumption* — choose + fetch + flag/restrict ranking by functional).
 
 ## Context for Next Session
-- **Branch:** `main` @ `9266956`, clean. Build the next increment in a worktree (run pytest with
+- **Branch:** `main` @ `f5d8c63`, clean. Build the next increment in a worktree (run pytest with
   `PYTHONPATH="$PWD/src" pytest`). Port from `feat/fast-track-wire-guardrails`.
-- **Verify merged state:** `python -m pytest -q` (219 pass, 3 deselected); `ruff check .`. Live (needs
+- **Verify merged state:** `python -m pytest -q` (241 pass, 10 deselected); `ruff check .`. Live (needs
   creds): `pytest -m live`.
+- **Next up (pick one):** (a) **pagination** (2b — page `_skip`/`_limit` to exhaust the filtered set; the
+  natural sibling now that #38 makes the page filterable; reuses the `caveats` channel for the "capped at N"
+  notice); (b) **#34** wire the pass-through nodes (gate/hypothesis/synthesis/output_validate) + bind the
+  vocabulary into the hypothesis prompt; (c) **views / render** (#25–#27) — also unblocks 2c's caveat
+  rendering. The deterministic filtering core is now complete, so the remaining v1 gaps are I/O (pagination),
+  the LLM nodes (#34), and presentation (views).
 - **Credentials:** `X_API_KEY` (MP), `OPENALEX_MAILTO` (optional polite pool), AWS creds for Bedrock
   (prefer `~/.aws/credentials`; conftest `load_dotenv`s `.env`; AWS keys in `.env` must be UPPERCASE).
   **Never read/print the AWS creds or `X_API_KEY`.**
@@ -278,9 +303,10 @@ property/material class *before* retrieval:
   abort a commit → re-add + re-commit.
 - **Collaboration rules (CLAUDE.md):** ask before choosing between approaches; one function at a time then
   stop for approval; TDD via the `tdd` skill (never batch tests); **don't start coding until told.**
-- **Task tracker:** v1 path = ~~#39~~, **#38 server-side push (PR pending)**, then **#38 local-filter refocus
-  (task 2c)** ← next, + pagination (untracked sibling), #20, #35, #22, #34, #25, #26, #27, #41, #40 (see
-  Plan). Completed: #1–#19, #21, #23, #24, #32, #33, #37, **#39 (supply side; binding → #34)**, **#38
-  server-side half** (branch `feat/push-predicates-serverside`). Deferred: #37 area B/C (area B on the
-  critical path for "metal oxides"); **v2 XC-functional-first retrieval** (new design note above). Hosting =
-  HB1–HB10.
+- **Task tracker:** v1 path = ~~#39~~, ~~#38~~, ~~2c~~ → **pagination (2b, untracked sibling)** ← suggested
+  next, #34, #20, #35, #22, #25, #26, #27, #41, #40 (see Plan). Completed: #1–#19, #21, #23, #24, #32, #33,
+  #37, **#39 (supply side; binding → #34)**, **#38 server-side push (#63)**, **2c exclusive-set local filter
+  (#64)**. Open within 2c: render caveats in views (blocked on the view layer #25–#27). Deferred: #37 area
+  B/C (area B on the critical path for "metal oxides"); the **multi-source filter abstraction** (universal
+  local / filter_capability / residual — "see how it goes"); **v2 XC-functional-first retrieval** (design note
+  above). Hosting = HB1–HB10.
