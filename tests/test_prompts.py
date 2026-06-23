@@ -7,6 +7,7 @@ never reach the instruction channel.
 """
 
 from materials_triage.agent.prompts import (
+    RANKING_TARGET_GUIDANCE,
     ROLE_SYSTEM_PROMPT,
     build_chat_messages,
     build_synthesis_prompt,
@@ -66,6 +67,18 @@ def test_build_synthesis_prompt_fences_untrusted_goal_and_literature():
 
     assert "untrusted_data" in prompt
     assert "NONCE42" in prompt
+
+
+def test_ranking_target_guidance_tells_the_llm_to_announce_ramp_bounds():
+    """The hypothesis LLM must know the agent ranks by the weighted geometric mean,
+    which requires each ranking target to announce its desirability ramp bounds —
+    so the guidance names the method and the lower/target/upper anchors per direction."""
+    guidance = RANKING_TARGET_GUIDANCE.lower()
+
+    assert "geometric mean" in guidance
+    assert "ramp" in guidance or "bounds" in guidance
+    assert "lower" in guidance and "target" in guidance and "upper" in guidance
+    assert "maximize" in guidance and "minimize" in guidance
 
 
 def test_build_chat_messages_puts_role_in_system_and_query_in_human():

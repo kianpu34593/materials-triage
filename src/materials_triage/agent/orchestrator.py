@@ -18,6 +18,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
+from materials_triage.agent.prompts import RANKING_TARGET_GUIDANCE
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
 from materials_triage.core.ranking import rank_arithmetic_mean, rank_geometric_mean
 from materials_triage.core.schema import (
@@ -120,10 +121,14 @@ def _passthrough(state: OrchestratorState) -> dict:
 
 
 def _hypothesis_prompt(goal: str, prior_error: str | None) -> str:
-    """Render the prompt for the hypothesis step (a thin placeholder until the
-    real prompt module, #22). On a retry, the prior schema rejection is fed back
-    so the model can correct the specific malformation."""
-    prompt = f"Propose a materials triage hypothesis for this goal: {goal}"
+    """Render the prompt for the hypothesis step. Appends RANKING_TARGET_GUIDANCE so
+    the LLM proposes ranking targets the agent's default geometric-mean ranker can
+    score (each with explicit desirability ramp bounds) — the prose half of surfacing
+    the schema, paired with the RankingTarget field descriptions. On a retry, the prior
+    schema rejection is fed back so the model can correct the specific malformation."""
+    prompt = (
+        f"Propose a materials triage hypothesis for this goal: {goal}\n\n{RANKING_TARGET_GUIDANCE}"
+    )
     if prior_error is not None:
         prompt += (
             "\n\nYour previous response was rejected because it did not conform "
@@ -136,12 +141,18 @@ def _make_hypothesis_node(
     provider: HypothesisProvider | None,
     max_attempts: int = DEFAULT_MAX_HYPOTHESIS_ATTEMPTS,
 ):
-    """The hypothesis step: the LLM proposes the cited spec-bridges. Structured
-    output is only conformed in *shape* by the schema, and ~15% of calls emit
-    output it rejects — so this retries on a pydantic ValidationError (feeding
-    the rejection back into the prompt) up to ``max_attempts``, then raises a
-    wrapped HypothesisConformanceError rather than leaking a raw ValidationError.
-    Non-validation failures (transport, throttling) are not retried here."""
+    """The hypothesis step: the LLM proposes the cited spec-bridges. The output is
+    conformed in two ways, both retry-on-failure: structured output is only *shape*-
+    checked by the schema (~15% of calls emit output it rejects), and a shape-valid
+    hypothesis may still not *compile* into a coherent spec — e.g. a ranking target
+    missing the ramp bounds the default geometric ranker requires, a duplicate
+    constraint, or a contradiction. Both surface as a pydantic ValidationError, so
+    this trial-compiles each candidate and retries either failure (feeding the reason
+    back into the prompt) up to ``max_attempts``, then raises a wrapped
+    HypothesisConformanceError. Catching the compile failure HERE — where the LLM can
+    be re-prompted — is what stops it becoming a terminal, feedback-less
+    SpecCompilationError later in spec_build. Non-validation failures (transport,
+    throttling) are not retried here."""
 
     def hypothesis(state: OrchestratorState) -> dict:
         if provider is None:
@@ -150,11 +161,16 @@ def _make_hypothesis_node(
         for _ in range(max_attempts):
             prompt = _hypothesis_prompt(state["goal"], None if last_exc is None else str(last_exc))
             try:
-                return {"hypothesis": provider.propose(prompt)}
+                proposed = provider.propose(prompt)
+                # Trial-compile: a shape-valid hypothesis whose proposals don't form a
+                # coherent spec is retry-worthy too, so the LLM gets the reason back.
+                compile_spec(proposed.proposals)
             except ValidationError as exc:
                 last_exc = exc
+                continue
+            return {"hypothesis": proposed}
         raise HypothesisConformanceError(
-            f"LLM did not produce a schema-valid Hypothesis in {max_attempts} attempts"
+            f"LLM did not produce a schema-valid, compilable Hypothesis in {max_attempts} attempts"
         ) from last_exc
 
     return hypothesis
