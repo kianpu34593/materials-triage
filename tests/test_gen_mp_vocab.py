@@ -17,6 +17,7 @@ from gen_mp_vocab import (
     build_table,
     generate_table,
     parse_query_params,
+    parse_summary_descriptions,
     parse_summary_fields,
     render_module,
     vocabulary_fields,
@@ -34,6 +35,19 @@ def test_parser_classifies_summary_fields_by_scalar_type():
     assert fields["band_gap"] == "number"  # anyOf[number, null] -> number
     assert fields["is_stable"] == "boolean"  # plain boolean (no anyOf wrapper)
     assert fields["nelements"] == "integer"  # anyOf[integer, null] -> integer
+
+
+def test_parse_summary_descriptions_pulls_schema_one_liners():
+    """Each ``SummaryDoc`` property may carry a one-line ``description`` in the schema.
+    The parser surfaces them so the vocabulary handed to the LLM explains what each
+    field *means* — not just its unit — which is what stops wrong-but-plausible proxy
+    picks (an ``eV`` field grabbed as "voltage"). Fields with no schema description are
+    simply absent; the hybrid's curated overrides supply the important ones."""
+    descriptions = parse_summary_descriptions(json.loads(FIXTURE.read_text()))
+
+    assert descriptions["band_gap"] == "Band gap energy in eV."
+    assert descriptions["is_stable"].startswith("Flag for whether this material")
+    assert "vbm" not in descriptions  # no schema description in this slice; an override fills it
 
 
 def test_parse_query_params_extracts_summary_filter_param_names():
@@ -100,8 +114,49 @@ def test_build_table_merges_unit_and_origin_per_field():
 
     table = build_table(surface, meta)
 
-    assert table["band_gap"] == {"unit": "eV", "origin": "electronic_structure"}
-    assert table["nelements"] == {"unit": None, "origin": None}
+    assert table["band_gap"] == {
+        "unit": "eV",
+        "origin": "electronic_structure",
+        "desc": None,
+        "rankable": True,
+    }
+    assert table["nelements"] == {"unit": None, "origin": None, "desc": None, "rankable": True}
+
+
+def test_build_table_marks_booleans_unrankable():
+    """A boolean flag is a hard filter, never a ranking target — scoring it gives every
+    survivor desirability 1.0 (they all passed the filter), a meaningless flat score. The
+    table marks booleans ``rankable=False`` (derived from the scalar type) so the ranking
+    stage can reject them as targets; numeric fields stay rankable."""
+    surface = {"band_gap": "number", "is_metal": "boolean", "nelements": "integer"}
+    meta = {
+        "band_gap": {"unit": "eV", "origin": "electronic_structure"},
+        "is_metal": {"unit": None, "origin": "electronic_structure"},
+        "nelements": {"unit": None, "origin": None},
+    }
+
+    table = build_table(surface, meta)
+
+    assert table["band_gap"]["rankable"] is True
+    assert table["nelements"]["rankable"] is True
+    assert table["is_metal"]["rankable"] is False
+
+
+def test_build_table_attaches_optional_schema_description():
+    """``desc`` is layered in from the schema and is optional, not lockstep: a field
+    with a description carries it, a field the schema leaves blank gets ``desc=None``
+    (the adapter's curated override fills the load-bearing blanks downstream)."""
+    surface = {"band_gap": "number", "vbm": "number"}
+    meta = {
+        "band_gap": {"unit": "eV", "origin": "electronic_structure"},
+        "vbm": {"unit": "eV", "origin": "electronic_structure"},
+    }
+    descriptions = {"band_gap": "Band gap energy in eV."}  # vbm omitted
+
+    table = build_table(surface, meta, descriptions)
+
+    assert table["band_gap"]["desc"] == "Band gap energy in eV."
+    assert table["vbm"]["desc"] is None  # no schema gloss; override supplies it later
 
 
 def test_build_table_rejects_a_vocabulary_field_missing_from_metadata():
@@ -124,9 +179,14 @@ def test_generate_table_covers_the_full_vendored_surface():
     table = generate_table(json.loads(_VENDORED_SCHEMA.read_text()))
 
     assert len(table) == 39  # 42 numeric/bool+VRH fields, minus 3 document-metadata flags
-    assert table["band_gap"] == {"unit": "eV", "origin": "electronic_structure"}
-    assert table["bulk_modulus"] == {"unit": "GPa", "origin": None}  # untraceable functional
-    assert table["nelements"] == {"unit": None, "origin": None}  # bare count
+    # unit/origin (hand-pinned) and desc (schema-derived) all land per field.
+    assert table["band_gap"]["unit"] == "eV"
+    assert table["band_gap"]["origin"] == "electronic_structure"
+    assert table["band_gap"]["desc"] == "Band gap energy in eV."
+    assert table["bulk_modulus"]["unit"] == "GPa"
+    assert table["bulk_modulus"]["origin"] is None  # untraceable functional
+    assert table["nelements"]["unit"] is None and table["nelements"]["origin"] is None  # bare count
+    assert table["vbm"]["desc"] == "Valence band maximum data."  # schema gloss auto-extracted
     assert "deprecated" not in table  # metadata flag excluded
 
 

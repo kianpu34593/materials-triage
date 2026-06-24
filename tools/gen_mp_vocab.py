@@ -130,15 +130,31 @@ def vocabulary_fields(fields: dict[str, str]) -> dict[str, str]:
     }
 
 
-def build_table(surface: dict[str, str], meta: dict[str, dict]) -> dict[str, dict]:
-    """Merge the schema-derived vocabulary ``surface`` with hand-pinned ``meta`` into
-    the committed ``{field: {unit, origin}}`` table.
+def build_table(
+    surface: dict[str, str],
+    meta: dict[str, dict],
+    descriptions: dict[str, str] | None = None,
+) -> dict[str, dict]:
+    """Merge the schema-derived vocabulary ``surface`` with hand-pinned ``meta`` and
+    the schema's ``descriptions`` into the committed
+    ``{field: {unit, origin, desc, rankable}}`` table.
 
     Units and XC-functional origins are not in the schema, so they're supplied by
     hand per field. ``origin`` may be ``None`` (a field with no DFT functional, e.g.
     a count), but that must be an explicit decision: a field *absent* from ``meta``
     is a lockstep gap (its values would silently lose their unit and XC functional),
-    so the table fails loudly rather than ship incomplete."""
+    so the table fails loudly rather than ship incomplete.
+
+    ``desc`` is the opposite kind of value: it *is* in the schema, but only for some
+    fields. It's optional — a missing description is ``None`` (the adapter layers a
+    curated override on top for the load-bearing blanks), never a lockstep error.
+
+    ``rankable`` is derived from the field's scalar type: a boolean flag (``is_metal``,
+    ``is_stable``, ``is_magnetic``, ``is_gap_direct``) is a hard *filter*, never a
+    ranking target — scoring it gives every survivor the same desirability (they all
+    passed the filter), a meaningless flat score. Booleans stay in the vocabulary (as
+    filter predicates) but are marked ``rankable=False`` so the ranking stage can reject
+    them as targets."""
     missing = sorted(name for name in surface if name not in meta)
     if missing:
         raise ValueError(
@@ -146,7 +162,15 @@ def build_table(surface: dict[str, str], meta: dict[str, dict]) -> dict[str, dic
             "Add an entry (unit/origin may be None, but the decision must be explicit) "
             "to keep the FIELD_UNITS/_FIELD_ORIGIN lockstep."
         )
-    return {name: dict(meta[name]) for name in surface}
+    descriptions = descriptions or {}
+    return {
+        name: {
+            **meta[name],
+            "desc": descriptions.get(name),
+            "rankable": surface[name] != "boolean",
+        }
+        for name in surface
+    }
 
 
 def parse_query_params(openapi: dict) -> set[str]:
@@ -176,13 +200,32 @@ def parse_summary_fields(openapi: dict) -> dict[str, str]:
     }
 
 
+def parse_summary_descriptions(openapi: dict) -> dict[str, str]:
+    """Map each ``SummaryDoc`` property that carries a ``description`` to its one-line
+    text.
+
+    Unlike unit/origin (hand-pinned tribal knowledge), the schema *does* ship a short
+    gloss for many fields (``band_gap`` -> "Band gap energy in eV."). Surfacing it lets
+    the vocabulary handed to the LLM say what a field *means*, not just its unit — the
+    fix for wrong-but-plausible proxy picks (an ``eV`` field grabbed as a "voltage").
+    Fields with no description are omitted; the adapter layers curated overrides on top
+    for the load-bearing ones the schema leaves blank (e.g. ``vbm``)."""
+    props = openapi["components"]["schemas"]["SummaryDoc"]["properties"]
+    return {name: prop["description"] for name, prop in props.items() if prop.get("description")}
+
+
 def generate_table(openapi: dict) -> dict[str, dict]:
     """Run the full pipeline on an OpenAPI doc: parse → vocabulary surface → merge
-    with ``_FIELD_META`` into the committed ``{field: {unit, origin}}`` table.
+    with ``_FIELD_META`` (and the schema descriptions) into the committed
+    ``{field: {unit, origin, desc, rankable}}`` table.
 
     Raises (via the build_table lockstep guard) if the schema exposes a vocabulary
     field with no hand-pinned metadata — the signal to update ``_FIELD_META``."""
-    return build_table(vocabulary_fields(parse_summary_fields(openapi)), _FIELD_META)
+    return build_table(
+        vocabulary_fields(parse_summary_fields(openapi)),
+        _FIELD_META,
+        parse_summary_descriptions(openapi),
+    )
 
 
 def render_module(table: dict[str, dict], params: set[str], *, source: str) -> str:
@@ -195,9 +238,12 @@ def render_module(table: dict[str, dict], params: set[str], *, source: str) -> s
         f"Regenerate with: python tools/gen_mp_vocab.py  (source: {source})",
         "",
         "MP_FIELDS maps each retrievable SummaryDoc property to its pinned unit (None =",
-        "dimensionless/count) and XC-functional origin (None = no traceable functional).",
-        "PUSHABLE_PARAMS is the /summary GET query-param surface — the names the adapter",
-        "is allowed to push server-side (distinct from, and larger than, MP_FIELDS).",
+        "dimensionless/count), XC-functional origin (None = no traceable functional),",
+        "schema description (None = the schema ships no gloss; a curated override fills the",
+        "load-bearing blanks), and rankable (False = a boolean flag — a hard filter, never",
+        "a ranking target). PUSHABLE_PARAMS is the /summary GET query-param surface — the",
+        "names the adapter is allowed to push server-side (distinct from, and larger than,",
+        "MP_FIELDS).",
         '"""',
         "",
         "MP_FIELDS: dict[str, dict] = {",
@@ -205,7 +251,13 @@ def render_module(table: dict[str, dict], params: set[str], *, source: str) -> s
     for name in sorted(table):
         entry = table[name]
         unit, origin = _pylit(entry["unit"]), _pylit(entry["origin"])
-        lines.append(f'    "{name}": {{"unit": {unit}, "origin": {origin}}},')
+        desc = entry.get("desc")
+        desc_lit = "None" if desc is None else json.dumps(desc, ensure_ascii=False)
+        rankable = entry.get("rankable", True)
+        lines.append(
+            f'    "{name}": {{"unit": {unit}, "origin": {origin}, '
+            f'"desc": {desc_lit}, "rankable": {rankable}}},'
+        )
     lines.append("}")
     lines.append("")
     lines.append("PUSHABLE_PARAMS: frozenset[str] = frozenset(")

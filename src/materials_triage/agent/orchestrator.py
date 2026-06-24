@@ -31,7 +31,7 @@ from materials_triage.agent.serde import domain_serde
 from materials_triage.agent.validator import validate_output
 from materials_triage.core.critique import RankingCritique, prune_ranking_proposals
 from materials_triage.core.fidelity import reconcile_energetics, reconcile_spec
-from materials_triage.core.hypothesis import Hypothesis, compile_spec
+from materials_triage.core.hypothesis import Hypothesis, compile_spec, drop_unrankable_targets
 from materials_triage.core.ranking import rank_arithmetic_mean, rank_geometric_mean
 from materials_triage.core.schema import (
     Candidate,
@@ -265,6 +265,8 @@ def _make_hypothesis_node(
     # prebuilt table (no live fetch — that would break replayability), so binding it
     # per call would be wasted work.
     vocabulary = adapter.property_vocabulary() if adapter is not None else {}
+    descriptions = adapter.property_descriptions() if adapter is not None else {}
+    unrankable = adapter.unrankable_properties() if adapter is not None else frozenset()
 
     def hypothesis(state: OrchestratorState) -> dict:
         if provider is None:
@@ -282,11 +284,18 @@ def _make_hypothesis_node(
                 goal,
                 vocabulary,
                 snippets,
+                descriptions=descriptions,
                 nonce=nonce,
                 prior_error=None if last_exc is None else str(last_exc),
             )
             try:
                 proposed = provider.propose(prompt)
+                # Deterministic guard: a boolean flag is a hard filter, never a ranking
+                # target — scoring it flattens every survivor to one desirability. Drop
+                # any such target before the rest of the pipeline sees it.
+                kept, dropped_unrankable = drop_unrankable_targets(proposed.proposals, unrankable)
+                if dropped_unrankable:
+                    proposed = proposed.model_copy(update={"proposals": kept})
                 # Trial-compile: a shape-valid hypothesis whose proposals don't form a
                 # coherent spec is retry-worthy too, so the LLM gets the reason back.
                 compile_spec(proposed.proposals)
@@ -294,10 +303,20 @@ def _make_hypothesis_node(
                 last_exc = exc
                 continue
             proposed, critic_caveats = _apply_critic(critic, goal, proposed, nonce)
+            unrankable_caveats = (
+                (
+                    f"dropped non-rankable ranking target(s) "
+                    f"{', '.join(dropped_unrankable)}: a boolean flag is a hard filter, not "
+                    "a continuous property — scoring it gives every surviving candidate the "
+                    "same desirability (a meaningless flat rank).",
+                )
+                if dropped_unrankable
+                else ()
+            )
             return {
                 "hypothesis": proposed,
                 "literature": tuple(snippets),
-                "hypothesis_caveats": critic_caveats,
+                "hypothesis_caveats": critic_caveats + unrankable_caveats,
             }
         raise HypothesisConformanceError(
             f"LLM did not produce a schema-valid, compilable Hypothesis in {max_attempts} attempts"

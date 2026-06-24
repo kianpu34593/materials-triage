@@ -155,6 +155,6 @@ edges (`agent/`, `sources/`); `core/` stays pure and offline-testable.
 - `sources/` — pluggable retrieval backends (deterministic, never the LLM)
   - `base.py` — `SourceAdapter` interface
   - `materials_project.py` — MP adapter (server-side filter push + local routing, provenance-tagged)
-  - `_mp_fields.py` — generated MP field/param vocabulary (units, pushable params)
+  - `_mp_fields.py` — generated MP field/param vocabulary (units, descriptions, rankability, pushable params)
   - `stubs.py` — deferred sources as refusing stubs (multi-source design demonstrable; v1 = MP only)
 - top level — `cli.py` (CLI), `chat.py` (chat REPL), `render.py` (PI / audit renderers), `doctor.py` (credential/env self-check)
