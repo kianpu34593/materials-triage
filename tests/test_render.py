@@ -279,3 +279,48 @@ def test_render_run_dispatches_on_view():
     assert render_run(run, view="audit") == render_audit(run)
     with pytest.raises(ValueError):
         render_run(run, view="bogus")
+
+
+def _run_with_candidate_notes():
+    """A run whose synthesis carries per-candidate notes: one plain summary and one
+    with a suitability caveat (a molecular oxide unfit as a thin film)."""
+    from materials_triage.core.synthesis import CandidateNote
+
+    return TriageRun(
+        run_id="run-notes",
+        goal="oxide dielectrics for thin films",
+        result=TriageResult(
+            ranked=(
+                ScoredCandidate(candidate=_candidate("mp-zno", "ZnO", 3.3), score=0.9),
+                ScoredCandidate(candidate=_candidate("mp-water", "H2O", 6.0), score=0.8),
+            )
+        ),
+        synthesis=Synthesis(
+            summary="ZnO leads.",
+            candidate_notes=(
+                CandidateNote(record_id="mp-zno", summary="Wide-gap binary oxide, strong fit."),
+                CandidateNote(
+                    record_id="mp-water",
+                    summary="Matches the oxide filter numerically.",
+                    caveat="Molecular solid (H2O) — not depositable as a thin-film oxide.",
+                ),
+            ),
+        ),
+    )
+
+
+def test_render_pi_shows_per_candidate_summary_and_caveat():
+    """Under each candidate the PI view prints its one-line note summary and any
+    suitability caveat, so an unsuitable-but-matching material is visibly flagged."""
+    out = render_pi(_run_with_candidate_notes())
+
+    assert "Wide-gap binary oxide, strong fit." in out
+    assert "Molecular solid (H2O) — not depositable as a thin-film oxide." in out
+
+
+def test_render_audit_shows_per_candidate_summary_and_caveat():
+    """The audit view also renders the per-candidate note summary and caveat."""
+    out = render_audit(_run_with_candidate_notes())
+
+    assert "Matches the oxide filter numerically." in out
+    assert "not depositable as a thin-film oxide" in out

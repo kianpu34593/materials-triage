@@ -17,11 +17,20 @@ spec vocabulary: required/excluded elements become ``ElementPredicate``s
 (quantifier ``all`` / ``none``) and a count cap becomes a ``CountConstraint``.
 """
 
+import math
 import re
 
 from pydantic import BaseModel, ConfigDict
 
 from materials_triage.core.schema import CountConstraint, ElementPredicate, TriageSpec
+
+#: Materials Project energetics properties whose *domain* coupling the numeric layer
+#: cannot see: ``is_stable`` is exactly ``energy_above_hull == 0`` (so requiring it
+#: makes any hull bound/ranking redundant), and ``formation_energy_per_atom`` is only
+#: meaningful within a single phase diagram — not a cross-chemistry stability metric.
+_FORMATION_ENERGY = "formation_energy_per_atom"
+_ENERGY_ABOVE_HULL = "energy_above_hull"
+_IS_STABLE = "is_stable"
 
 #: Substance-class noun -> the element it requires. "oxide" implies oxygen must be
 #: present; "nitride" nitrogen; and so on. The defining chemistry of the request.
@@ -256,4 +265,108 @@ def reconcile_spec(goal: str, spec: TriageSpec) -> tuple[TriageSpec, list[FacetF
     if seeded_count is not None:
         update["count"] = seeded_count
     new_spec = TriageSpec.model_validate(spec.model_copy(update=update).model_dump())
+    return new_spec, findings
+
+
+def reconcile_energetics(spec: TriageSpec) -> tuple[TriageSpec, list[FacetFinding]]:
+    """Apply deterministic energetics domain rules the numeric layer can't encode.
+
+    Two rules, each *removing* an unsound or redundant energetics objective and
+    recording a :class:`FacetFinding` caveat:
+
+    1. **is_stable subsumes energy_above_hull.** If ``is_stable=True`` is required,
+       an ``energy_above_hull`` constraint or ranking target is redundant (every
+       stable material has ``energy_above_hull == 0``) — drop it.
+    2. **Formation energy isn't cross-system comparable.** ``formation_energy_per_atom``
+       is only meaningful within one phase diagram, not for comparing stability across
+       different chemistries — drop any constraint or ranking target on it.
+
+    Dropping a ranking target renormalizes the remaining weights to sum to 1. A drop
+    that would empty ``ranking_targets`` is skipped (the targets are kept) with a
+    caveat instead, so the run keeps a ranking. The result always satisfies
+    :class:`TriageSpec`'s coherence rules (it is re-validated)."""
+    findings: list[FacetFinding] = []
+    drop_constraints: set[str] = set()
+    drop_rankings: set[str] = set()
+
+    # Rule 2: formation energy is not a cross-chemistry stability metric.
+    has_fe = any(c.property_name == _FORMATION_ENERGY for c in spec.constraints) or any(
+        t.property_name == _FORMATION_ENERGY for t in spec.ranking_targets
+    )
+    if has_fe:
+        drop_constraints.add(_FORMATION_ENERGY)
+        drop_rankings.add(_FORMATION_ENERGY)
+        findings.append(
+            FacetFinding(
+                facet="formation-energy",
+                cue=_FORMATION_ENERGY,
+                action="dropped",
+                detail="remove formation_energy_per_atom",
+                caveat=(
+                    "formation_energy_per_atom dropped: it is only meaningful within a "
+                    "single phase diagram, not for comparing stability across different "
+                    "chemistries; use energy_above_hull or is_stable for thermodynamic "
+                    "stability."
+                ),
+            )
+        )
+
+    # Rule 1: is_stable=True makes energy_above_hull redundant.
+    requires_stable = any(
+        b.property_name == _IS_STABLE and b.required for b in spec.boolean_constraints
+    )
+    if requires_stable:
+        has_eah = any(c.property_name == _ENERGY_ABOVE_HULL for c in spec.constraints) or any(
+            t.property_name == _ENERGY_ABOVE_HULL for t in spec.ranking_targets
+        )
+        if has_eah:
+            drop_constraints.add(_ENERGY_ABOVE_HULL)
+            drop_rankings.add(_ENERGY_ABOVE_HULL)
+            findings.append(
+                FacetFinding(
+                    facet="stable-vs-hull",
+                    cue=_IS_STABLE,
+                    action="dropped",
+                    detail="remove energy_above_hull",
+                    caveat=(
+                        "energy_above_hull dropped: redundant with the required "
+                        "is_stable=True (every stable material has energy_above_hull = 0)."
+                    ),
+                )
+            )
+
+    if not drop_constraints and not drop_rankings:
+        return spec, findings
+
+    # Guard: never empty the ranking set — keep the targets and record a skip instead.
+    remaining = [t for t in spec.ranking_targets if t.property_name not in drop_rankings]
+    if spec.ranking_targets and not remaining:
+        findings.append(
+            FacetFinding(
+                facet="energetics",
+                cue="ranking",
+                action="skipped",
+                detail="ranking targets kept",
+                caveat=(
+                    "energetics rule would have removed every ranking objective; kept to "
+                    "preserve a ranking (review the energetics target at the spec gate)."
+                ),
+            )
+        )
+        remaining = list(spec.ranking_targets)
+        drop_rankings = set()
+
+    new_constraints = tuple(c for c in spec.constraints if c.property_name not in drop_constraints)
+    new_ranking = tuple(remaining)
+    if drop_rankings and new_ranking:  # a drop changed the weight total — renormalize
+        total = math.fsum(t.weight for t in new_ranking)
+        if total > 0:
+            new_ranking = tuple(
+                t.model_copy(update={"weight": t.weight / total}) for t in new_ranking
+            )
+    new_spec = TriageSpec.model_validate(
+        spec.model_copy(
+            update={"constraints": new_constraints, "ranking_targets": new_ranking}
+        ).model_dump()
+    )
     return new_spec, findings

@@ -13,6 +13,15 @@ from materials_triage.agent.prompts import DEFAULT_TOP_K
 from materials_triage.core.run_trace import TriageRun
 
 
+def _notes_by_id(run: TriageRun) -> dict:
+    """Map each synthesis candidate note to the candidate id it annotates (the note's
+    ``record_id`` equals the presented ``candidate.identifier``). Empty when the run
+    has no synthesis or no notes."""
+    if run.synthesis is None:
+        return {}
+    return {note.record_id: note for note in run.synthesis.candidate_notes}
+
+
 def _shortlist_header(label: str, total: int, top_k: int) -> str:
     """Header for a ranked section, disclosing the cap when more were ranked than shown
     (e.g. 'Ranked shortlist (showing top 20 of 1023):') — honest, not a silent truncation."""
@@ -40,6 +49,7 @@ def render_pi(run: TriageRun, *, top_k: int = DEFAULT_TOP_K) -> str:
     lines = [f"Goal: {run.goal}", ""]
     if run.synthesis is not None:
         lines += [run.synthesis.summary, ""]
+    notes = _notes_by_id(run)
     ranked = run.result.ranked if run.result is not None else ()
     lines.append(_shortlist_header("Ranked shortlist", len(ranked), top_k))
     if not ranked:
@@ -50,6 +60,11 @@ def render_pi(run: TriageRun, *, top_k: int = DEFAULT_TOP_K) -> str:
         if scored.flagged_missing:
             line += f" ⚠ missing data: {', '.join(sorted(scored.flagged_missing))}"
         lines.append(line)
+        note = notes.get(cand.identifier)
+        if note is not None:
+            lines.append(f"     {note.summary}")
+            if note.caveat:
+                lines.append(f"     ⚠ {note.caveat}")
     if run.caveats:
         lines += ["", "Caveats:"]
         lines += [f"  ⚠ {caveat}" for caveat in run.caveats]
@@ -99,6 +114,7 @@ def render_audit(run: TriageRun, *, top_k: int = DEFAULT_TOP_K) -> str:
         lines += [f"  - {p.title} ({p.provenance.record_id})" for p in run.literature]
         lines.append("")
 
+    notes = _notes_by_id(run)
     ranked = run.result.ranked if run.result is not None else ()
     lines.append(_shortlist_header("Ranked candidates", len(ranked), top_k))
     if not ranked:
@@ -106,6 +122,11 @@ def render_audit(run: TriageRun, *, top_k: int = DEFAULT_TOP_K) -> str:
     for position, scored in enumerate(ranked[:top_k], start=1):
         cand = scored.candidate
         lines.append(f"  {position}. {cand.formula} ({cand.identifier}) — score {scored.score:.3f}")
+        note = notes.get(cand.identifier)
+        if note is not None:
+            lines.append(f"       {note.summary}")
+            if note.caveat:
+                lines.append(f"       ⚠ {note.caveat}")
         for name, prop in cand.properties.items():
             lines.append(f"       {name} = {prop.value} {prop.unit or ''}".rstrip())
         if scored.flagged_missing:

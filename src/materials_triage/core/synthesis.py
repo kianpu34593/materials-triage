@@ -37,15 +37,44 @@ class GroundedClaim(BaseModel):
         return value
 
 
+class CandidateNote(BaseModel):
+    """A per-candidate one-line verdict bound to the candidate it is about: a short
+    ``summary`` and an optional suitability ``caveat`` the numeric layer cannot
+    express (e.g. a molecular solid like H2O/CO2 that matches the oxide filter
+    numerically but cannot be deposited as a thin film). Like a claim, its
+    ``record_id`` must resolve to a retrieved candidate — the validator enforces it,
+    which is what keeps the note non-fabricated.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: The provenance ``record_id`` of the retrieved candidate this note is about.
+    record_id: str
+    #: A one-line summary of the candidate's fit for the goal.
+    summary: str
+    #: An optional suitability caveat; empty when the candidate has no flagged concern.
+    caveat: str = ""
+
+    @field_validator("record_id", "summary")
+    @classmethod
+    def _non_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("a candidate note needs a record_id and a non-empty summary")
+        return value
+
+
 class Synthesis(BaseModel):
-    """The LLM's whole narrative emission: a PI-facing summary plus the cited
-    mechanistic claims behind the shortlist. The summary is the at-a-glance prose
-    the PI view leads with; the claims are the auditable, per-candidate "why"."""
+    """The LLM's whole narrative emission: a PI-facing summary, the cited mechanistic
+    claims behind the shortlist, and an optional per-candidate note (one-line summary +
+    suitability caveat). The summary is the at-a-glance prose the PI view leads with;
+    the claims are the auditable, per-candidate "why"; the notes annotate each presented
+    candidate with fit and caveats."""
 
     model_config = ConfigDict(frozen=True)
 
     summary: str
     claims: tuple[GroundedClaim, ...] = ()
+    candidate_notes: tuple[CandidateNote, ...] = ()
 
     @field_validator("summary")
     @classmethod
@@ -60,13 +89,16 @@ def ungrounded_record_ids(synthesis: Synthesis, valid_record_ids: Iterable[str])
 
     This is the grounding check the output validator (step 8) enforces and the
     synthesis retry loop uses to feed a correction back: the LLM may only cite
-    materials deterministic retrieval actually returned. An empty result means the
-    narrative is fully grounded. Order-preserving and de-duplicated."""
+    materials deterministic retrieval actually returned — across BOTH the mechanistic
+    claims and the per-candidate notes. An empty result means the narrative is fully
+    grounded. Order-preserving (claims before notes) and de-duplicated."""
     valid = set(valid_record_ids)
     seen: set[str] = set()
     bad: list[str] = []
-    for claim in synthesis.claims:
-        if claim.record_id not in valid and claim.record_id not in seen:
-            seen.add(claim.record_id)
-            bad.append(claim.record_id)
+    cited_ids = [claim.record_id for claim in synthesis.claims]
+    cited_ids += [note.record_id for note in synthesis.candidate_notes]
+    for record_id in cited_ids:
+        if record_id not in valid and record_id not in seen:
+            seen.add(record_id)
+            bad.append(record_id)
     return tuple(bad)
