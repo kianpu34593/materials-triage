@@ -148,7 +148,7 @@ def build_hypothesis_prompt(
     On a retry, ``prior_error`` (the schema/compile rejection) is fed back so the
     model corrects the specific malformation. Pair with :data:`ROLE_SYSTEM_PROMPT`.
     """
-    vocab_guidance = build_property_vocabulary_guidance(vocabulary)
+    vocab_guidance = build_property_vocabulary_guidance(vocabulary, descriptions)
     literature = "\n\n".join(
         wrap_untrusted(
             f"{p.title}\n{p.text}" if p.text else p.title,
