@@ -40,6 +40,24 @@ class SourceAdapter(abc.ABC):
         overrides it."""
         return {}
 
+    def property_descriptions(self) -> Mapping[str, str]:
+        """A one-line meaning for each retrievable property name (e.g.
+        ``{"vbm": "Valence-band maximum … NOT a cell voltage"}``). Handed to the
+        spec-building prompt alongside the units so the LLM picks proxies by *meaning*,
+        not just by unit — preventing wrong-but-plausible picks (an ``eV`` field grabbed
+        as "voltage"). The default is empty (a source may expose units without glosses);
+        a real source overrides it."""
+        return {}
+
+    def unrankable_properties(self) -> frozenset[str]:
+        """Property names that may be *filters* but never *ranking targets* — chiefly
+        boolean flags (``is_stable``, ``is_magnetic``): every candidate surviving the
+        filter holds the same value, so scoring it flattens the pool to one desirability.
+        The hypothesis stage drops any ranking target naming one. The default is empty (a
+        source that can't classify rankability constrains nothing); a real source
+        overrides it."""
+        return frozenset()
+
     def classify_predicates(self, spec: TriageSpec) -> PredicateRouting:
         """Route the spec's hard predicates between server-side push and local
         enforcement, so the deterministic filter knows which ones this source could

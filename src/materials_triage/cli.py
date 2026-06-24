@@ -15,6 +15,7 @@ from langgraph.types import Command
 
 from materials_triage.agent.orchestrator import (
     HypothesisProvider,
+    InputRefused,
     LiteratureRetriever,
     RankingCritic,
     SynthesisProvider,
@@ -22,6 +23,7 @@ from materials_triage.agent.orchestrator import (
 )
 from materials_triage.agent.prompts import DEFAULT_TOP_K
 from materials_triage.core.run_trace import TriageRun, export_run, write_run
+from materials_triage.policy.guardrails import CAPABILITIES
 from materials_triage.render import render_run
 from materials_triage.sources.base import SourceAdapter
 
@@ -179,16 +181,24 @@ def main(argv: list[str] | None = None) -> int:
     from materials_triage.retrieval.rag import LiteratureRAG, OpenAlexFetcher
     from materials_triage.sources.materials_project import MaterialsProjectAdapter
 
-    run = triage(
-        args.goal,
-        adapter=MaterialsProjectAdapter(),
-        provider=BedrockHypothesisProvider(),
-        synthesis_provider=BedrockSynthesisProvider(),
-        rag=LiteratureRAG(OpenAlexFetcher()),
-        critic=BedrockRankingCritic(),
-        top_k=args.top_k,
-        runs_dir=args.runs_dir,
-        thread_id=args.thread_id,
-    )
+    try:
+        run = triage(
+            args.goal,
+            adapter=MaterialsProjectAdapter(),
+            provider=BedrockHypothesisProvider(),
+            synthesis_provider=BedrockSynthesisProvider(),
+            rag=LiteratureRAG(OpenAlexFetcher()),
+            critic=BedrockRankingCritic(),
+            top_k=args.top_k,
+            runs_dir=args.runs_dir,
+            thread_id=args.thread_id,
+        )
+    except InputRefused as exc:
+        # The input policy gate refused (forbidden action or out of scope). Print the
+        # capabilities redirect cleanly instead of dumping a traceback, and exit non-zero
+        # so a script can detect the refusal.
+        message = exc.reason if CAPABILITIES in exc.reason else f"{exc.reason} {CAPABILITIES}"
+        print(message, file=sys.stderr)
+        return 2
     print(render_run(run, view=args.view, top_k=args.top_k))
     return 0

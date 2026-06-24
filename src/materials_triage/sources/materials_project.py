@@ -51,6 +51,45 @@ _FIELD_ORIGIN: Mapping[str, str] = {
     name: meta["origin"] for name, meta in MP_FIELDS.items() if meta["origin"] is not None
 }
 
+#: Curated overrides for descriptions whose auto-extracted schema gloss is accurate but
+#: insufficient — chiefly absolute electronic energies in eV an LLM can mistake for an
+#: electrochemical voltage. The override sharpens the meaning and states the anti-proxy
+#: outright, so the hypothesis step won't grab e.g. ``vbm`` as a "high voltage" ranking
+#: target (there is no cell-voltage field in this vocabulary). Layered over MP_FIELDS'
+#: schema ``desc`` in FIELD_DESCRIPTIONS below.
+_FIELD_DESCRIPTION_OVERRIDES: Mapping[str, str] = {
+    "vbm": (
+        "Valence-band maximum: an absolute electronic band-edge energy (eV). NOT an "
+        "electrochemical cell or operating voltage — battery voltage is not expressible "
+        "in this vocabulary."
+    ),
+    "cbm": "Conduction-band minimum: an absolute electronic band-edge energy (eV). NOT a voltage.",
+    "efermi": "Fermi level: an absolute electronic reference energy (eV). NOT a voltage.",
+    "weighted_work_function": (
+        "Work function (eV): energy to remove an electron to vacuum. NOT an "
+        "electrochemical voltage."
+    ),
+}
+
+#: SummaryDoc field → one-line meaning: the schema gloss auto-extracted into MP_FIELDS
+#: (by tools/gen_mp_vocab.py), with the curated overrides above layered on top. Handed to
+#: the hypothesis prompt next to the units so the LLM names proxies by meaning, not just
+#: unit (the fix for an ``eV`` field being grabbed as "voltage").
+FIELD_DESCRIPTIONS: Mapping[str, str] = {
+    name: _FIELD_DESCRIPTION_OVERRIDES.get(name) or meta["desc"]
+    for name, meta in MP_FIELDS.items()
+    if _FIELD_DESCRIPTION_OVERRIDES.get(name) or meta["desc"]
+}
+
+#: Properties that may be filters but never ranking targets — the boolean flags
+#: (``is_stable``/``is_metal``/``is_magnetic``/``is_gap_direct``), marked ``rankable:
+#: False`` in MP_FIELDS by the generator from their scalar type. Scoring a boolean is
+#: meaningless: every survivor passed the filter, so they share one desirability and the
+#: rank goes flat. The hypothesis stage drops any ranking target naming one.
+_UNRANKABLE_FIELDS: frozenset[str] = frozenset(
+    name for name, meta in MP_FIELDS.items() if not meta["rankable"]
+)
+
 
 class MaterialsProjectAdapter(SourceAdapter):
     """Retrieve candidates from the Materials Project summary API."""
@@ -96,6 +135,21 @@ class MaterialsProjectAdapter(SourceAdapter):
         ``retrieve`` returns. The table is committed static data (generated from the
         MP schema), never a live fetch, keeping every run replayable."""
         return FIELD_UNITS
+
+    def property_descriptions(self) -> Mapping[str, str]:
+        """One-line meaning for each retrievable property — the schema gloss (in
+        ``MP_FIELDS``) sharpened by curated overrides where the bare gloss invites a
+        wrong proxy (``vbm`` is a band edge, not a cell voltage). Surfaced to the
+        hypothesis prompt next to the units so the LLM picks targets by meaning.
+        Committed static data, like the vocabulary."""
+        return FIELD_DESCRIPTIONS
+
+    def unrankable_properties(self) -> frozenset[str]:
+        """The boolean flags (``is_stable``/``is_metal``/``is_magnetic``/
+        ``is_gap_direct``) — retrievable and valid as filters, but never ranking targets.
+        Derived from the generated ``rankable`` flag; the hypothesis stage drops any
+        ranking target naming one (scoring a boolean flattens the pool to one score)."""
+        return _UNRANKABLE_FIELDS
 
     def classify_predicates(self, spec: TriageSpec) -> PredicateRouting:
         """Route the spec's hard predicates against this source's two committed

@@ -9,6 +9,7 @@ rejected before it can reach the deterministic core.
 """
 
 import math
+from collections.abc import Container
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -150,6 +151,36 @@ def compile_spec(
         count=counts[0] if counts else None,
         ranking_method=ranking_method,
     )
+
+
+def drop_unrankable_targets(
+    proposals: tuple[Proposal, ...],
+    unrankable: Container[str],
+) -> tuple[tuple[Proposal, ...], tuple[str, ...]]:
+    """Drop ranking-target proposals naming a non-rankable property.
+
+    A boolean flag (``is_magnetic``, ``is_stable``, ``is_metal``, ``is_gap_direct``) is a
+    hard *filter*, never a ranking target: every candidate that survives the filter holds
+    the same value, so scoring it through a desirability curve flattens the whole pool to
+    1.0 — a meaningless rank. The source marks such properties non-rankable
+    (``unrankable``); this removes any ranking target that names one while leaving its use
+    as a filter predicate untouched. Returns the surviving proposals (original order) and
+    the dropped property names (for a run caveat). Unlike the critic's prune, this never
+    guards against emptying the ranking set — a boolean target is structurally invalid and
+    must go even if it was the only one (no rank beats a meaningless one)."""
+    dropped = tuple(
+        p.ranking_target.property_name
+        for p in proposals
+        if p.kind == "ranking_target" and p.ranking_target.property_name in unrankable
+    )
+    if not dropped:
+        return proposals, ()
+    survivors = tuple(
+        p
+        for p in proposals
+        if not (p.kind == "ranking_target" and p.ranking_target.property_name in unrankable)
+    )
+    return survivors, dropped
 
 
 def _normalize_weights(targets: tuple[RankingTarget, ...]) -> tuple[RankingTarget, ...]:

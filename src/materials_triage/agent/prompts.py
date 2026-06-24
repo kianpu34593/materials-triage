@@ -64,7 +64,11 @@ properties, application), no punctuation, no commentary, no quotes."""
 RANKING_TARGET_GUIDANCE = """\
 Ranking targets: the agent ranks candidates by the weighted GEOMETRIC MEAN of each \
 target's desirability, so a single unacceptable property zeros a candidate (a strong \
-score elsewhere cannot compensate). For every ranking target you propose, announce its \
+score elsewhere cannot compensate). A ranking target must be a CONTINUOUS numeric \
+property: a boolean flag (e.g. `is_stable`, `is_metal`, `is_magnetic`, `is_gap_direct`) \
+is a hard filter, never a ranking target — every candidate that passes it scores \
+identically, so propose it as a boolean constraint instead. For every ranking target \
+you propose, announce its \
 desirability ramp bounds explicitly from the literature — do not leave them to be \
 inferred from the candidate pool:
 - direction "maximize" (bigger is better): give `lower` (desirability 0 at/below) and \
@@ -91,26 +95,35 @@ chemistries: it is only meaningful within a single phase diagram, not across ele
 systems. For thermodynamic stability use `energy_above_hull` (or `is_stable`) instead."""
 
 
-def build_property_vocabulary_guidance(vocabulary: Mapping[str, str | None]) -> str:
+def build_property_vocabulary_guidance(
+    vocabulary: Mapping[str, str | None],
+    descriptions: Mapping[str, str] | None = None,
+) -> str:
     """Render the source's retrievable property vocabulary as hypothesis-prompt guidance.
 
     The spec's quality ceiling is the schema/source surface, not the prompt — but a
     hypothesis that names a property the source won't return causes silent missing-data
     wipeout downstream. So we hand the LLM the exact retrievable names (with units;
-    dimensionless ones marked) and tell it to propose ONLY these. An empty vocabulary
-    yields an empty string (a source that declares nothing constrains nothing — adding
-    a "use only these (none)" line would be actively misleading)."""
+    dimensionless ones marked) and tell it to propose ONLY these. Each name also carries
+    its one-line ``descriptions`` gloss where available, so the LLM picks proxies by
+    *meaning* not just unit — without it an ``eV`` field like ``vbm`` gets grabbed as
+    "voltage". An empty vocabulary yields an empty string (a source that declares nothing
+    constrains nothing — adding a "use only these (none)" line would be actively
+    misleading)."""
     if not vocabulary:
         return ""
+    descriptions = descriptions or {}
     lines = "\n".join(
         f"- {name} ({unit if unit is not None else 'dimensionless'})"
+        + (f" — {descriptions[name]}" if descriptions.get(name) else "")
         for name, unit in vocabulary.items()
     )
     return (
         "Retrievable properties: propose constraints and ranking targets using ONLY the "
-        "property names below (with their units) — the data source will not return any "
-        "other property, so naming one elsewhere yields missing data, not a match:\n"
-        f"{lines}"
+        "property names below (with their units and meaning) — the data source will not "
+        "return any other property, so naming one elsewhere yields missing data, not a "
+        "match. Pick targets by the stated meaning, not by guessing from the name or "
+        f"unit:\n{lines}"
     )
 
 
@@ -119,6 +132,7 @@ def build_hypothesis_prompt(
     vocabulary: Mapping[str, str | None],
     snippets: Iterable[LiteraturePassage],
     *,
+    descriptions: Mapping[str, str] | None = None,
     nonce: str,
     prior_error: str | None = None,
 ) -> str:

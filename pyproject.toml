@@ -43,6 +43,13 @@ include = ["materials_triage*"]
 [tool.ruff]
 target-version = "py313"
 line-length = 100
+# The MP field table is generated (tools/gen_mp_vocab.py) and its one-line schema
+# descriptions are data, not hand-written code — some exceed the line length. Exclude
+# the generated module from lint + format so the generator's stable, single-line output
+# stays the source of truth; force-exclude so pre-commit (which passes changed files
+# explicitly) honors the exclude too.
+extend-exclude = ["src/materials_triage/sources/_mp_fields.py"]
+force-exclude = true
 
 [tool.ruff.lint]
 # pyflakes (F), pycodestyle (E/W), isort (I), bugbear (B), pyupgrade (UP).
