@@ -1304,3 +1304,57 @@ def test_checkpoint_serde_emits_no_unregistered_or_blocked_warnings(caplog):
         if "unregistered type" in r.getMessage() or "Blocked deserialization" in r.getMessage()
     ]
     assert not offenders, offenders
+
+
+def _hypothesis_with_formation_energy_ranking():
+    """A hypothesis whose ranking includes formation_energy_per_atom — the unsound
+    cross-system metric the energetics gate must drop at spec_build."""
+    return Hypothesis(
+        proposals=(
+            ConstraintProposal(
+                constraint=Constraint(property_name="band_gap", min=2.0),
+                rationale="wide gap",
+                confidence=0.8,
+            ),
+            RankingProposal(
+                ranking_target=RankingTarget(
+                    property_name="band_gap",
+                    direction="maximize",
+                    weight=0.5,
+                    lower=1.0,
+                    target=3.0,
+                ),
+                rationale="prefer wider",
+                confidence=0.8,
+            ),
+            RankingProposal(
+                ranking_target=RankingTarget(
+                    property_name="formation_energy_per_atom",
+                    direction="minimize",
+                    weight=0.5,
+                    target=-2.0,
+                    upper=0.0,
+                ),
+                rationale="prefer stable",
+                confidence=0.8,
+            ),
+        ),
+        mechanism="m",
+    )
+
+
+def test_spec_build_energetics_gate_drops_formation_energy_and_caveats_the_run():
+    """The energetics gate runs in spec_build: the recommended spec the human sees has
+    the formation_energy_per_atom ranking target removed, and the run carries the
+    explaining caveat."""
+    provider = _StubProvider(_hypothesis_with_formation_energy_ranking())
+    orchestrator = build_orchestrator(provider=provider)
+    config = {"configurable": {"thread_id": "energetics-gate"}}
+
+    paused = orchestrator.invoke({"goal": "wide-gap stable oxide"}, config)
+    recommended = paused["__interrupt__"][0].value["recommended_spec"]
+    assert {t.property_name for t in recommended.ranking_targets} == {"band_gap"}
+
+    orchestrator.invoke(Command(resume=recommended), config)
+    run = export_run(orchestrator, config)
+    assert any("formation_energy_per_atom" in c for c in run.caveats)

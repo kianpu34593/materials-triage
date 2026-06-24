@@ -30,7 +30,7 @@ from materials_triage.agent.prompts import (
 from materials_triage.agent.serde import domain_serde
 from materials_triage.agent.validator import validate_output
 from materials_triage.core.critique import RankingCritique, prune_ranking_proposals
-from materials_triage.core.fidelity import reconcile_spec
+from materials_triage.core.fidelity import reconcile_energetics, reconcile_spec
 from materials_triage.core.hypothesis import Hypothesis, compile_spec
 from materials_triage.core.ranking import rank_arithmetic_mean, rank_geometric_mean
 from materials_triage.core.schema import (
@@ -333,6 +333,13 @@ def _spec_build_node(state: OrchestratorState) -> dict:
         # so a seeded coherence violation surfaces as the same ValidationError
         # class as compile_spec — caught here for an attributable error.
         recommended, findings = reconcile_spec(state["goal"], recommended)
+        # Energetics gate: deterministically drop unsound/redundant energetics
+        # objectives the numeric layer can't see — formation_energy_per_atom (not
+        # cross-chemistry comparable) and energy_above_hull when is_stable=True is
+        # required (redundant). Like reconcile_spec it re-validates, so a coherence
+        # violation surfaces as the same ValidationError class, caught here.
+        recommended, energetics_findings = reconcile_energetics(recommended)
+        findings = findings + energetics_findings
     except ValidationError as exc:
         raise SpecCompilationError(
             "the hypothesis proposals did not compile to a coherent TriageSpec"

@@ -135,3 +135,115 @@ def test_seeded_spec_that_violates_coherence_rules_raises():
 
     with pytest.raises(ValueError):
         reconcile_spec("a non-toxic semiconductor", spec)
+
+
+# --- reconcile_energetics: deterministic energetics domain rules ---
+
+
+def test_reconcile_energetics_drops_formation_energy_ranking_target():
+    """formation_energy_per_atom is not comparable across chemistries, so a ranking
+    target on it is dropped and the remaining weights renormalize to sum to 1."""
+    from materials_triage.core.fidelity import reconcile_energetics
+    from materials_triage.core.schema import RankingTarget
+
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=2.0),),
+        ranking_targets=(
+            RankingTarget(
+                property_name="band_gap", direction="maximize", weight=0.5, lower=1.0, target=3.0
+            ),
+            RankingTarget(
+                property_name="formation_energy_per_atom",
+                direction="minimize",
+                weight=0.5,
+                target=-2.0,
+                upper=0.0,
+            ),
+        ),
+        ranking_method="geometric_mean",
+    )
+
+    new_spec, findings = reconcile_energetics(spec)
+
+    names = {t.property_name for t in new_spec.ranking_targets}
+    assert names == {"band_gap"}  # formation energy dropped
+    assert new_spec.ranking_targets[0].weight == 1.0  # renormalized
+    assert any("formation_energy_per_atom" in f.caveat for f in findings)
+
+
+def test_reconcile_energetics_drops_hull_when_is_stable_required():
+    """is_stable=True makes an energy_above_hull constraint redundant -> dropped."""
+    from materials_triage.core.fidelity import reconcile_energetics
+    from materials_triage.core.schema import BooleanConstraint
+
+    spec = TriageSpec(
+        constraints=(
+            Constraint(property_name="band_gap", min=2.0),
+            Constraint(property_name="energy_above_hull", max=0.05),
+        ),
+        boolean_constraints=(BooleanConstraint(property_name="is_stable", required=True),),
+    )
+
+    new_spec, findings = reconcile_energetics(spec)
+
+    names = {c.property_name for c in new_spec.constraints}
+    assert names == {"band_gap"}  # hull constraint dropped
+    assert any("redundant with the required is_stable" in f.caveat for f in findings)
+
+
+def test_reconcile_energetics_keeps_hull_when_is_stable_not_required():
+    """Without is_stable=True, an energy_above_hull constraint is a legitimate
+    metastability filter and is left untouched."""
+    from materials_triage.core.fidelity import reconcile_energetics
+
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="energy_above_hull", max=0.05),),
+    )
+
+    new_spec, findings = reconcile_energetics(spec)
+
+    assert {c.property_name for c in new_spec.constraints} == {"energy_above_hull"}
+    assert findings == []
+
+
+def test_reconcile_energetics_drops_formation_energy_constraint():
+    """A hard constraint on formation_energy_per_atom is dropped too (cross-system
+    filtering by it is equally unsound)."""
+    from materials_triage.core.fidelity import reconcile_energetics
+
+    spec = TriageSpec(
+        constraints=(
+            Constraint(property_name="band_gap", min=2.0),
+            Constraint(property_name="formation_energy_per_atom", max=-1.0),
+        ),
+    )
+
+    new_spec, _ = reconcile_energetics(spec)
+
+    assert {c.property_name for c in new_spec.constraints} == {"band_gap"}
+
+
+def test_reconcile_energetics_guards_against_emptying_the_ranking_set():
+    """If the only ranking target is the energetics one, it is KEPT (a skip) rather
+    than dropped, so the run still has something to rank by."""
+    from materials_triage.core.fidelity import reconcile_energetics
+    from materials_triage.core.schema import RankingTarget
+
+    spec = TriageSpec(
+        constraints=(Constraint(property_name="band_gap", min=2.0),),
+        ranking_targets=(
+            RankingTarget(
+                property_name="formation_energy_per_atom",
+                direction="minimize",
+                weight=1.0,
+                target=-2.0,
+                upper=0.0,
+            ),
+        ),
+        ranking_method="geometric_mean",
+    )
+
+    new_spec, findings = reconcile_energetics(spec)
+
+    assert {t.property_name for t in new_spec.ranking_targets} == {"formation_energy_per_atom"}
+    assert any(f.action == "skipped" for f in findings)

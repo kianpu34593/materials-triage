@@ -248,3 +248,33 @@ def test_build_chat_messages_keeps_user_text_out_of_system_slot():
     assert injection not in messages[0][1]
     assert injection in messages[1][1]  # present, but inside the wrapped data block
     assert "untrusted_data" in messages[1][1]
+
+
+def test_build_hypothesis_prompt_carries_energetics_guidance():
+    """The hypothesis prompt includes the energetics domain guidance (trusted), so the
+    LLM avoids the two unsound choices the deterministic gate would otherwise repair:
+    pairing is_stable with energy_above_hull, and using formation_energy_per_atom for
+    cross-system stability."""
+    from materials_triage.agent.prompts import ENERGETICS_GUIDANCE, build_hypothesis_prompt
+
+    prompt = build_hypothesis_prompt("stable wide-gap oxide", {"band_gap": "eV"}, [], nonce="n")
+
+    assert ENERGETICS_GUIDANCE in prompt
+    lowered = ENERGETICS_GUIDANCE.lower()
+    assert "is_stable" in lowered and "energy_above_hull" in lowered
+    assert "formation_energy_per_atom" in lowered
+
+
+def test_build_synthesis_prompt_asks_for_per_candidate_notes():
+    """The synthesis prompt asks for a one-line summary plus a suitability caveat per
+    ranked candidate — so numerically-matching-but-unsuitable materials (e.g. a
+    molecular oxide like H2O/CO2 that can't be a thin film) get flagged."""
+    result = TriageResult(
+        ranked=(ScoredCandidate(candidate=_candidate("mp-1", "TiO2"), score=1.0),)
+    )
+
+    prompt = build_synthesis_prompt("wide-gap oxide thin films", result, [], nonce="n").lower()
+
+    assert "caveat" in prompt
+    assert "one-line" in prompt or "one line" in prompt or "per candidate" in prompt
+    assert "suitab" in prompt or "molecular" in prompt
