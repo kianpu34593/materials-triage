@@ -1,9 +1,24 @@
 # Materials-Triage
+## Overview
 
-A robot helper that finds the **best materials** for a scientist — using only
-public data, always showing **where every fact came from**, and **never making
-up numbers**.
+Materials-Triage turns a scientist's natural-language request into a **ranked, fully-cited
+shortlist of candidate materials** with caveats and clearly-marked missing/uncertain data in
+two views: a concise **PI summary** and a detailed technical **audit** trace. It is
+public-data-only by construction (no wet-lab actions, no private-lab data, no paywalled sources)
+and resists prompt injection by treating retrieved text as untrusted DATA, never instructions.
 
+**The load-bearing decision: the LLM never invents scientific facts.** Public databases supply
+every number (tagged with source + method), deterministic code filters and ranks, and the LLM only
+builds the spec, proposes hypotheses, and writes grounded, cited narrative — an output validator
+rejects any ID or citation that doesn't resolve to retrieved data. This makes every run **honest**
+(numbers come from tools, not the model), **traceable** (each run is a replayable `TriageRun`), and
+**configurable** (tweak a knob, resume from that step).
+
+The pipeline runs as a traced state machine: input gate → an LLM builds and a human confirms the
+spec (informed by hypotheses over the literature) → deterministic retrieve / filter / rank →
+grounded synthesis → output validation → render.
+
+📄 **[Full design note](docs/design-note.md)** 
 ## Run it (Docker)
 
 Docker is the easiest way to run on any OS — no local Python toolchain needed.
