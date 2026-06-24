@@ -83,3 +83,13 @@ unwraps the transport envelope, pins units the payload omits, attaches provenanc
   still holds. The same generator also emits `PUSHABLE_PARAMS` — the `/summary` GET query-param
   surface (distinct from, and larger than, the retrievable fields) — which gates the server-side
   filter push (#38).
+- **Field meanings + rankability (later refinement).** The vocabulary surface gained two more
+  default-empty methods so the hypothesis stage names targets by *meaning*, not just by unit:
+  `property_descriptions() -> Mapping[str, str]` (each field's one-line gloss, fed to the
+  prompt next to the unit) and `unrankable_properties() -> frozenset[str]` (names valid as
+  filters but never ranking targets — chiefly boolean flags, whose desirability would flatten
+  the whole pool to one score). The generator now also extracts each `SummaryDoc` field's schema
+  `description` and a type-derived `rankable` flag into `MP_FIELDS` (so the table is now
+  `{field: {unit, origin, desc, rankable}}`); the MP adapter layers curated overrides on the
+  band-edge eV fields (`vbm`/`cbm`/`efermi`/`weighted_work_function`) whose bare gloss still
+  invites a "voltage" misread.

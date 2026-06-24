@@ -68,7 +68,10 @@ merged vs. pending; this file stays focused on durable design + how-to-work guid
 
 Package layout (monorepo):
 - `src/materials_triage/core/` — frozen domain models (`schema.py`, `elements.py`),
-  deterministic logic (`scoring.py`, `ranking.py`), hypothesis layer (`hypothesis.py`),
+  deterministic logic (`scoring.py`, `ranking.py`), hypothesis layer (`hypothesis.py`:
+  `compile_spec` + the deterministic `drop_unrankable_targets` guard that removes any
+  ranking target naming a non-rankable property — e.g. a boolean flag — and records a
+  caveat),
   the spec-fidelity gate (`fidelity.py`: `reconcile_spec` deterministically seeds hard
   facets the LLM dropped — `ANION_FAMILIES`/`TOXIC_ELEMENTS`/simplicity cues mapped onto
   `ElementPredicate` all/none + `CountConstraint` — returning `FacetFinding`s whose
@@ -85,7 +88,14 @@ Package layout (monorepo):
 - `src/materials_triage/sources/` — `SourceAdapter` + the Materials Project adapter
   (injected `http_get`, lazy `requests`). The adapter exposes `property_vocabulary()`
   — its queryable property→unit surface — derived from the committed, generated
-  `_mp_fields.py` table (`MP_FIELDS`: units + XC-functional origins). That module
+  `_mp_fields.py` table (`MP_FIELDS`: units + XC-functional origins, plus a one-line
+  schema `desc` and a `rankable` flag per field). It also exposes
+  `property_descriptions()` — each field's meaning gloss (schema `desc`, with curated
+  overrides on the band-edge eV fields like `vbm`/`cbm`/`efermi`/`weighted_work_function`
+  that spell out "NOT a cell voltage") so the hypothesis prompt picks proxies by meaning
+  not unit — and `unrankable_properties()` — the boolean flags (`is_stable`/`is_metal`/
+  `is_magnetic`/`is_gap_direct`) that are valid hard filters but never ranking targets
+  (scoring a boolean flattens every survivor to one desirability). That module
   also carries `PUSHABLE_PARAMS` — the distinct, larger `/summary` GET query-param
   surface; the adapter pushes every hard filter MP can express server-side (numeric
   bounds, booleans, element all/none, element count), gating each on that set and
@@ -104,7 +114,8 @@ Package layout (monorepo):
   `RankingCritic` is the best-effort second-agent seam that vets ranking objectives,
   soft-degrading to the un-pruned proposals on any failure), prompts
   (`prompts.py`: `ROLE_SYSTEM_PROMPT`, `build_chat_messages`, `build_hypothesis_prompt`,
-  `build_critique_prompt` and `build_synthesis_prompt` — trusted shortlist/vocabulary as
+  `build_critique_prompt` and `build_synthesis_prompt` — trusted shortlist/vocabulary
+  (names with units *and* meanings, so the LLM picks proxies by meaning not unit) as
   instruction text, user goal + RAG snippets fenced as untrusted DATA), the output validator
   (`validator.py`: `validate_output` raises
   `UngroundedOutputError` unless every presented candidate and narrative citation
@@ -123,7 +134,11 @@ Package layout (monorepo):
 - `tools/` — dev-only generators, never part of the runtime package (on the test
   pythonpath only): `gen_mp_vocab.py` parses the vendored MP OpenAPI snapshot
   (`mp_summary_schema.json`) into the committed `sources/_mp_fields.py` module —
-  both the `MP_FIELDS` table and the `PUSHABLE_PARAMS` query-param set.
+  both the `MP_FIELDS` table (units, XC origins, the schema `desc` gloss, and a
+  type-derived `rankable` flag — booleans are `rankable=False`) and the
+  `PUSHABLE_PARAMS` query-param set. The generated `_mp_fields.py` is excluded from
+  ruff (`extend-exclude` + `force-exclude` in `pyproject.toml`) — its one-line
+  description literals are generated data, not hand-written code.
 - Heavy deps (`langchain-aws`, `requests`) live at the edges behind optional extras +
   lazy imports; the live Bedrock/MP/OpenAlex tests are `live`-marked (deselected in CI).
 

@@ -136,8 +136,8 @@ def build_table(
     descriptions: dict[str, str] | None = None,
 ) -> dict[str, dict]:
     """Merge the schema-derived vocabulary ``surface`` with hand-pinned ``meta`` and
-    the schema's ``descriptions`` into the committed ``{field: {unit, origin, desc}}``
-    table.
+    the schema's ``descriptions`` into the committed
+    ``{field: {unit, origin, desc, rankable}}`` table.
 
     Units and XC-functional origins are not in the schema, so they're supplied by
     hand per field. ``origin`` may be ``None`` (a field with no DFT functional, e.g.
@@ -216,7 +216,8 @@ def parse_summary_descriptions(openapi: dict) -> dict[str, str]:
 
 def generate_table(openapi: dict) -> dict[str, dict]:
     """Run the full pipeline on an OpenAPI doc: parse → vocabulary surface → merge
-    with ``_FIELD_META`` into the committed ``{field: {unit, origin}}`` table.
+    with ``_FIELD_META`` (and the schema descriptions) into the committed
+    ``{field: {unit, origin, desc, rankable}}`` table.
 
     Raises (via the build_table lockstep guard) if the schema exposes a vocabulary
     field with no hand-pinned metadata — the signal to update ``_FIELD_META``."""
