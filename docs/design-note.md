@@ -30,14 +30,14 @@ back to one of them.
 
 | # | Requirement | How it's met | Status |
 |---|---|---|---|
-| FR1 | Triage candidate materials before experiments | the full 9-step pipeline → pre-experiment ranked shortlist | ✅ |
+| FR1 | Triage candidate materials before experiments | the full 7-step pipeline → pre-experiment ranked shortlist | ✅ |
 | FR2 | Single-modal input (text) | NL goal via CLI / `chat` REPL | ✅ |
 | FR3 | Single-modal output (text) | plain-text renderers (`render.py`) | ✅ |
 | FR3.1 | Ranked shortlist + rationale, caveats, missing/uncertain data | ranking + cited synthesis + first-class missing-data flags | ✅ |
 | FR3.2 | ≥2 response styles (PI summary / audit) | `render_run(view="pi"\|"audit")` | ✅ |
 | FR4 | No wet-lab / private data / closed / paywalled sources | capability-by-construction — no such tool exists; input gate guarding against malicious behavior | ✅ |
 | FR5 | Can access public sources | Materials Project adapter; OpenAlex/Crossref RAG | ✅ |
-| FR6 | Personal assistance | lab memory remembers saved specs → zero-setup personalization | ✅ |
+| FR6 | Personal assistance | lab memory remembers saved specs → zero-setup personalization | ◐ |
 
 **Non-functional**
 
@@ -48,18 +48,10 @@ back to one of them.
 | NFR3 | **Traceable** — every step's I/O saved & accessible | `TriageRun` trace + audit view ‹durable SQLite store: in progress› | ◐ |
 | NFR4 | **Configurable** — models, temperature, view, hypothesis | ranking method + view + model selectable (effort level); hypothesis editable via spec gate | ◐ |
 | NFR5 | **Robust** — I/O guardrails, retries, scalable | input gate + output validator + retry/degrade | ◐ |
----
-
-## 3. Design decision
-
-**The LLM never invents scientific facts.** Public databases supply every number (tagged with
-source + method); deterministic code filters and ranks; the LLM only (a) builds the spec, (b) proposes
-hypotheses, and (c) writes grounded, cited narrative. An output validator rejects any
-non-resolvable ID or citation.
 
 ---
 
-## 4. Workflow
+## 3. Workflow
 
 ![Materials-Triage workflow](img/workflow.png)
 
@@ -84,25 +76,7 @@ A 7-step LangGraph graph with a checkpointer and one human-in-the-loop interrupt
 
 ---
 
-## 5. Key decisions & deliberate scope cuts
-
-- **Materials Project only (v1).** DFT values are XC-functional-dependent and *not cross-functional
-  rankable*, so naïvely merging MP + OQMD would rank apples against oranges. Cross-source merge is
-  deferred until a functional-aware retrieval strategy exists — a correctness decision, not a time cut.
-- **Input gate is deliberately the *weakest* of five safety layers.** Real safety is
-  capability-by-construction (no dangerous tool exists), the trust boundary, per-node least
-  privilege, and the output validator. The deterministic gate is cheap triage, right-sized as such.
-- **Deterministic ranking, not LLM ranking.** A weighted geometric mean of
-  Derringer–Suich desirabilities means one failed target zeros the candidate, exactly the
-  behavior a scientist wants, and impossible to get reliably from an LLM scoring pass.
-
----
-
-## 6. Robustness, traceability, configurability
-
-**Traceability** is already structural: each run exports a `TriageRun` carrying candidates,
-property values, provenance, every filter/rank drop, synthesis narrative, and retrieved
-literature — the audit view reads it all from one object.
+## 4. Robustness
 
 **Failure taxonomy** — four classes, each handled differently:
 
@@ -115,16 +89,15 @@ literature — the audit view reads it all from one object.
 
 ---
 
-## 7. Token Usage & Cost Estimation
+## 5. Token Usage & Cost Estimation
 
 ![Materials-Triage Token Usage and Cost Estimation](img/CostEstimation.png)
 
 ---
 
-## 8. v2 roadmap
+## 6. v2 roadmap
 
-- Cross-source retrieval, functional-first: decide XC functional at hypothesis → fetch by
-  `run_type` → fall back if sparse.
+- Cross-source retrieval.
 - LLM-hybrid input scope check.
 - Richer RAG tokenizer: case-folding `Co`≠`CO`, synonymy `TiO2`≡"titanium dioxide", stemming.
 - Agentic Core: swap the Retrieve-Filter-Rank core with agentic framework for better flexibility and capability. 

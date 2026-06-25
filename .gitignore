@@ -47,3 +47,4 @@ runs/
 
 # local live-run output captures
 .test*.txt
+.work_prompt.md
