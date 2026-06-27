@@ -29,6 +29,8 @@ Docker is the easiest way to run on any OS — no local Python toolchain needed.
 - **AWS Bedrock** credentials — the LLM backend (required for live runs): an IAM
   user/role with `bedrock:InvokeModel`, as `AWS_ACCESS_KEY_ID` /
   `AWS_SECRET_ACCESS_KEY` / `AWS_REGION`.
+
+  Caution: first time user of this agent might receieve error on invoking Claude model. This is completely expected. To use it, you need to setup the claude access following this documentation: https://code.claude.com/docs/en/amazon-bedrock#set-up-manually. 
 - **OpenAlex** `OPENALEX_MAILTO` — optional; enables the faster literature pool.
 
 ```bash
